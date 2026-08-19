@@ -1,0 +1,54 @@
+{
+  "plans": {
+    "free": {
+      "daily_tasks": 10,
+      "duration_days": 2,
+      "extra_percent": 0,
+      "price": 0,
+      "status_task_allowed": false
+    },
+    "premium_500": {
+      "daily_tasks": 20,
+      "duration_days": 30,
+      "extra_percent": 2,
+      "price": 500,
+      "status_task_allowed": true
+    },
+    "premium_1000": {
+      "daily_tasks": 20,
+      "duration_days": 60,
+      "extra_percent": 5,
+      "price": 1000,
+      "status_task_allowed": true
+    }
+  },
+  "referral": {
+    "bonus_after_10_tasks": 20,
+    "per_task_bonus": 1,
+    "per_task_limit": 100,
+    "premium_500_referral_bonus": 50,
+    "premium_1000_referral_bonus": 100
+  },
+  "rewards": {
+    "youtube_task": 5,
+    "app_install": 25,
+    "hotel_rating": 30,
+    "amazon_review": 50,
+    "loan_app": 100,
+    "bank_account": 150,
+    "angel_broking": 200,
+    "status_promo_500_plan": 30,
+    "status_promo_1000_plan": 40
+  },
+  "task_settings": {
+    "start_time": "10:00",
+    "end_time": "19:30",
+    "gap_minutes": 30,
+    "window_minutes": 15,
+    "total_tasks_per_day": 20
+  },
+  "withdraw": {
+    "min_tasks": 15,
+    "min_amount": 200
+  }
+}
