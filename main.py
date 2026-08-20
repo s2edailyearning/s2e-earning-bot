@@ -288,4 +288,208 @@ async def get_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return UPI
 
 async def get_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid=update.effective_user.id; 
+    uid=update.effective_user.id; upi=update.message.text.strip()
+    if "@" not in upi: await update.message.reply_text("❌ Invalid UPI! Example: name@phonepe"); return UPI
+    if is_duplicate_upi(upi, exclude_uid=uid):
+        await update.message.reply_text(f"❌ UPI {upi} already registered! Use different UPI."); return UPI
+    users_db[uid]['upi']=upi
+    await update.message.reply_text("6️⃣ Enter Pincode (6 digits):\nExample: 517408")
+    return PINCODE
+
+async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid=update.effective_user.id; pin=update.message.text.strip()
+    if not re.match(r"^\d{6}$", pin): await update.message.reply_text("❌ Invalid Pincode! Enter 6-digit pincode:"); return PINCODE
+    users_db[uid]['pincode']=pin
+    kb=ReplyKeyboardMarkup([["Student","Employee","Self-Employed","Business"],["Freelancer","Other"]], one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text("7️⃣ Final step - Select your Profession:", reply_markup=kb)
+    return PROFESSION
+
+async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid=update.effective_user.id
+    users_db[uid]['profession']=update.message.text.strip()
+    users_db[uid]['registered']=True
+    d=users_db[uid]
+    await update.message.reply_text(f"🎉 Registration Successful!\n\nName: {d['name']}\nMobile: {d['mobile']}\nUPI: {d['upi']}\nBalance: ₹{get_balance(uid)}\nTasks: {get_tasks(uid)}/15\n\nYour Referral Link (Auto Start - No typing needed):\nhttps://t.me/{context.bot.username}?start={uid}\n\nNote: You are unique - No duplicate mobile/UPI allowed! ✅", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Menu:", reply_markup=main_menu())
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Registration cancelled. Type /start to restart.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid=update.effective_user.id
+    if uid in banned_users: await update.message.reply_text("🚫 Banned!"); return
+    if not await check_channel_member(uid, context):
+        await update.message.reply_text("⚠️ You left channel! Please rejoin to continue.", reply_markup=join_channel_keyboard(True)); return
+    await update.message.reply_text("S2E Menu:", reply_markup=main_menu())
+
+# ADMIN COMMANDS
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Not admin!"); return
+    await update.message.reply_text(f"👑 ADMIN PANEL\n\nTotal Users: {len(users_db)}\nTotal Referrals: {sum(referrals_db.values())}\nBanned: {len(banned_users)}\n\nCommands:\n/delete <id> - Delete user\n/addmoney <id> <amount>\n/removemoney <id> <amount>\n/approve <id> - Add 1 task + ₹5\n/reject <id> - Remove 1 task\n/ban <id>\n/unban <id>\n/userinfo <id>\n/resetdaily <id>\n/editmobile <id> <new>\n/editupi <id> <new>\n\nIf you mistakenly rejected, use /approve to fix!")
+
+async def delete_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /delete <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    if target_id not in users_db: await update.message.reply_text(f"❌ User {target_id} not found!"); return
+    name=users_db[target_id].get('name','Unknown')
+    del users_db[target_id]; referrals_db.pop(target_id,None); tasks_db.pop(target_id,None); daily_done.pop(target_id,None); bonus_balance.pop(target_id,None); user_plans.pop(target_id,None); pending_referrals.pop(target_id,None)
+    await update.message.reply_text(f"✅ User Deleted!\nID: {target_id}\nName: {name}\nAll data removed. Can register again.")
+
+async def add_money_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: await update.message.reply_text("Usage: /addmoney <user_id> <amount>\nExample: /addmoney 12345 100"); return
+    try: target_id=int(context.args[0]); amount=int(context.args[1])
+    except: await update.message.reply_text("❌ Invalid!"); return
+    if target_id not in users_db: await update.message.reply_text("❌ User not found!"); return
+    bonus_balance[target_id]=bonus_balance.get(target_id,0)+amount
+    await update.message.reply_text(f"✅ Added ₹{amount} to {users_db[target_id].get('name')} ({target_id})\nNew Balance: ₹{get_balance(target_id)}")
+    try: await context.bot.send_message(chat_id=target_id, text=f"🎉 Admin Added ₹{amount} to your wallet!\nNew Balance: ₹{get_balance(target_id)}")
+    except: pass
+
+async def remove_money_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: await update.message.reply_text("Usage: /removemoney <id> <amount>"); return
+    try: target_id=int(context.args[0]); amount=int(context.args[1])
+    except: await update.message.reply_text("❌ Invalid!"); return
+    bonus_balance[target_id]=bonus_balance.get(target_id,0)-amount
+    await update.message.reply_text(f"✅ Removed ₹{amount} from {target_id}\nNew: ₹{get_balance(target_id)}")
+
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /approve <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    tasks_db[target_id]=tasks_db.get(target_id,0)+1
+    if tasks_db[target_id]==1 and target_id in pending_referrals:
+        ref_id=pending_referrals[target_id]; referrals_db[ref_id]=referrals_db.get(ref_id,0)+1; del pending_referrals[target_id]
+        try: await context.bot.send_message(chat_id=ref_id, text=f"🎉 Referral {target_id} approved by admin! +₹10")
+        except: pass
+    await update.message.reply_text(f"✅ Approved! User {target_id} - Tasks: {get_tasks(target_id)}/15 - Balance: ₹{get_balance(target_id)}")
+    try: await context.bot.send_message(chat_id=target_id, text=f"✅ Task approved by admin! +₹5 - Tasks: {get_tasks(target_id)}/15")
+    except: pass
+
+async def reject_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /reject <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    if tasks_db.get(target_id,0)>0: tasks_db[target_id]-=1
+    await update.message.reply_text(f"❌ Rejected! User {target_id} - Tasks: {get_tasks(target_id)}/15 - Balance: ₹{get_balance(target_id)}")
+    try: await context.bot.send_message(chat_id=target_id, text=f"❌ Task not approved by admin. Do again. Tasks: {get_tasks(target_id)}/15")
+    except: pass
+
+async def reset_daily_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /resetdaily <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    daily_done.pop(target_id,None)
+    await update.message.reply_text(f"✅ Daily reset for {target_id}! Can redo today.")
+    try: await context.bot.send_message(chat_id=target_id, text="🔄 Admin reset your daily task! Do again via Menu → Daily Task")
+    except: pass
+
+async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /ban <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    banned_users.add(target_id)
+    await update.message.reply_text(f"🚫 User {target_id} banned!")
+
+async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /unban <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    banned_users.discard(target_id)
+    await update.message.reply_text(f"✅ User {target_id} unbanned!")
+
+async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage: /userinfo <user_id>"); return
+    try: target_id=int(context.args[0])
+    except: await update.message.reply_text("❌ Invalid ID"); return
+    data=users_db.get(target_id)
+    if not data: await update.message.reply_text(f"❌ User {target_id} not found!"); return
+    await update.message.reply_text(f"👤 User {target_id}\nName: {data.get('name')}\nGender: {data.get('gender')}\nAge: {data.get('age')} DOB: {data.get('dob')}\nMobile: {data.get('mobile')}\nUPI: {data.get('upi')}\nPincode: {data.get('pincode')}\nProfession: {data.get('profession')}\nBalance: ₹{get_balance(target_id)} (Ref: {referrals_db.get(target_id,0)*10} + Task: {tasks_db.get(target_id,0)*5} + Bonus: {bonus_balance.get(target_id,0)})\nTasks: {get_tasks(target_id)}/15\nPlan: {user_plans.get(target_id,'Free')}\nBanned: {'Yes' if target_id in banned_users else 'No'}")
+
+async def edit_mobile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: await update.message.reply_text("Usage: /editmobile <id> <new_mobile>"); return
+    try: target_id=int(context.args[0]); new_mob=context.args[1]
+    except: await update.message.reply_text("❌ Invalid"); return
+    if target_id not in users_db: await update.message.reply_text("❌ Not found"); return
+    users_db[target_id]['mobile']=new_mob
+    await update.message.reply_text(f"✅ Mobile updated for {target_id} to {new_mob}")
+
+async def edit_upi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: await update.message.reply_text("Usage: /editupi <id> <new_upi>"); return
+    try: target_id=int(context.args[0]); new_upi=context.args[1]
+    except: await update.message.reply_text("❌ Invalid"); return
+    if target_id not in users_db: await update.message.reply_text("❌ Not found"); return
+    users_db[target_id]['upi']=new_upi
+    await update.message.reply_text(f"✅ UPI updated for {target_id} to {new_upi}")
+
+def main():
+    threading.Thread(target=run_flask, daemon=True).start()
+    app=Application.builder().token(BOT_TOKEN).build()
+    conv_reg = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
+        states={
+            NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+            DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+            MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
+            UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
+            PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
+            PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_user=True, per_chat=True, per_message=False
+    )
+    conv_support = ConversationHandler(
+        entry_points=[CallbackQueryHandler(send_support_msg_cb, pattern="^send_support_msg$")],
+        states={SUPPORT_MSG:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_support_msg)]},
+        fallbacks=[CommandHandler("cancel", cancel_support)],
+        per_user=True, per_chat=True, per_message=False
+    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu))
+    app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("delete", delete_user_cmd))
+    app.add_handler(CommandHandler("addmoney", add_money_cmd))
+    app.add_handler(CommandHandler("removemoney", remove_money_cmd))
+    app.add_handler(CommandHandler("approve", approve_cmd))
+    app.add_handler(CommandHandler("reject", reject_cmd))
+    app.add_handler(CommandHandler("resetdaily", reset_daily_cmd))
+    app.add_handler(CommandHandler("ban", ban_cmd))
+    app.add_handler(CommandHandler("unban", unban_cmd))
+    app.add_handler(CommandHandler("userinfo", user_info_cmd))
+    app.add_handler(CommandHandler("editmobile", edit_mobile_cmd))
+    app.add_handler(CommandHandler("editupi", edit_upi_cmd))
+    app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+    app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+    app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+    app.add_handler(CallbackQueryHandler(daily_verify_cb, pattern="^daily_verify$"))
+    app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
+    app.add_handler(CallbackQueryHandler(confirm_withdraw_cb, pattern="^confirm_withdraw_"))
+    app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
+    app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
+    app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
+    app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_basic$"))
+    app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_premium$"))
+    app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
+    app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
+    app.add_handler(conv_reg)
+    app.add_handler(conv_support)
+    print("Bot Started! FINAL COMPLETE VERSION READY!")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__=="__main__":
+    main()
