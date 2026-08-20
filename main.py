@@ -1528,14 +1528,25 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
             
             global bot_application
-            bot_application = app
-            try:
-                threading.Thread(target=notification_thread_func, daemon=True).start()
-                print("✅ Notifier started")
-            except:
-                pass
-            
-            print("✅ Handlers registered, starting polling...")
+bot_application = app
+
+# Flask ni background thread lo run chey
+from flask import Flask
+flask_app = Flask(__name__)
+@flask_app.route('/')
+def home():
+    return "Bot is running!"
+
+threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=10000), daemon=True).start()
+print("✅ Flask started on port 10000")
+
+try:
+    threading.Thread(target=notification_loop, daemon=True).start()
+    print("✅ Notifier started")
+except:
+    pass
+
+print("✅ Handlers registered, starting polling...")
             # This blocks until error
             app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             
