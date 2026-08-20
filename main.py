@@ -28,45 +28,6 @@ if _env:
             if _id not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(_id)
 
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
-notified_tasks_30sec = set()
-bot_application = None
-
-def notification_thread_func():
-    import asyncio
-    while True:
-        try:
-            import time as t2
-            t2.sleep(30)
-            if not bot_application:
-                continue
-            now = get_ist_now()
-            for task in get_tasks_for_today():
-                try:
-                    open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
-                except:
-                    continue
-                diff = (open_dt - now).total_seconds()
-                if 0 < diff <= 65 and task['id'] not in notified_tasks_30sec:
-                    notified_tasks_30sec.add(task['id'])
-                    msg = f"⏰ TASK IN 30 SEC! Task {task['task_number']}: {task.get('title','')}"
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        for uid in list(users_db.keys())[:300]:
-                            try:
-                                loop.run_until_complete(bot_application.bot.send_message(chat_id=uid, text=msg))
-                            except:
-                                pass
-                        loop.close()
-                    except:
-                        pass
-        except:
-            import time as t2
-            t2.sleep(10)
-
-async def error_handler(update, context):
-    print(f"Error: {context.error}")
-
 WITHDRAW_MIN = 200
 PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 15
@@ -1457,17 +1418,6 @@ def main():
     app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_premium$"))
     app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
     app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
-    global bot_application
-    bot_application = app
-    try:
-        app.add_error_handler(error_handler)
-    except:
-        pass
-    try:
-        import threading
-        threading.Thread(target=notification_thread_func, daemon=True).start()
-    except:
-        pass
     app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
     app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
     app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
