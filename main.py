@@ -1,18 +1,35 @@
 import os
 import json
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- ENV ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # Example: @S2EDailyEarning or -100xxxxxxxxxx
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning_Channel")
-
 DATA_FILE = "data.json"
 
 logging.basicConfig(level=logging.INFO)
+
+# --- Dummy Web Server for Render Web Service ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"S2E Daily Earning Bot is Running! Bot is Live!")
+    
+    def log_message(self, format, *args):
+        return  # Suppress logs
+
+def start_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    print(f"Dummy web server started on port {port} for Render...")
+    server.serve_forever()
 
 # --- Data handling ---
 def load_data():
@@ -44,20 +61,18 @@ def get_user(user_id):
         save_data(data)
     return data["users"][uid]
 
-# --- Start Command ---
+# --- Start Command - 100% ENGLISH ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
     bot_username = (await context.bot.get_me()).username
 
-    # Referral handling
     referrer_id = None
     if context.args and len(context.args) > 0:
         referrer_id = context.args[0].strip()
     
     current_user = get_user(user_id)
 
-    # If new referral
     if referrer_id and referrer_id != user_id and current_user["referred_by"] is None:
         if referrer_id in data["users"]:
             referrer = data["users"][referrer_id]
@@ -73,7 +88,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except:
                     pass
 
-    # Welcome Message - 100% ENGLISH
     welcome_text = f"""🚀 Welcome to S2E Daily Earning!
 
 Your ID: {user_id}
@@ -102,7 +116,7 @@ Join the channel and click 'Check Joined' to verify!
 
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
-# --- Callback Handler ---
+# --- Callback Handler - 100% ENGLISH ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -112,17 +126,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "check_joined":
         try:
-            # Check if user joined channel
             if not CHANNEL_ID:
                 await query.message.reply_text("⚠️ Channel not configured. Please contact admin.")
                 return
 
             member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=int(user_id))
             if member.status in ["member", "administrator", "creator"]:
-                # Mark task completed
                 if not user["task_completed"]:
                     user["task_completed"] = True
-                    # Reward referrer
                     if user["referred_by"]:
                         ref_id = user["referred_by"]
                         if ref_id in data["users"]:
@@ -209,6 +220,9 @@ https://t.me/{bot_username}?start={user_id}
 
 # --- Main ---
 if __name__ == "__main__":
+    # Start dummy web server for Render
+    threading.Thread(target=start_web_server, daemon=True).start()
+
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN not found in Environment Variables!")
         exit(1)
@@ -217,5 +231,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("Bot started! English version LIVE...")
+    print("Bot started! English version LIVE with port binding...")
     app.run_polling()
