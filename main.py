@@ -1,8 +1,17 @@
 import os, re, threading, json, asyncio
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+
+# === TIMEZONE FIX - IST (India) ===
+IST = timezone(timedelta(hours=5, minutes=30))
+def get_ist_now():
+    return datetime.now(IST)
+def get_ist_today():
+    return get_ist_now().date()
+def get_ist_time():
+    return get_ist_time()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@s2edayincome")
@@ -89,8 +98,8 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
         'per_view_member_earning': per_view_member_earning,
         'per_sale_commission_percent': 10,
         'status': 'active',
-        'created_at': datetime.now(),
-        'expiry': date.today() + timedelta(days=7),
+        'created_at': get_ist_now(),
+        'expiry': get_ist_today() + timedelta(days=7),
         'total_views': 0,
         'total_sales': 0,
         'total_earnings_distributed': 0,
@@ -102,7 +111,7 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
     return campaign
 
 def get_active_promo_campaigns():
-    today = date.today()
+    today = get_ist_today()
     return [c for c in promo_campaigns_db if c['status'] == 'active' and c['expiry'] >= today]
 
 def get_promo_campaign(campaign_id):
@@ -158,22 +167,22 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
             return False, f"Invalid close {close_time_or_interval}"
     else:
         interval_mins = parse_interval_str(close_time_or_interval)
-        open_dt = datetime.combine(date.today(), open_time)
+        open_dt = datetime.combine(get_ist_today(), open_time)
         close_dt = open_dt + timedelta(minutes=interval_mins)
         close_time = close_dt.time()
     next_time = parse_time_str(next_time_str)
     if not next_time:
         return False, f"Invalid next {next_time_str}"
-    open_dt = datetime.combine(date.today(), open_time)
-    close_dt = datetime.combine(date.today(), close_time)
-    next_dt = datetime.combine(date.today(), next_time)
+    open_dt = datetime.combine(get_ist_today(), open_time)
+    close_dt = datetime.combine(get_ist_today(), close_time)
+    next_dt = datetime.combine(get_ist_today(), next_time)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
     if next_dt <= close_dt:
         return False, f"Next {next_time.strftime('%H:%M')} must be after close"
     task = {
         'id': scheduled_task_counter,
-        'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(date.today())]) + 1,
+        'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]) + 1,
         'open_time': open_time.strftime("%H:%M"),
         'open_time_obj': open_time,
         'close_time': close_time.strftime("%H:%M"),
@@ -183,8 +192,8 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
         'title': title,
         'link': link,
         'reward': reward,
-        'date': str(date.today()),
-        'created_at': datetime.now(),
+        'date': str(get_ist_today()),
+        'created_at': get_ist_now(),
         'window_minutes': int((close_dt - open_dt).total_seconds() / 60),
         'skippable': True if any(x in title.lower() for x in ['angel', 'upstox', 'demat', 'trading']) else False,
         'image_file_id': image_file_id
@@ -197,10 +206,10 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     return True, task
 
 def get_tasks_for_today():
-    return [t for t in scheduled_tasks_db if t['date'] == str(date.today())]
+    return [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
 
 def get_current_scheduled_task_with_interval():
-    now = datetime.now().time()
+    now = get_ist_time()
     today_tasks = get_tasks_for_today()
     if not today_tasks:
         return None, None
@@ -221,12 +230,12 @@ def check_missed_tasks_with_interval(uid):
     if uid not in user_task_status:
         user_task_status[uid] = {}
     today_tasks = get_tasks_for_today()
-    now = datetime.now()
+    now = get_ist_now()
     missed = []
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        close_dt = datetime.combine(date.today(), task['close_time_obj'])
+        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'])
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
@@ -242,11 +251,11 @@ def check_missed_tasks_with_interval(uid):
 def mark_task_completed_with_interval(uid, task_id):
     if uid not in user_task_status:
         user_task_status[uid] = {}
-    user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': datetime.now()}
+    user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
 
 def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
-    today=date.today()
+    today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
 def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
 def get_tasks(uid): return tasks_db.get(uid,0)
@@ -255,7 +264,7 @@ def check_plan_active(uid):
     if not plan: return False, "No Plan", None
     if plan.get('status') != 'active': return False, f"{plan.get('plan','')} Pending", None
     expiry = plan.get('expiry')
-    if expiry and date.today() > expiry: return False, f"{plan.get('plan','').upper()} Expired", expiry
+    if expiry and get_ist_today() > expiry: return False, f"{plan.get('plan','').upper()} Expired", expiry
     return True, f"{plan.get('plan','').upper()} till {expiry}", expiry
 def get_plan_limits(uid):
     is_active, _, _ = check_plan_active(uid)
@@ -269,7 +278,7 @@ def get_plan_limits(uid):
     else:
         return DAILY_TASK_LIMIT_BASIC, 200, "basic"
 def check_daily_limits(uid):
-    today = str(date.today())
+    today = str(get_ist_today())
     count = daily_task_count.get(uid, {}).get(today, 0)
     limit, cap, plan_name = get_plan_limits(uid)
     return count, limit, cap
@@ -418,8 +427,8 @@ async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
     users_db[uid]['profession']=update.message.text.strip()
-    users_db[uid]['joined']=str(date.today())
-    users_db[uid]['reg_date']=date.today()
+    users_db[uid]['joined']=str(get_ist_today())
+    users_db[uid]['reg_date']=get_ist_today()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -492,7 +501,7 @@ async def admin_view_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not today_tasks:
         await q.message.reply_text("📋 No scheduled tasks for today!\n\nAdd via:\n/add_task 12:45PM 15min 1:03PM Title https://link 5\nThen /set_task_image <id> to add poster!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
-    msg = f"⏰ Scheduled Tasks Today {date.today()} - Total {len(today_tasks)}:\n\n"
+    msg = f"⏰ Scheduled Tasks Today {get_ist_today()} - Total {len(today_tasks)}:\n\n"
     for task in today_tasks:
         has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster"
         msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n/set_task_image {task['id']}\n"
@@ -608,7 +617,7 @@ async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     missed, _ = check_missed_tasks_with_interval(uid)
     count, limit, cap = check_daily_limits(uid)
     is_active, plan_name, _ = check_plan_active(uid)
-    msg = f"📋 Scheduled Tasks Today - {date.today()}\nWindow: {TASK_COMPLETION_WINDOW_MINUTES} mins\n\nYour Plan: {plan_name} Daily: {count}/{limit} Cap Rs{cap}\nTotal Tasks Today: {len(today_tasks)}\n\n"
+    msg = f"📋 Scheduled Tasks Today - {get_ist_today()}\nWindow: {TASK_COMPLETION_WINDOW_MINUTES} mins\n\nYour Plan: {plan_name} Daily: {count}/{limit} Cap Rs{cap}\nTotal Tasks Today: {len(today_tasks)}\n\n"
     if not today_tasks:
         msg += "No tasks scheduled today! Admin will add tasks via /add_task\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5"
     else:
@@ -639,7 +648,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)], [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]])
             await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
             return
-    today=str(date.today())
+    today=str(get_ist_today())
     count, limit, cap = check_daily_limits(uid)
     if count >= limit and limit > 0:
         await q.message.reply_text(f"⏰ Daily limit {limit} reached! You did {count} tasks today!\n\nUpgrade to Premium for {DAILY_TASK_LIMIT_PREMIUM} tasks/day!", reply_markup=main_menu())
@@ -670,7 +679,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if skip_status == 'skipped':
         await q.message.reply_text(f"⏭️ Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
         return
-    task_open_time[uid] = datetime.now()
+    task_open_time[uid] = get_ist_now()
     msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
     if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
         msg += "\n\n⚠️ Already have account? Click Skip Task!"
@@ -738,10 +747,10 @@ async def skip_reason_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SKIP_REASON
     if uid not in skip_db:
         skip_db[uid] = {}
-    skip_db[uid][task_id] = {'status': 'skipped', 'reason': reason, 'skipped_at': datetime.now(), 'task_number': task['task_number'], 'title': task['title']}
+    skip_db[uid][task_id] = {'status': 'skipped', 'reason': reason, 'skipped_at': get_ist_now(), 'task_number': task['task_number'], 'title': task['title']}
     if uid not in user_task_status:
         user_task_status[uid] = {}
-    user_task_status[uid][task_id] = {'status': 'skipped', 'skipped_at': datetime.now(), 'reason': reason, 'task_number': task['task_number']}
+    user_task_status[uid][task_id] = {'status': 'skipped', 'skipped_at': get_ist_now(), 'reason': reason, 'task_number': task['task_number']}
     await q.message.reply_text(f"⏭️ Skipped Task {task['task_number']}!\nReason: {reason}\nNext task at {task['next_time']}", reply_markup=main_menu())
     context.user_data.pop('skip_task_id', None)
     context.user_data.pop('skip_task', None)
@@ -762,10 +771,10 @@ async def get_skip_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     if uid not in skip_db:
         skip_db[uid] = {}
-    skip_db[uid][task_id] = {'status': 'skipped', 'reason': reason, 'skipped_at': datetime.now(), 'task_number': task['task_number'], 'title': task['title']}
+    skip_db[uid][task_id] = {'status': 'skipped', 'reason': reason, 'skipped_at': get_ist_now(), 'task_number': task['task_number'], 'title': task['title']}
     if uid not in user_task_status:
         user_task_status[uid] = {}
-    user_task_status[uid][task_id] = {'status': 'skipped', 'skipped_at': datetime.now(), 'reason': reason, 'task_number': task['task_number']}
+    user_task_status[uid][task_id] = {'status': 'skipped', 'skipped_at': get_ist_now(), 'reason': reason, 'task_number': task['task_number']}
     await update.message.reply_text(f"⏭️ Skipped Task {task['task_number']}!\nReason: {reason}\nNext task at {task['next_time']}", reply_markup=main_menu())
     context.user_data.pop('skip_task_id', None)
     context.user_data.pop('skip_task', None)
@@ -773,7 +782,7 @@ async def get_skip_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
-    today=str(date.today())
+    today=str(get_ist_today())
     if not update.message.photo:
         await update.message.reply_text("Please send as PHOTO! Not file!")
         return UPLOAD_SCREENSHOT
@@ -789,11 +798,11 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
     if not current:
         await update.message.reply_text("❌ No active task now! Check Scheduled Tasks for next task time!", reply_markup=main_menu())
         return ConversationHandler.END
-    now = datetime.now().time()
+    now = get_ist_time()
     if now > current['close_time_obj']:
         if uid not in user_task_status:
             user_task_status[uid] = {}
-        user_task_status[uid][current['id']] = {'status': 'missed', 'missed_at': datetime.now(), 'task_number': current['task_number']}
+        user_task_status[uid][current['id']] = {'status': 'missed', 'missed_at': get_ist_now(), 'task_number': current['task_number']}
         await update.message.reply_text(f"❌ Time over! Task {current['task_number']} closed at {current['close_time']}!", reply_markup=main_menu())
         return ConversationHandler.END
     photo = update.message.photo[-1]
@@ -814,7 +823,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
     pending_daily[uid] = {'date': today, 'task': task, 'screenshot_file_id': file_id}
     if uid not in user_task_status:
         user_task_status[uid] = {}
-    user_task_status[uid][current['id']] = {'status': 'pending_verification', 'submitted_at': datetime.now()}
+    user_task_status[uid][current['id']] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
     next_time_str = next_task['open_time'] if next_task else 'tomorrow'
     await update.message.reply_text(f"✅ Screenshot Received for Task {current['task_number']}!\n\nPending Admin Verification!\nReward: Rs{task.get('reward',5)}\nNext Task at {next_time_str}", reply_markup=main_menu())
     for admin_id in ADMIN_ID_LIST:
@@ -841,7 +850,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Campaign not found!", reply_markup=main_menu())
         return ConversationHandler.END
     earning = int(views * campaign['per_view_member_earning'] / 100)
-    submission = {'uid': uid, 'campaign_id': campaign_id, 'views': views, 'earning': earning, 'file_id': file_id, 'submitted_at': datetime.now(), 'status': 'pending', 'user_name': users_db.get(uid,{}).get('name','Unknown')}
+    submission = {'uid': uid, 'campaign_id': campaign_id, 'views': views, 'earning': earning, 'file_id': file_id, 'submitted_at': get_ist_now(), 'status': 'pending', 'user_name': users_db.get(uid,{}).get('name','Unknown')}
     campaign['screenshots'].append(submission)
     campaign['total_views'] += views
     campaign['members_joined'].add(uid)
@@ -947,65 +956,40 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    try:
-        text = update.message.text.replace('/add_task','').strip()
-        if not text:
-            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
+    text = update.message.text.replace('/add_task','').strip()
+    if not text:
+        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
+        return
+    import re
+    urls = re.findall(r'https?://\S+', text)
+    link = urls[0] if urls else CHANNEL_LINK
+    numbers = re.findall(r'\b\d+\b', text)
+    reward = 5
+    if numbers:
+        last_num = int(numbers[-1])
+        if last_num <= 100:
+            reward = last_num
+    time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
+    times = re.findall(time_pattern, text, re.IGNORECASE)
+    if len(times) < 3:
+        parts = text.split()
+        if len(parts) >= 3:
+            times = parts[:3]
+        else:
+            await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
             return
-        import re
-        # Extract link safely
-        urls = re.findall(r'https?://\S+', text)
-        link = urls[0] if urls else CHANNEL_LINK
-        # Clean link trailing punctuation
-        link = link.rstrip('.,;!?')
-        # Reward = last token if number <=100
-        reward = 5
-        parts_all = text.split()
-        if parts_all and parts_all[-1].isdigit():
-            try:
-                r = int(parts_all[-1])
-                if 1 <= r <= 100:
-                    reward = r
-                    # Remove reward from text for title parsing
-                    text_for_title = ' '.join(parts_all[:-1])
-                else:
-                    text_for_title = text
-            except:
-                text_for_title = text
-        else:
-            text_for_title = text
-        
-        time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
-        times = re.findall(time_pattern, text_for_title, re.IGNORECASE)
-        if len(times) < 3:
-            p = text_for_title.split()
-            if len(p) >= 3:
-                times = p[:3]
-            else:
-                await update.message.reply_text("❌ Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM or 1:42PM 15min 1:58PM\n\nYou sent: " + text_for_title[:200])
-                return
-        open_str, close_str, next_str = times[0], times[1], times[2]
-        remaining = text_for_title
-        for t in times[:3]:
-            remaining = remaining.replace(t, '', 1)
-        if link in remaining:
-            remaining = remaining.replace(link, '').strip()
-        remaining = remaining.strip()
-        # Remove any leftover URL fragments
-        remaining = re.sub(r'https?://\S+', '', remaining).strip()
-        title = remaining if remaining else f"Task at {open_str}"
-        title = title[:200]  # Limit title length
-        success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
-        if success:
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nLink: {link[:50]}...\nSkippable: {result['skippable']}\n\n🖼️ To add poster:\n/set_task_image {result['id']}\nThen send photo!")
-        else:
-            await update.message.reply_text(f"❌ Failed: {result}\n\nTried: open={open_str} close={close_str} next={next_str}\nTitle={title[:100]}")
-    except Exception as e:
-        print(f"add_task error: {e}")
-        try:
-            await update.message.reply_text(f"❌ Error adding task: {str(e)[:300]}\n\nTry simple format:\n/add_task 1:45PM 15min 2:00PM Task 7 Local Test 5\n\nWithout long link!")
-        except:
-            pass
+    open_str, close_str, next_str = times[0], times[1], times[2]
+    remaining = text
+    for t in times[:3]:
+        remaining = remaining.replace(t, '', 1)
+    remaining = remaining.replace(link, '').strip()
+    remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
+    title = remaining if remaining else f"Task at {open_str}"
+    success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
+    if success:
+        await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nSkippable: {result['skippable']}\n\n🖼️ To add your TASK 3/TASK 4 poster image:\n/set_task_image {result['id']}\nThen send the poster photo!")
+    else:
+        await update.message.reply_text(f"❌ Failed: {result}")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -1013,7 +997,7 @@ async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT
     if not today_tasks:
         await update.message.reply_text("No scheduled tasks for today! Add via /add_task")
         return
-    msg = f"⏰ Scheduled Tasks Today {date.today()} - Total {len(today_tasks)}:\n\n"
+    msg = f"⏰ Scheduled Tasks Today {get_ist_today()} - Total {len(today_tasks)}:\n\n"
     for task in today_tasks:
         has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster - /set_task_image"
         msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n"
@@ -1065,7 +1049,7 @@ async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /skipped user_id or /skipped all")
         return
     if context.args[0] == 'all':
-        msg = f"⏭️ All skipped tasks today {date.today()}:\n\n"
+        msg = f"⏭️ All skipped tasks today {get_ist_today()}:\n\n"
         total = 0
         for uid, tasks_dict in skip_db.items():
             cnt = len([tid for tid, data in tasks_dict.items() if (data.get('status') if isinstance(data, dict) else data) == 'skipped'])
@@ -1138,7 +1122,7 @@ async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     plan_type = q.data.split("_")[1]
-    pending_plans[uid] = {'plan': plan_type, 'date': str(date.today())}
+    pending_plans[uid] = {'plan': plan_type, 'date': str(get_ist_today())}
     await q.message.reply_text(f"⏳ {plan_type.capitalize()} verification pending!\n\nAdmin will approve within 24 hours!\n\nYou will get bonus after approval!", reply_markup=main_menu())
     for admin_id in ADMIN_ID_LIST:
         try:
@@ -1151,7 +1135,7 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
     if not is_admin(q.from_user.id): return
     parts=q.data.split("_")
     uid=int(parts[3]); plan_type=parts[4]
-    today=date.today()
+    today=get_ist_today()
     expiry=today+timedelta(days=30 if plan_type=='basic' else 90)
     user_plans[uid]={'plan': plan_type, 'status': 'active', 'start': today, 'expiry': expiry}
     pending_plans.pop(uid,None)
@@ -1219,8 +1203,8 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not upi:
         await q.message.reply_text("❌ UPI not set! Please set UPI via /start registration again!", reply_markup=main_menu())
         return
-    withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(date.today())}
-    withdraw_done_date[uid]=str(date.today())
+    withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
+    withdraw_done_date[uid]=str(get_ist_today())
     await q.message.reply_text(f"✅ Withdraw request submitted!\n\nAmount: Rs{amount}\nFee: Rs{fee}\nNet: Rs{net}\nUPI: {upi}\nStatus: Processing\n\nAdmin will approve within 24 hours!", reply_markup=main_menu())
     for admin_id in ADMIN_ID_LIST:
         try:
@@ -1264,7 +1248,7 @@ async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TY
         task_open_time.pop(uid, None)
         for tid, status_data in list(user_task_status.get(uid, {}).items()):
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
-                user_task_status[uid][tid] = {'status': 'pending', 'rejected_at': datetime.now()}
+                user_task_status[uid][tid] = {'status': 'pending', 'rejected_at': get_ist_now()}
                 break
         await q.message.reply_text(f"❌ Rejected {uid}")
         try:
