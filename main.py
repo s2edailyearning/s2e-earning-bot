@@ -21,7 +21,7 @@ if _env:
 DEPOSIT_LINK_BASIC = f"upi://pay?pa={ADMIN_UPI}&pn=S2E&am=500&cu=INR&tn=Basic"
 DEPOSIT_LINK_PREMIUM = f"upi://pay?pa={ADMIN_UPI}&pn=S2E&am=1000&cu=INR&tn=Premium"
 
-# === CONFIG - EASY ANTI-SCAM ===
+# CONFIG
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 WITHDRAW_MIN = 200
 WITHDRAW_MAX = 1000
@@ -33,17 +33,16 @@ DAILY_TASK_LIMIT_FREE = 1
 DAILY_EARNING_CAP_BASIC = 200
 DAILY_EARNING_CAP_PREMIUM = 500
 
-# Easy anti-scam - NO PAPER CODE!
-EASY_ANTI_SCAM = True  # True = No paper code, just duplicate + name + time check
-SCREENSHOT_TIME_LIMIT_MINUTES = 15  # Must upload within 15 mins after opening task
+# BINARY SYSTEM CONFIG
+REFERRAL_BONUS_PER_TASK = 10  # Each left+right match = Rs50
+REFERRAL_PLAN_COMMISSION_PERCENT = 10  # Premium user gets Rs100 per pair
+BINARY_MATCHING_BONUS_ENABLED = True
 
 app_flask = Flask(__name__)
 real_tasks_db = {}
-real_tasks_basic_db = {}
-real_tasks_premium_db = {}
 
 @app_flask.route('/')
-def home(): return "S2E Easy Anti-Scam - No Paper Code - User Friendly!"
+def home(): return "S2E Binary Left-Right Matching + 17 Tasks + Anti-Scam"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -57,7 +56,7 @@ tasks_db = {}
 daily_done = {}
 bonus_balance = {}
 banned_users = set()
-warnings_db = {}  # uid -> {count, reasons, last_warning_date}
+warnings_db = {}
 pending_daily = {}
 user_plans = {}
 pending_plans = {}
@@ -67,12 +66,96 @@ referral_earnings = {}
 withdraw_requests = {}
 withdraw_done_date = {}
 daily_task_count = {}
-daily_earning_count = {}
-
-# Easy anti-scam storage
-screenshot_hashes = set()  # file_unique_id set - prevents same image reuse
+screenshot_hashes = set()
 screenshot_db = {}
-task_open_time = {}  # uid -> datetime when task opened
+task_open_time = {}
+
+# === BINARY LEFT-RIGHT SYSTEM ===
+binary_tree = {}  # uid -> {'left': set(), 'right': set(), 'left_count': int, 'right_count': int, 'pairs': int, 'earnings': int}
+binary_placements = {}  # new_user_id -> {'parent': parent_id, 'side': 'left'/'right'}
+binary_pair_history = {}  # uid -> list of matched pairs
+
+def init_binary_user(uid):
+    if uid not in binary_tree:
+        binary_tree[uid] = {'left': set(), 'right': set(), 'left_count': 0, 'right_count': 0, 'pairs_matched': 0, 'binary_earnings': 0, 'carry_left': 0, 'carry_right': 0}
+
+def place_in_binary(new_user_id, parent_id, side=None):
+    # Auto choose weaker leg if side not given
+    init_binary_user(parent_id)
+    init_binary_user(new_user_id)
+    
+    if side not in ['left', 'right']:
+        # Auto placement - weaker leg
+        left_count = binary_tree[parent_id]['left_count']
+        right_count = binary_tree[parent_id]['right_count']
+        side = 'left' if left_count <= right_count else 'right'
+    
+    if side == 'left':
+        binary_tree[parent_id]['left'].add(new_user_id)
+        binary_tree[parent_id]['left_count'] += 1
+    else:
+        binary_tree[parent_id]['right'].add(new_user_id)
+        binary_tree[parent_id]['right_count'] += 1
+    
+    binary_placements[new_user_id] = {'parent': parent_id, 'side': side, 'date': str(date.today())}
+    return side
+
+def check_binary_matching(parent_id):
+    # Check left-right matching and give bonus
+    init_binary_user(parent_id)
+    left = binary_tree[parent_id]['left_count']
+    right = binary_tree[parent_id]['right_count']
+    pairs_matched = binary_tree[parent_id]['pairs_matched']
+    
+    # Total possible pairs = min(left, right)
+    total_pairs = min(left, right)
+    new_pairs = total_pairs - pairs_matched
+    
+    if new_pairs > 0 and BINARY_MATCHING_BONUS_ENABLED:
+        # Check if parent is premium for higher bonus
+        plan = user_plans.get(parent_id, {}).get('plan', 'basic')
+        bonus_per_pair = BINARY_BONUS_PREMIUM_PER_PAIR if plan == 'premium' else BINARY_BONUS_PER_PAIR
+        
+        total_bonus = new_pairs * bonus_per_pair
+        
+        binary_tree[parent_id]['pairs_matched'] = total_pairs
+        binary_tree[parent_id]['binary_earnings'] += total_bonus
+        
+        # Add to referral earnings
+        referral_earnings[parent_id] = referral_earnings.get(parent_id, 0) + total_bonus
+        
+        # History
+        if parent_id not in binary_pair_history:
+            binary_pair_history[parent_id] = []
+        binary_pair_history[parent_id].append({
+            'date': str(date.today()),
+            'new_pairs': new_pairs,
+            'bonus_per_pair': bonus_per_pair,
+            'total_bonus': total_bonus,
+            'left_count': left,
+            'right_count': right
+        })
+        
+        return new_pairs, total_bonus, bonus_per_pair
+    return 0, 0, 0
+
+def get_binary_stats(uid):
+    init_binary_user(uid)
+    data = binary_tree[uid]
+    left = data['left_count']
+    right = data['right_count']
+    pairs = data['pairs_matched']
+    earnings = data['binary_earnings']
+    # Next pair needs
+    next_pair_need = "Need 1 Left + 1 Right for next Rs50" if left == right else f"Need {1 if left > right else '1 Right' if right > left else 'Left'} for next pair"
+    if left > right:
+        next_need = f"Need {left - right} Right for balancing, then pairs"
+    elif right > left:
+        next_need = f"Need {right - left} Left for balancing"
+    else:
+        next_need = "Balanced! Need 1 Left + 1 Right for next pair"
+    
+    return left, right, pairs, earnings, next_need
 
 def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
@@ -108,13 +191,6 @@ def get_plan_limits(uid):
     else: return DAILY_TASK_LIMIT_BASIC, DAILY_EARNING_CAP_BASIC, "basic"
 def get_today_task_for_user(uid):
     today_str = str(date.today())
-    plan = user_plans.get(uid, {}).get('plan','free' if is_first_day_free(uid) else 'none')
-    if plan == 'premium' and today_str in real_tasks_premium_db:
-        tasks = real_tasks_premium_db[today_str]
-        return tasks[0] if isinstance(tasks, list) else tasks
-    elif plan == 'basic' and today_str in real_tasks_basic_db:
-        tasks = real_tasks_basic_db[today_str]
-        return tasks[0] if isinstance(tasks, list) else tasks
     tasks = real_tasks_db.get(today_str)
     if not tasks: return {"title": "Join Sponsor Channel", "link": CHANNEL_LINK, "reward": 5, "company_payout": 0, "category": "default", "desc": "Join channel"}
     return tasks[0] if isinstance(tasks, list) else tasks
@@ -132,23 +208,70 @@ def main_menu():
         [InlineKeyboardButton("📅 Daily Task", callback_data="daily"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
         [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")]
     ])
+
 def join_channel_keyboard(is_rejoin=False):
     return InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],[InlineKeyboardButton("✅ I Joined", callback_data="check_joined")]])
+
+# === BINARY TEAM CALLBACKS ===
+async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    left, right, pairs, earnings, next_need = get_binary_stats(uid)
+    init_binary_user(uid)
+    
+    left_list = list(binary_tree[uid]['left'])[:5]
+    right_list = list(binary_tree[uid]['right'])[:5]
+    
+    text = (
+        f"💎 BINARY TEAM - Left & Right Matching\n\n"
+        f"Left Team: {left} members\n"
+        f"Right Team: {right} members\n"
+        f"Matched Pairs: {pairs}\n"
+        f"Binary Earnings: Rs{earnings}\n\n"
+        f"Bonus: Rs{BINARY_BONUS_PER_PAIR}/pair Basic, Rs{BINARY_BONUS_PREMIUM_PER_PAIR}/pair Premium\n"
+        f"Left + Right = 1 Pair = Bonus!\n\n"
+        f"{next_need}\n\n"
+        f"As left and right increase, amount adds automatically!\n"
+        f"Left members: {len(left_list)} shown\n"
+        f"Right members: {len(right_list)} shown\n\n"
+        f"Your Referral Link: https://t.me/{context.bot.username}?start={uid}\n"
+        f"New members auto placed to weaker leg!"
+    )
+    
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref")],
+        [InlineKeyboardButton("📊 Pair History", callback_data="binary_history")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_menu")]
+    ])
+    await q.message.reply_text(text, reply_markup=kb)
+
+async def binary_history_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    history = binary_pair_history.get(uid, [])
+    if not history:
+        await q.message.reply_text("No pair matching history yet! Need Left + Right for first pair!", reply_markup=main_menu())
+        return
+    msg = f"Pair Matching History - {len(history)} events:\n\n"
+    for h in history[-10:]:
+        msg += f"{h.get('date')} - {h.get('new_pairs')} pairs x Rs{h.get('bonus_per_pair')} = Rs{h.get('total_bonus')} (L{h.get('left_count')} R{h.get('right_count')})\n"
+    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid = q.from_user.id
     cnt=referrals_db.get(uid,0)
+    earnings = referral_earnings.get(uid,0) if 'referral_earnings' in globals() else referrals_db.get(uid,0)*10
     ref_link = f"https://t.me/{context.bot.username}?start={uid}"
-    await q.message.reply_text(f"Active: {cnt} Link: {ref_link}", reply_markup=main_menu())
+    await q.message.reply_text(f"My Referrals\n\nActive Referrals: {cnt}\nReferral Earnings: Rs{earnings}\n\nBonus: Rs10 per task completed by referral\nPlan Commission: 10% when referral buys plan\n\nYour Link: {ref_link}\n\nShare link - When friend joins and completes 1st task, you get Rs10!", reply_markup=main_menu())
 
 async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     is_active, plan_status, _ = check_plan_active(uid)
-    await q.message.reply_text(f"Balance Rs{get_balance(uid)} Tasks {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW} Plan {plan_status}", reply_markup=main_menu())
+    left, right, pairs, binary_earnings, _ = get_binary_stats(uid)
+    await q.message.reply_text(f"Balance Rs{get_balance(uid)} Tasks {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW} Plan {plan_status} Binary Pairs {pairs} Earnings Rs{binary_earnings} L{left} R{right}", reply_markup=main_menu())
 
-# === EASY ANTI-SCAM DAILY TASK - NO PAPER CODE ===
 async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
@@ -163,136 +286,54 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today=str(date.today())
     if uid in pending_daily:
         await q.message.reply_text(f"Task Pending Approval! Wait!", reply_markup=main_menu()); return
-    # Record task open time for time-limit check
     task_open_time[uid] = datetime.now()
     task = get_today_task_for_user(uid)
     task_limit, _, plan_type = get_plan_limits(uid)
     current_count = daily_task_count.get(uid, {}).get(today, 0)
     kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📢 Task {current_count+1}: {task.get('title')} - Open", url=task.get('link', CHANNEL_LINK))],
-        [InlineKeyboardButton("📸 Upload Screenshot - Verify", callback_data="daily_upload_screenshot")],
-        [InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]
+        [InlineKeyboardButton(f"Task {current_count+1}: {task.get('title')} - Open", url=task.get('link', CHANNEL_LINK))],
+        [InlineKeyboardButton("Upload Screenshot - Verify", callback_data="daily_upload_screenshot")],
+        [InlineKeyboardButton("Cancel", callback_data="back_menu")]
     ])
-    await q.message.reply_text(
-        f"Daily Task {current_count+1}/{task_limit} - {plan_type.upper()}\n"
-        f"{task.get('title')}\nReward Rs{task.get('reward',5)} Plan {plan_status}\n\n"
-        f"EASY UPLOAD: Task complete chesi screenshot teesuko, ikkade upload cheyyi!\n"
-        f"No paper code needed! Just upload original screenshot within {SCREENSHOT_TIME_LIMIT_MINUTES} mins!\n"
-        f"Same screenshot share cheste auto reject!",
-        reply_markup=kb
-    )
+    await q.message.reply_text(f"Daily Task {current_count+1}/{task_limit} - {plan_type.upper()} {task.get('title')} Reward Rs{task.get('reward',5)} Plan {plan_status}", reply_markup=kb)
 
 async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    uid=q.from_user.id
-    open_time = task_open_time.get(uid)
-    if open_time:
-        mins_passed = (datetime.now() - open_time).total_seconds() / 60
-        if mins_passed > SCREENSHOT_TIME_LIMIT_MINUTES:
-            await q.message.reply_text(f"Time over! Task open chesi {SCREENSHOT_TIME_LIMIT_MINUTES} mins lo screenshot pampali! Malli task open cheyyi!", reply_markup=main_menu())
-            return ConversationHandler.END
-    await q.message.reply_text(
-        f"Upload Screenshot - Easy Anti-Scam\n\n"
-        f"Instructions (No paper needed!):\n"
-        f"1. Task complete chesina screenshot teesuko\n"
-        f"2. Screenshot lo ne peru kanipinchali (Bank/Trading account lo name)\n"
-        f"3. Ikkade PHOTO ga pampu! File kadu!\n"
-        f"4. Same screenshot inkokaru pampithe auto reject!\n"
-        f"5. {SCREENSHOT_TIME_LIMIT_MINUTES} mins lo pampali!\n\n"
-        f"Now send screenshot as PHOTO:",
-    )
+    await q.message.reply_text(f"Upload Screenshot - No paper needed! Send photo within 15 mins! Duplicate check active!", reply_markup=ReplyKeyboardRemove())
     return UPLOAD_SCREENSHOT
 
 async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
     today=str(date.today())
     if not update.message.photo:
-        await update.message.reply_text("Please send as PHOTO, not file!")
+        await update.message.reply_text("Please send as PHOTO!")
         return UPLOAD_SCREENSHOT
-    # Time limit check
-    open_time = task_open_time.get(uid)
-    if open_time:
-        mins_passed = (datetime.now() - open_time).total_seconds() / 60
-        if mins_passed > SCREENSHOT_TIME_LIMIT_MINUTES:
-            await update.message.reply_text(f"Time over! {SCREENSHOT_TIME_LIMIT_MINUTES} mins lo pampali! Malli task open cheyyi!", reply_markup=main_menu())
-            return ConversationHandler.END
     photo = update.message.photo[-1]
     file_id = photo.file_id
     file_unique_id = photo.file_unique_id
-    # === 3 WARNINGS SYSTEM - ANTI-SCAM ===
-    # Anti-scam 1: Duplicate check - prevents sharing same screenshot
     if file_unique_id in screenshot_hashes:
-        # Increment warning count
-        if uid not in warnings_db:
-            warnings_db[uid] = {'count': 0, 'reasons': [], 'history': []}
+        if uid not in warnings_db: warnings_db[uid] = {'count': 0}
         warnings_db[uid]['count'] += 1
-        warnings_db[uid]['reasons'].append(f"Duplicate screenshot on {today} - {datetime.now().isoformat()}")
-        warnings_db[uid]['history'].append({'date': today, 'type': 'duplicate', 'file_id': file_unique_id})
-        warnings_db[uid]['last_warning_date'] = today
-        
         count = warnings_db[uid]['count']
-        
         if count == 1:
-            await update.message.reply_text(
-                f"⚠️ WARNING 1/3 - Same Screenshot Found!\n\n"
-                f"Ee screenshot ni inkokaru already use chesaru!\n"
-                f"Same screenshot share chesukunatlu undi!\n\n"
-                f"1st Warning ichamu! Malli original screenshot pampu!\n"
-                f"3 times ayithe ban avuthavu!\n\n"
-                f"Note: Admin mistake ayithe /contact lo message cheyyi!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"WARNING 1/3 - Same Screenshot Found! Same screenshot share chesukunatlu undi! 1st Warning!", reply_markup=main_menu())
             return ConversationHandler.END
         elif count == 2:
-            await update.message.reply_text(
-                f"⚠️ WARNING 2/3 - Malli Same Screenshot!\n\n"
-                f"Rendu sarlu same screenshot pampav!\n"
-                f"Same screenshot share chesukunatlu undi!\n\n"
-                f"2nd Warning! Inko sari cheste 3rd warning tarvata BAN avuthavu!\n"
-                f"Original screenshot teesuko!",
-                reply_markup=main_menu()
-            )
+            await update.message.reply_text(f"WARNING 2/3 - Malli Same Screenshot! 2nd Warning! Next BAN!", reply_markup=main_menu())
             return ConversationHandler.END
-        else:  # 3rd time - BAN
+        else:
             banned_users.add(uid)
-            await update.message.reply_text(
-                f"🚫 BANNED! 3 Warnings Completed!\n\n"
-                f"3 sarlu same screenshot share chesav!\n"
-                f"Idi scam ga treat chestunnam!\n\n"
-                f"Nu vvu BAN ayyav!\n"
-                f"Admin mistake ayithe contact admin - admin /unban {uid} tho ban teeyochu!",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            # Notify admin
-            for admin_id in ADMIN_ID_LIST:
-                try:
-                    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Unban {uid}", callback_data=f"admin_unban_{uid}")]])
-                    await context.bot.send_message(
-                        chat_id=admin_id,
-                        text=f"🚫 USER BANNED - 3 Warnings!\nUser {uid} Name {users_db.get(uid,{}).get('name')} Banned for duplicate screenshot 3 times!\nIf admin mistake, /unban {uid}",
-                        reply_markup=kb
-                    )
-                except: pass
+            await update.message.reply_text(f"BANNED! 3 Warnings! Contact admin /unban {uid}", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
     task = get_today_task_for_user(uid)
     screenshot_hashes.add(file_unique_id)
-    screenshot_db[uid] = {'file_id': file_id, 'file_unique_id': file_unique_id, 'task_date': today, 'task': task, 'upload_time': datetime.now().isoformat()}
+    screenshot_db[uid] = {'file_id': file_id, 'file_unique_id': file_unique_id, 'task_date': today, 'task': task}
     pending_daily[uid] = {'date': today, 'task': task, 'screenshot_file_id': file_id}
-    await update.message.reply_text(f"Screenshot Received! Task: {task.get('title')} Pending Admin Verification! Admin check: Name matches your registered name? Original? Not duplicate?", reply_markup=main_menu())
+    await update.message.reply_text(f"Screenshot Received! Task {task.get('title')} Pending Admin!", reply_markup=main_menu())
     for admin_id in ADMIN_ID_LIST:
         try:
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"Approve Rs{task.get('reward',5)}", callback_data=f"admin_approve_daily_{uid}"),
-                 InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")],
-                [InlineKeyboardButton("Ban Scam", callback_data=f"admin_ban_{uid}")]
-            ])
-            user_name = users_db.get(uid,{}).get('name','Unknown')
-            await context.bot.send_photo(
-                chat_id=admin_id,
-                photo=file_id,
-                caption=f"NEW SCREENSHOT - Easy Anti-Scam Check!\nUser: {user_name} ID: {uid}\nRegistered Name: {user_name}\nTask: {task.get('title')}\nCheck: Screenshot lo name {user_name} tho match ayinda? Duplicate? No - Unique!\nReward Rs{task.get('reward',5)}",
-                reply_markup=kb
-            )
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Approve Rs{task.get('reward',5)}", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW SCREENSHOT User {users_db.get(uid,{}).get('name')} ID {uid} Task {task.get('title')} Reward Rs{task.get('reward',5)}", reply_markup=kb)
         except: pass
     return ConversationHandler.END
 
@@ -315,6 +356,14 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
     ref_id = pending_referrals.get(uid)
     if ref_id and is_first:
         referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
+        # Place in binary
+        side = place_in_binary(uid, ref_id)
+        # Check matching bonus for parent
+        new_pairs, total_bonus, bonus_per_pair = check_binary_matching(ref_id)
+        if new_pairs > 0:
+            try:
+                await context.bot.send_message(chat_id=ref_id, text=f"💎 BINARY BONUS! {new_pairs} new pairs matched! Left+Right bonus Rs{total_bonus} (Rs{bonus_per_pair}/pair) Placed {uid} to {side} side!")
+            except: pass
         del pending_referrals[uid]
     await q.message.reply_text(f"Approved {uid} +Rs{reward}")
     try: await context.bot.send_message(chat_id=uid, text=f"Task Approved +Rs{reward} Balance Rs{get_balance(uid)}", reply_markup=main_menu())
@@ -337,42 +386,29 @@ async def admin_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(q.from_user.id): return
     uid = int(q.data.split("_")[-1])
     banned_users.add(uid)
-    await q.message.reply_text(f"Banned {uid} for scam!")
+    await q.message.reply_text(f"Banned {uid}")
+
+async def admin_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return
+    uid = int(q.data.split("_")[-1])
+    banned_users.discard(uid)
+    if uid in warnings_db: warnings_db[uid]['count']=0
+    await q.message.reply_text(f"Unbanned {uid}")
 
 async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    is_active, plan_status, _ = check_plan_active(uid)
-    is_free = is_first_day_free(uid)
     bal=get_balance(uid)
-    today_str = str(date.today())
-    # Once per day check
-    if withdraw_done_date.get(uid)==today_str:
-        await q.message.reply_text(f"Once Per Day Only! Already withdrew today {today_str} Tomorrow try! Status /withdrawstatus", reply_markup=main_menu()); return
-    if uid in withdraw_requests and withdraw_requests[uid].get('status')=='processing':
-        await q.message.reply_text(f"Already Processing Amount Rs{withdraw_requests[uid].get('amount')} Check /withdrawstatus", reply_markup=main_menu()); return
-    # Balance check
-    if bal < WITHDRAW_MIN:
-        await q.message.reply_text(f"Balance Rs{bal}/{WITHDRAW_MIN} Low! Need 200+ Tasks {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}", reply_markup=main_menu()); return
-    # Tasks required check - 17 tasks
-    if get_tasks(uid) < TASKS_REQUIRED_FOR_WITHDRAW:
-        await q.message.reply_text(f"Tasks Not Completed! Your {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW} Complete {TASKS_REQUIRED_FOR_WITHDRAW} for withdraw! Daily limits Basic {DAILY_TASK_LIMIT_BASIC}/day Premium {DAILY_TASK_LIMIT_PREMIUM}/day", reply_markup=main_menu()); return
-    if not is_active and not is_free:
-        await q.message.reply_text(f"Plan Expired/No Plan! {plan_status}", reply_markup=main_menu()); return
-    # Build options with highlighting - Your idea: 566 balance -> 200,300,500 highlight, 1000 not highlight
-    buttons=[]; row=[]; info_text=f"Withdraw - Balance Rs{bal} Min {WITHDRAW_MIN} Max {WITHDRAW_MAX} Once/day Multiple 100\nSelect Amount:\n"
+    if bal < WITHDRAW_MIN: await q.message.reply_text(f"Balance Rs{bal}/{WITHDRAW_MIN} Low!", reply_markup=main_menu()); return
+    if get_tasks(uid) < TASKS_REQUIRED_FOR_WITHDRAW: await q.message.reply_text(f"Tasks {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW} needed!", reply_markup=main_menu()); return
+    buttons=[]; row=[]; info=f"Withdraw Balance Rs{bal} Min {WITHDRAW_MIN} Max {WITHDRAW_MAX}\n"
     for amount in WITHDRAW_OPTIONS:
-        if amount <= bal and amount <= WITHDRAW_MAX:
-            row.append(InlineKeyboardButton(f"Rs{amount} Available", callback_data=f"wd_select_{amount}"))
-            info_text+=f"Rs{amount} Available\n"
-        else:
-            info_text+=f"Rs{amount} Insufficient Need Rs{amount} Have Rs{bal}\n"
+        if amount <= bal: row.append(InlineKeyboardButton(f"Rs{amount}", callback_data=f"wd_select_{amount}"))
         if len(row)==2: buttons.append(row); row=[]
     if row: buttons.append(row)
-    info_text+=f"\nExample Balance Rs566 -> 200,300,500 highlight, 1000 not highlight!\nFee {PLATFORM_FEE_PERCENT}% Platform Fee\n"
-    buttons.append([InlineKeyboardButton("Check Status", callback_data="wd_status")])
     buttons.append([InlineKeyboardButton("Back", callback_data="back_menu")])
-    await q.message.reply_text(info_text, reply_markup=InlineKeyboardMarkup(buttons))
+    await q.message.reply_text(info, reply_markup=InlineKeyboardMarkup(buttons))
 
 async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -406,25 +442,6 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=admin_id, text=f"Withdraw ID {uid} Amount Rs{amount} Net Rs{net} UPI {upi}", reply_markup=kb)
         except: pass
 
-async def wd_status_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid=q.from_user.id
-    wr = withdraw_requests.get(uid)
-    if not wr:
-        await q.message.reply_text("No active withdraw! Use menu -> Withdraw", reply_markup=main_menu())
-        return
-    status = wr.get('status')
-    status_text = "Processing - Admin will approve 24hrs" if status=='processing' else "Completed" if status=='approved' else "Rejected"
-    await q.message.reply_text(f"Withdraw Status Amount Rs{wr.get('amount')} Fee Rs{wr.get('fee')} Net Rs{wr.get('net_amount')} UPI {wr.get('upi')} Date {wr.get('date')} Status {status_text}", reply_markup=main_menu())
-
-async def withdrawstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid=update.effective_user.id
-    wr = withdraw_requests.get(uid)
-    if not wr:
-        await update.message.reply_text("No active withdraw!", reply_markup=main_menu())
-        return
-    await update.message.reply_text(f"Withdraw Amount Rs{wr.get('amount')} Fee Rs{wr.get('fee')} Net Rs{wr.get('net_amount')} Status {wr.get('status')} UPI {wr.get('upi')}", reply_markup=main_menu())
-
 async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
@@ -450,17 +467,17 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     is_active, plan_status, _ = check_plan_active(q.from_user.id)
-    await q.message.reply_text(f"Plans: Basic Rs500 10 tasks/day Max Rs200, Premium Rs1000 20 tasks/day Max Rs500, Your: {plan_status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Basic Rs500", callback_data="plan_basic")],[InlineKeyboardButton("Premium Rs1000", callback_data="plan_premium")]]))
+    await q.message.reply_text(f"Plans: Basic Rs500 10 tasks/day Max Rs200, Premium Rs1000 20 tasks/day Max Rs500 + Binary Bonus Rs50-100 per pair, Your: {plan_status}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Basic Rs500", callback_data="plan_basic")],[InlineKeyboardButton("Premium Rs1000", callback_data="plan_premium")]]))
 
 async def plan_basic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("Pay Rs500", url=DEPOSIT_LINK_BASIC)],[InlineKeyboardButton("I Paid", callback_data="verify_basic")]])
-    await q.message.reply_text(f"Basic Rs500 30 Days", reply_markup=kb)
+    await q.message.reply_text(f"Basic Rs500 30 Days Binary Rs50/pair", reply_markup=kb)
 
 async def plan_premium_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("Pay Rs1000", url=DEPOSIT_LINK_PREMIUM)],[InlineKeyboardButton("I Paid", callback_data="verify_premium")]])
-    await q.message.reply_text(f"Premium Rs1000 90 Days + Bonus", reply_markup=kb)
+    await q.message.reply_text(f"Premium Rs1000 90 Days Binary Rs100/pair + Bonus", reply_markup=kb)
 
 async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -507,14 +524,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
     if uid in users_db and users_db[uid].get("registered"):
         is_active, plan_status, _ = check_plan_active(uid)
-        await update.message.reply_text(f"Welcome {users_db[uid]['name']} Balance Rs{get_balance(uid)} Plan {plan_status}", reply_markup=main_menu())
+        left, right, pairs, earnings, _ = get_binary_stats(uid)
+        await update.message.reply_text(f"Welcome {users_db[uid]['name']} Balance Rs{get_balance(uid)} Plan {plan_status} Binary L{left} R{right} Pairs {pairs}", reply_markup=main_menu())
         return
-    await update.message.reply_text(f"Welcome S2E! Day1 FREE! ID: {uid}", reply_markup=join_channel_keyboard(False))
+    await update.message.reply_text(f"Welcome S2E! Binary Left-Right Matching! Day1 FREE! ID: {uid}", reply_markup=join_channel_keyboard(False))
 
 async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     users_db[uid]={'reg_date': date.today()}
+    init_binary_user(uid)
     await q.message.reply_text("Registration 1/7 Name:")
     return NAME
 
@@ -572,7 +591,7 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['registered']=True
     if 'reg_date' not in users_db[uid]: users_db[uid]['reg_date']=date.today()
     await update.message.reply_text(f"Registration Done! Link: https://t.me/{context.bot.username}?start={uid}", reply_markup=ReplyKeyboardRemove())
-    await update.message.reply_text("Menu: Today free 1st task available!", reply_markup=main_menu())
+    await update.message.reply_text("Menu: Support Plans available! Left-Right matching bonus!", reply_markup=main_menu())
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -585,7 +604,9 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
     if not is_admin(uid): return
-    await update.message.reply_text(f"ADMIN PANEL Easy Anti-Scam No Paper!\nUsers {len(users_db)} Pending {len(pending_daily)} Screenshots {len(screenshot_hashes)}")
+    banned_count = len(banned_users)
+    binary_users = len(binary_tree)
+    await update.message.reply_text(f"ADMIN Binary Left-Right System Users {len(users_db)} Binary {binary_users} Banned {banned_count} /pending /binary_stats")
 
 async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -614,8 +635,44 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_id=pending_referrals.get(target_id)
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
+            side = place_in_binary(target_id, ref_id)
+            new_pairs, total_bonus, bonus_per_pair = check_binary_matching(ref_id)
             del pending_referrals[target_id]
         await update.message.reply_text(f"Approved {target_id} +Rs{reward}")
+
+async def binary_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not binary_tree: await update.message.reply_text("No binary data!"); return
+    msg = f"Binary Stats - Total {len(binary_tree)} users with teams:\n\n"
+    for uid, data in list(binary_tree.items())[:20]:
+        name = users_db.get(uid,{}).get('name','Unknown')
+        msg += f"{uid} {name} L{data['left_count']} R{data['right_count']} Pairs {data['pairs_matched']} Earn Rs{data['binary_earnings']}\n"
+    await update.message.reply_text(msg[:4000])
+
+async def warnings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not warnings_db: await update.message.reply_text("No warnings!"); return
+    msg = f"Warnings {len(warnings_db)}:\n"
+    for uid, data in warnings_db.items():
+        msg += f"{uid} {data.get('count')}/3 /unban {uid}\n"
+    await update.message.reply_text(msg[:4000])
+
+async def banned_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not banned_users: await update.message.reply_text("No banned!"); return
+    msg = f"Banned {len(banned_users)}:\n"
+    for uid in banned_users:
+        msg += f"{uid} /unban {uid}\n"
+    await update.message.reply_text(msg[:4000])
+
+async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: await update.message.reply_text("Usage /unban <id>"); return
+    try: target_id=int(context.args[0])
+    except: return
+    banned_users.discard(target_id)
+    if target_id in warnings_db: warnings_db[target_id]['count']=0
+    await update.message.reply_text(f"Unbanned {target_id}")
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
@@ -636,21 +693,19 @@ def main():
     )
     conv_screenshot = ConversationHandler(
         entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$")],
-        states={
-            UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)]
-        },
+        states={UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)]},
         fallbacks=[CommandHandler("cancel", cancel)],
         per_user=True, per_chat=True, per_message=False
     )
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("withdrawstatus", withdrawstatus_cmd))
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("pending", pending_cmd))
+    app.add_handler(CommandHandler("approve", approve_cmd))
+    app.add_handler(CommandHandler("binary_stats", binary_stats_cmd))
     app.add_handler(CommandHandler("warnings", warnings_cmd))
     app.add_handler(CommandHandler("banned", banned_cmd))
     app.add_handler(CommandHandler("unban", unban_cmd))
-    app.add_handler(CommandHandler("approve", approve_cmd))
     app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
     app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
     app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -660,7 +715,6 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
     app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
     app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
-    app.add_handler(CallbackQueryHandler(wd_status_cb, pattern="^wd_status$"))
     app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
     app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
     app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
@@ -675,7 +729,7 @@ def main():
     app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
     app.add_handler(conv_reg)
     app.add_handler(conv_screenshot)
-    print(f"Bot Started! Easy Anti-Scam No Paper Code + 17 Tasks!")
+    print(f"Bot Started! Binary Left-Right Matching + 17 Tasks + Anti-Scam!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
