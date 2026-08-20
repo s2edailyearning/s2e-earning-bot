@@ -9,7 +9,7 @@ def get_ist_now():
 def get_ist_today():
     return get_ist_now().date()
 def get_ist_time():
-    return get_ist_now().time()
+    return get_ist_time()
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
@@ -29,34 +29,43 @@ if _env:
 
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
+bot_application = None
 
-async def check_and_notify_tasks(context):
-    try:
-        now = get_ist_now()
-        today_tasks = get_tasks_for_today()
-        for task in today_tasks:
-            task_id = task['id']
-            open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
-            diff = (open_dt - now).total_seconds()
-            if 0 < diff <= 65:
-                if task_id not in notified_tasks_30sec:
-                    notified_tasks_30sec.add(task_id)
-                    msg = f"⏰ TASK IN 30 SEC!\n\n🔴 Task {task['task_number']}: {task.get('title','New Task')}\n⏰ {task['open_time']}→{task['close_time']}\n💰 Rs{task.get('reward',5)}\n\n👉 Open Daily Task NOW!"
-                    for uid in list(users_db.keys())[:1000]:
-                        try:
-                            await context.bot.send_message(chat_id=uid, text=msg)
-                        except:
-                            pass
-            if now.hour == 0 and now.minute < 3:
-                notified_tasks_30sec.clear()
-    except Exception as e:
-        print(f"Notify error: {e}")
+def notification_thread_func():
+    import asyncio
+    while True:
+        try:
+            import time as t2
+            t2.sleep(30)
+            if not bot_application:
+                continue
+            now = get_ist_now()
+            for task in get_tasks_for_today():
+                try:
+                    open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
+                except:
+                    continue
+                diff = (open_dt - now).total_seconds()
+                if 0 < diff <= 65 and task['id'] not in notified_tasks_30sec:
+                    notified_tasks_30sec.add(task['id'])
+                    msg = f"⏰ TASK IN 30 SEC! Task {task['task_number']}: {task.get('title','')}"
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        for uid in list(users_db.keys())[:300]:
+                            try:
+                                loop.run_until_complete(bot_application.bot.send_message(chat_id=uid, text=msg))
+                            except:
+                                pass
+                        loop.close()
+                    except:
+                        pass
+        except:
+            import time as t2
+            t2.sleep(10)
 
 async def error_handler(update, context):
-    try:
-        print(f"Bot Error: {context.error}")
-    except:
-        pass
+    print(f"Error: {context.error}")
 
 WITHDRAW_MIN = 200
 PLATFORM_FEE_PERCENT = 7
@@ -197,15 +206,15 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
             return False, f"Invalid close {close_time_or_interval}"
     else:
         interval_mins = parse_interval_str(close_time_or_interval)
-        open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
+        open_dt = datetime.combine(get_ist_today(), open_time)
         close_dt = open_dt + timedelta(minutes=interval_mins)
         close_time = close_dt.time()
     next_time = parse_time_str(next_time_str)
     if not next_time:
         return False, f"Invalid next {next_time_str}"
-    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
-    close_dt = datetime.combine(get_ist_today(), close_time, tzinfo=IST)
-    next_dt = datetime.combine(get_ist_today(), next_time, tzinfo=IST)
+    open_dt = datetime.combine(get_ist_today(), open_time)
+    close_dt = datetime.combine(get_ist_today(), close_time)
+    next_dt = datetime.combine(get_ist_today(), next_time)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
     if next_dt < close_dt:
@@ -265,7 +274,7 @@ def check_missed_tasks_with_interval(uid):
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'], tzinfo=IST)
+        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'])
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
@@ -989,7 +998,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     try:
         text = update.message.text.replace('/add_task','').strip()
         if not text:
-            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
+            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5")
             return
         import re
         urls = re.findall(r'https?://\S+', text)
@@ -1007,7 +1016,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
             if len(parts) >= 3:
                 times = parts[:3]
             else:
-                await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
+                await update.message.reply_text("Need 3 times")
                 return
         open_str, close_str, next_str = times[0], times[1], times[2]
         remaining = text
@@ -1018,12 +1027,12 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         title = remaining if remaining else f"Task at {open_str}"
         success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nPoster optional! Use /set_task_image {result['id']}")
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}")
         else:
-            await update.message.reply_text(f"❌ Failed: {result}\nTried: {open_str} {close_str} {next_str}")
+            await update.message.reply_text(f"❌ Failed: {result}")
     except Exception as e:
         print(f"add_task error {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)[:200]} Try /add_task 2:30PM 15min 2:46PM Test 5")
+        await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -1399,8 +1408,8 @@ def main():
         states={
             SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
         },
-        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
-        per_user=True, per_chat=True, per_message=False
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_user=True, per_chat=True, per_message=True
     )
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("admin", admin_panel))
@@ -1415,7 +1424,6 @@ def main():
     app.add_handler(CommandHandler("warnings", warnings_cmd))
     app.add_handler(CommandHandler("banned", banned_cmd))
     app.add_handler(CommandHandler("unban", unban_cmd))
-    app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
     app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
     app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
     app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -1448,13 +1456,16 @@ def main():
     app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_premium$"))
     app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
     app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
-    app.add_error_handler(error_handler)
+    global bot_application
+    bot_application = app
     try:
-        if hasattr(app, 'job_queue') and app.job_queue:
-            app.job_queue.run_repeating(check_and_notify_tasks, interval=30, first=10)
-            print("✅ 30 sec notify job scheduled")
-    except Exception as e:
-        print(f"JobQueue error: {e}")
+        app.add_error_handler(error_handler)
+    except:
+        pass
+    try:
+        threading.Thread(target=notification_thread_func, daemon=True).start()
+    except:
+        pass
     app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
     app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
     app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
