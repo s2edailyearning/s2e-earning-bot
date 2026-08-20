@@ -28,6 +28,36 @@ if _env:
             if _id not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(_id)
 
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
+notified_tasks_30sec = set()
+
+async def check_and_notify_tasks(context):
+    try:
+        now = get_ist_now()
+        today_tasks = get_tasks_for_today()
+        for task in today_tasks:
+            task_id = task['id']
+            open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
+            diff = (open_dt - now).total_seconds()
+            if 0 < diff <= 65:
+                if task_id not in notified_tasks_30sec:
+                    notified_tasks_30sec.add(task_id)
+                    msg = f"⏰ TASK IN 30 SEC!\n\n🔴 Task {task['task_number']}: {task.get('title','New Task')}\n⏰ {task['open_time']}→{task['close_time']}\n💰 Rs{task.get('reward',5)}\n\n👉 Open Daily Task NOW!"
+                    for uid in list(users_db.keys())[:1000]:
+                        try:
+                            await context.bot.send_message(chat_id=uid, text=msg)
+                        except:
+                            pass
+            if now.hour == 0 and now.minute < 3:
+                notified_tasks_30sec.clear()
+    except Exception as e:
+        print(f"Notify error: {e}")
+
+async def error_handler(update, context):
+    try:
+        print(f"Bot Error: {context.error}")
+    except:
+        pass
+
 WITHDRAW_MIN = 200
 PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 15
@@ -173,9 +203,9 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     next_time = parse_time_str(next_time_str)
     if not next_time:
         return False, f"Invalid next {next_time_str}"
-    open_dt = datetime.combine(get_ist_today(), open_time)
-    close_dt = datetime.combine(get_ist_today(), close_time)
-    next_dt = datetime.combine(get_ist_today(), next_time)
+    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
+    close_dt = datetime.combine(get_ist_today(), close_time, tzinfo=IST)
+    next_dt = datetime.combine(get_ist_today(), next_time, tzinfo=IST)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
     if next_dt < close_dt:
@@ -955,53 +985,45 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
+    if not is_admin(update.effective_user.id): return
     try:
         text = update.message.text.replace('/add_task','').strip()
         if not text:
-            await update.message.reply_text("Usage: /add_task open close next title reward\nExample: /add_task 2:30PM 15min 2:46PM Task 7 Test 5")
+            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
             return
-        import re as re2
-        urls = re2.findall(r'https?://\S+', text)
-        link = urls[0].rstrip('.,;!?') if urls else CHANNEL_LINK
-        parts_all = text.split()
+        import re
+        urls = re.findall(r'https?://\S+', text)
+        link = urls[0] if urls else CHANNEL_LINK
+        numbers = re.findall(r'\b\d+\b', text)
         reward = 5
-        text_for_title = text
-        if parts_all and parts_all[-1].isdigit():
-            try:
-                r = int(parts_all[-1])
-                if 1 <= r <= 100:
-                    reward = r
-                    text_for_title = ' '.join(parts_all[:-1])
-            except:
-                pass
+        if numbers:
+            last_num = int(numbers[-1])
+            if last_num <= 100:
+                reward = last_num
         time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
-        times = re2.findall(time_pattern, text_for_title, re2.IGNORECASE)
+        times = re.findall(time_pattern, text, re.IGNORECASE)
         if len(times) < 3:
-            p = text_for_title.split()
-            if len(p) >= 3:
-                times = p[:3]
+            parts = text.split()
+            if len(parts) >= 3:
+                times = parts[:3]
             else:
-                await update.message.reply_text(f"Need 3 times: {text_for_title[:100]}")
+                await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
                 return
         open_str, close_str, next_str = times[0], times[1], times[2]
-        remaining = text_for_title
+        remaining = text
         for t in times[:3]:
             remaining = remaining.replace(t, '', 1)
-        remaining = re2.sub(r'https?://\S+', '', remaining).strip()
-        title = remaining[:200] if remaining else f"Task at {open_str}"
+        remaining = remaining.replace(link, '').strip()
+        remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
+        title = remaining if remaining else f"Task at {open_str}"
         success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}")
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nPoster optional! Use /set_task_image {result['id']}")
         else:
-            await update.message.reply_text(f"❌ Failed: {result}")
+            await update.message.reply_text(f"❌ Failed: {result}\nTried: {open_str} {close_str} {next_str}")
     except Exception as e:
-        print(f"add_task error: {e}")
-        try:
-            await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
-        except:
-            pass
+        print(f"add_task error {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)[:200]} Try /add_task 2:30PM 15min 2:46PM Test 5")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -1426,6 +1448,13 @@ def main():
     app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_premium$"))
     app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
     app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
+    app.add_error_handler(error_handler)
+    try:
+        if hasattr(app, 'job_queue') and app.job_queue:
+            app.job_queue.run_repeating(check_and_notify_tasks, interval=30, first=10)
+            print("✅ 30 sec notify job scheduled")
+    except Exception as e:
+        print(f"JobQueue error: {e}")
     app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
     app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
     app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
