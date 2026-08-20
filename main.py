@@ -352,7 +352,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 
-async def admin_approve_daily_cbasync def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
     uid = int(q.data.split("_")[-1])
