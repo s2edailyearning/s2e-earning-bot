@@ -1407,7 +1407,11 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Withdraw Rejected! Contact admin for reason!", reply_markup=main_menu())
         except: pass
-
+async def error_handler(update, context):
+    print(f"Polling error: {context.error}")
+    import traceback
+    traceback.print_exc()
+    
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     print("🚀 Starting bot with Conflict protection...")
