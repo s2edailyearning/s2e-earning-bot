@@ -167,7 +167,7 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
             return False, f"Invalid close {close_time_or_interval}"
     else:
         interval_mins = parse_interval_str(close_time_or_interval)
-        open_dt = datetime.combine(get_ist_today(), open_time)
+        open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
         close_dt = open_dt + timedelta(minutes=interval_mins)
         close_time = close_dt.time()
     next_time = parse_time_str(next_time_str)
@@ -235,7 +235,7 @@ def check_missed_tasks_with_interval(uid):
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'])
+        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'], tzinfo=IST)
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
