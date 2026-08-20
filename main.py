@@ -9,6 +9,7 @@ def get_ist_now():
 def get_ist_today():
     return get_ist_now().date()
 def get_ist_time():
+    def get_ist_time():
     return get_ist_now().time()
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
@@ -957,10 +958,9 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     try:
-        text = update.message.text.replace('/add_task','').strip()
-    if not text:
-        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
-        return
+        if not text:
+            await update.message.reply_text("Usage: /add_task open close next title reward\nExample: /add_task 2:30PM 15min 2:46PM Task 7 Test 5")
+            return
     import re
     urls = re.findall(r'https?://\S+', text)
     link = urls[0] if urls else CHANNEL_LINK
