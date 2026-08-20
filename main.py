@@ -1528,52 +1528,49 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
             
             global bot_application
-bot_application = app
+            bot_application = app
 
-# Flask ni background thread lo run chey
-from flask import Flask
-flask_app = Flask(__name__)
-@flask_app.route('/')
-def home():
-    return "Bot is running!"
-
-threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=10000), daemon=True).start()
-print("✅ Flask started on port 10000")
-
-try:
-    threading.Thread(target=notification_loop, daemon=True).start()
-    print("✅ Notifier started")
-except:
-    pass
-
-print("✅ Handlers registered, starting polling...")
-            # This blocks until error
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-            
-            # If polling exits cleanly, break
-            print("✅ Polling ended cleanly")
-            break
-            
+        # Flask ni background lo run chey - Render port kosam
+            try:
+            from flask import Flask
+            flask_app = Flask(__name__)
+            @flask_app.route('/')
+            def home():
+                return "Bot is running!"
+            threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=10000, use_reloader=False), daemon=True).start()
+            print("✅ Flask started on port 10000")
         except Exception as e:
-            err_str = str(e)
-            print(f"❌ Polling error: {err_str[:1000]}")
-            if "Conflict" in err_str or "terminated by other" in err_str:
-                retry_count += 1
-                wait_time = 20 + (retry_count * 5)
-                print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s... Retry {retry_count}/{max_retries}")
-                print("💡 FIX: Go to Render dashboard -> Stop previous deploys, or wait 30 sec")
-                import time as t_sleep
-                t_sleep.sleep(wait_time)
-                continue
-            else:
-                retry_count += 1
-                print(f"⚠️ Other error, retrying in 10s... {retry_count}/{max_retries}")
-                import time as t_sleep
-                t_sleep.sleep(10)
-                continue
-    
-    print("🛑 Bot main loop ended")
+            print(f"Flask error: {e}")
 
+        # Notifier thread
+        try:
+            threading.Thread(target=notification_loop, daemon=True).start()
+            print("✅ Notifier started")
+        except:
+            pass
+
+        print("✅ Handlers registered, starting polling...")
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+
+        print("✅ Polling ended cleanly")
+        break
+
+    except Exception as e:
+        err_str = str(e)
+        print(f"❌ Polling error: {err_str[:1000]}")
+        if "Conflict" in err_str or "terminated by other" in err_str:
+            retry_count += 1
+            wait_time = 20 + (retry_count * 5)
+            print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
+            import time as t_sleep
+            t_sleep.sleep(wait_time)
+            continue
+        else:
+            retry_count += 1
+            print(f"⚠️ Other error, retrying in 10s... {retry_count}")
+            import time as t_sleep
+            t_sleep.sleep(10)
+            continue
 
 if __name__=="__main__":
     main()
