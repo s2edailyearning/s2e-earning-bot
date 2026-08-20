@@ -293,6 +293,9 @@ def main_menu():
         [InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")]
     ])
 
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Menu:", reply_markup=main_menu())
+
 # === CHANNEL JOIN CHECK - FIXED ===
 async def check_user_in_channel(user_id, context):
     try:
