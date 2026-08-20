@@ -994,7 +994,12 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /add_task from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Auto-added! Try again!")
+        ADMIN_ID_LIST.append(uid)
+        return
     try:
         text = update.message.text.replace('/add_task','').strip()
         if not text:
@@ -1035,7 +1040,12 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /list_scheduled_tasks_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     today_tasks = get_tasks_for_today()
     if not today_tasks:
         await update.message.reply_text("No scheduled tasks for today! Add via /add_task")
@@ -1047,7 +1057,12 @@ async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(msg[:4000])
 
 async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /add_promo_campaign_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     text = update.message.text.replace('/add_promo','').strip()
     if not text:
         await update.message.reply_text("Usage: /add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n\nExample: /add_promo Kavali Fashions|Ramesh|9876543210|Kavali|Clothing|Diwali Sale|All sarees 50% off|https://poster.link|50% off|10000|200")
@@ -1067,7 +1082,12 @@ async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"Error: {e}")
 
 async def list_promo_campaigns_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /list_promo_campaigns_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     if not promo_campaigns_db:
         await update.message.reply_text("No promo campaigns! Add via /add_promo")
         return
@@ -1077,7 +1097,12 @@ async def list_promo_campaigns_cmd(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(msg[:4000])
 
 async def promo_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /promo_pending_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     if not promo_pending:
         await update.message.reply_text("No pending promo submissions!")
         return
@@ -1087,7 +1112,12 @@ async def promo_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg[:4000])
 
 async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /skipped_tasks_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     if not context.args:
         await update.message.reply_text("Usage: /skipped user_id or /skipped all")
         return
@@ -1117,7 +1147,12 @@ async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg[:4000])
 
 async def warnings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /warnings_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     if not warnings_db:
         await update.message.reply_text("No warnings!")
         return
@@ -1128,7 +1163,12 @@ async def warnings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg[:4000])
 
 async def banned_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    uid = update.effective_user.id
+    print(f"📥 /banned_cmd from {uid}: {update.message.text[:100]}")
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
+        ADMIN_ID_LIST.append(uid)
+        return
     if not banned_users:
         await update.message.reply_text("No banned users!")
         return
