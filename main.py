@@ -1,4 +1,6 @@
 import os, re, threading, json, asyncio
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
@@ -1331,19 +1333,8 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    # Build app with error handler and no concurrent updates conflict handling
     app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Delete any existing webhook to prevent Conflict error
-    try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
-        loop.close()
-        print("✅ Webhook deleted, ready for polling")
-    except Exception as e:
-        print(f"Webhook delete note: {e}")
+    print("✅ Bot building, webhook will be handled by polling")
 
     conv_reg = ConversationHandler(
         entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
