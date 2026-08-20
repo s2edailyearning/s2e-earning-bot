@@ -169,8 +169,8 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     next_dt = datetime.combine(date.today(), next_time)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
-    if next_dt < close_dt:
-        return False, f"Next {next_time.strftime('%H:%M')} must be after close (you gave next {next_time.strftime('%H:%M')} but close is {close_time.strftime('%H:%M')}) - Try next 1 min after close like 1:31PM"
+    if next_dt <= close_dt:
+        return False, f"Next {next_time.strftime('%H:%M')} must be after close"
     task = {
         'id': scheduled_task_counter,
         'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(date.today())]) + 1,
@@ -947,40 +947,65 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    text = update.message.text.replace('/add_task','').strip()
-    if not text:
-        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
-        return
-    import re
-    urls = re.findall(r'https?://\S+', text)
-    link = urls[0] if urls else CHANNEL_LINK
-    numbers = re.findall(r'\b\d+\b', text)
-    reward = 5
-    if numbers:
-        last_num = int(numbers[-1])
-        if last_num <= 100:
-            reward = last_num
-    time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
-    times = re.findall(time_pattern, text, re.IGNORECASE)
-    if len(times) < 3:
-        parts = text.split()
-        if len(parts) >= 3:
-            times = parts[:3]
-        else:
-            await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
+    try:
+        text = update.message.text.replace('/add_task','').strip()
+        if not text:
+            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
             return
-    open_str, close_str, next_str = times[0], times[1], times[2]
-    remaining = text
-    for t in times[:3]:
-        remaining = remaining.replace(t, '', 1)
-    remaining = remaining.replace(link, '').strip()
-    remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
-    title = remaining if remaining else f"Task at {open_str}"
-    success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
-    if success:
-        await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nSkippable: {result['skippable']}\n\n🖼️ To add your TASK 3/TASK 4 poster image:\n/set_task_image {result['id']}\nThen send the poster photo!")
-    else:
-        await update.message.reply_text(f"❌ Failed: {result}")
+        import re
+        # Extract link safely
+        urls = re.findall(r'https?://\S+', text)
+        link = urls[0] if urls else CHANNEL_LINK
+        # Clean link trailing punctuation
+        link = link.rstrip('.,;!?')
+        # Reward = last token if number <=100
+        reward = 5
+        parts_all = text.split()
+        if parts_all and parts_all[-1].isdigit():
+            try:
+                r = int(parts_all[-1])
+                if 1 <= r <= 100:
+                    reward = r
+                    # Remove reward from text for title parsing
+                    text_for_title = ' '.join(parts_all[:-1])
+                else:
+                    text_for_title = text
+            except:
+                text_for_title = text
+        else:
+            text_for_title = text
+        
+        time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
+        times = re.findall(time_pattern, text_for_title, re.IGNORECASE)
+        if len(times) < 3:
+            p = text_for_title.split()
+            if len(p) >= 3:
+                times = p[:3]
+            else:
+                await update.message.reply_text("❌ Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM or 1:42PM 15min 1:58PM\n\nYou sent: " + text_for_title[:200])
+                return
+        open_str, close_str, next_str = times[0], times[1], times[2]
+        remaining = text_for_title
+        for t in times[:3]:
+            remaining = remaining.replace(t, '', 1)
+        if link in remaining:
+            remaining = remaining.replace(link, '').strip()
+        remaining = remaining.strip()
+        # Remove any leftover URL fragments
+        remaining = re.sub(r'https?://\S+', '', remaining).strip()
+        title = remaining if remaining else f"Task at {open_str}"
+        title = title[:200]  # Limit title length
+        success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
+        if success:
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nLink: {link[:50]}...\nSkippable: {result['skippable']}\n\n🖼️ To add poster:\n/set_task_image {result['id']}\nThen send photo!")
+        else:
+            await update.message.reply_text(f"❌ Failed: {result}\n\nTried: open={open_str} close={close_str} next={next_str}\nTitle={title[:100]}")
+    except Exception as e:
+        print(f"add_task error: {e}")
+        try:
+            await update.message.reply_text(f"❌ Error adding task: {str(e)[:300]}\n\nTry simple format:\n/add_task 1:45PM 15min 2:00PM Task 7 Local Test 5\n\nWithout long link!")
+        except:
+            pass
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
