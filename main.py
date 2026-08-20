@@ -1,235 +1,221 @@
 import os
-import json
-import logging
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import re
+from datetime import datetime, date
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 # --- ENV ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning_Channel")
-DATA_FILE = "data.json"
+CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@S2E_Daily_Earning")  # or @S2E_Daily_Earning
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
 
-logging.basicConfig(level=logging.INFO)
+# --- STATES FOR REGISTRATION ---
+NAME, GENDER, DOB, UPI, PINCODE, PROFESSION = range(6)
 
-# --- Dummy Web Server for Render Web Service ---
-class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"S2E Daily Earning Bot is Running! Bot is Live!")
-    
-    def log_message(self, format, *args):
-        return  # Suppress logs
+# Simple in-memory DB (Render free lo file reset avutundi - permanent kosam Google Sheet add cheyachu)
+users_db = {}
 
-def start_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), DummyHandler)
-    print(f"Dummy web server started on port {port} for Render...")
-    server.serve_forever()
+def calculate_age(dob_date):
+    today = date.today()
+    return today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
 
-# --- Data handling ---
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}}
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {"users": {}}
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-data = load_data()
-
-def get_user(user_id):
-    uid = str(user_id)
-    if uid not in data["users"]:
-        data["users"][uid] = {
-            "id": uid,
-            "referrals": [],
-            "active_referrals": 0,
-            "wallet": 0,
-            "task_completed": False,
-            "referred_by": None
-        }
-        save_data(data)
-    return data["users"][uid]
-
-# --- Start Command - 100% ENGLISH ---
+# /start handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = str(user.id)
-    bot_username = (await context.bot.get_me()).username
+    user_id = update.effective_user.id
+    # If already registered, show menu
+    if user_id in users_db and users_db[user_id].get("registered"):
+        await update.message.reply_text(
+            f"Welcome back {users_db[user_id]['name']}! ✅\n\n"
+            f"💰 Balance: ₹0\n"
+            f"🔗 Your Referral: https://t.me/S2E_Daily_Earning_bot?start={user_id}\n\n"
+            f"Use /menu for options"
+        )
+        return
 
-    referrer_id = None
-    if context.args and len(context.args) > 0:
-        referrer_id = context.args[0].strip()
-    
-    current_user = get_user(user_id)
-
-    if referrer_id and referrer_id != user_id and current_user["referred_by"] is None:
-        if referrer_id in data["users"]:
-            referrer = data["users"][referrer_id]
-            if user_id not in referrer["referrals"]:
-                referrer["referrals"].append(user_id)
-                current_user["referred_by"] = referrer_id
-                save_data(data)
-                try:
-                    await context.bot.send_message(
-                        chat_id=int(referrer_id),
-                        text=f"🎉 New Referral Joined!\n\nUser {user.first_name} joined using your link.\nThey need to complete the task to become active."
-                    )
-                except:
-                    pass
-
-    welcome_text = f"""🚀 Welcome to S2E Daily Earning!
-
-Your ID: {user_id}
-Channel: S2E Daily Earning
-
-Referral System:
-• When 5 members join using your link and complete tasks, your wallet will be unlocked
-• ₹10 per Active Referral
-
-Your Referral Link:
-https://t.me/{bot_username}?start={user_id}
-
-Join the channel and click 'Check Joined' to verify!
-"""
-
+    # Not registered - show join channel
     keyboard = [
         [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
-        [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")],
-        [
-            InlineKeyboardButton("👥 My Referrals", callback_data="my_referrals"),
-            InlineKeyboardButton("💰 Wallet", callback_data="wallet")
-        ],
-        [InlineKeyboardButton("📅 Daily Task", callback_data="daily_task")]
+        [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f"Welcome to S2E Daily Earning! 🚀\n\n"
+        f"Your ID: {user_id}\n"
+        f"Channel: S2E Daily Earning\n\n"
+        f"Referral System:\n"
+        f"• When 5 members join using your link and complete tasks, wallet unlocked\n"
+        f"• ₹10 per Active Referral\n\n"
+        f"First, join the channel and verify!",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
-
-# --- Callback Handler - 100% ENGLISH ---
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Check joined callback
+async def check_joined_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = str(query.from_user.id)
-    user = get_user(user_id)
-    bot_username = (await context.bot.get_me()).username
+    user_id = query.from_user.id
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status in ['left', 'kicked']:
+            raise Exception("Not joined")
+    except:
+        await query.message.reply_text("❌ You haven't joined yet! Please Join Channel first and then click Check Joined.")
+        return
 
-    if query.data == "check_joined":
-        try:
-            if not CHANNEL_ID:
-                await query.message.reply_text("⚠️ Channel not configured. Please contact admin.")
-                return
+    # Joined - check if already registered
+    if user_id in users_db and users_db[user_id].get("registered"):
+        await query.message.reply_text("✅ Verification Successful! You are already registered. /menu")
+        return
 
-            member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=int(user_id))
-            if member.status in ["member", "administrator", "creator"]:
-                if not user["task_completed"]:
-                    user["task_completed"] = True
-                    if user["referred_by"]:
-                        ref_id = user["referred_by"]
-                        if ref_id in data["users"]:
-                            ref_user = data["users"][ref_id]
-                            ref_user["active_referrals"] += 1
-                            ref_user["wallet"] += 10
-                            save_data(data)
-                            try:
-                                await context.bot.send_message(
-                                    chat_id=int(ref_id),
-                                    text=f"✅ Your referral {query.from_user.first_name} completed the task!\n💰 You earned ₹10! Total Active: {ref_user['active_referrals']}"
-                                )
-                            except:
-                                pass
-                    save_data(data)
+    # Start registration
+    users_db[user_id] = {}
+    await query.message.reply_text(
+        "✅ Verification Successful!\n\n"
+        "Your task is completed!\n\n"
+        "Now let's complete your registration for daily earning (18+ only) 📝\n\n"
+        "1️⃣ Enter your Full Name:"
+    )
+    context.user_data['reg_step'] = NAME
+    return NAME
 
-                await query.message.reply_text(
-                    "✅ Verification Successful!\n\nYou have joined the channel. Your task is completed!\n\nNow share your referral link to earn more."
-                )
-            else:
-                await query.message.reply_text(
-                    "❌ You have not joined the channel yet!\n\nPlease join the channel first and then click 'Check Joined'.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]])
-                )
-        except Exception as e:
-            logging.error(f"Check joined error: {e}")
-            await query.message.reply_text(
-                f"⚠️ Could not verify. Make sure the bot is admin in the channel.\n\nChannel: {CHANNEL_LINK}\n\nAfter joining, click Check Joined again.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]])
-            )
+# Registration Steps
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    name = update.message.text.strip()
+    if len(name) < 2:
+        await update.message.reply_text("Please enter valid name:")
+        return NAME
+    users_db[user_id]['name'] = name
+    # Gender keyboard
+    keyboard = [["Male", "Female", "Other"]]
+    await update.message.reply_text(
+        f"Nice {name}! 👍\n\n2️⃣ Select your Gender:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return GENDER
 
-    elif query.data == "my_referrals":
-        total = len(user["referrals"])
-        active = user["active_referrals"]
-        text = f"""👥 My Referrals
+async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    gender = update.message.text.strip()
+    if gender not in ["Male", "Female", "Other"]:
+        await update.message.reply_text("Please select from buttons: Male / Female / Other")
+        return GENDER
+    users_db[user_id]['gender'] = gender
+    await update.message.reply_text(
+        "3️⃣ Enter your Date of Birth (DD-MM-YYYY)\nExample: 15-08-2000\n\n*Age must be 18+*",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return DOB
 
-Total Referrals: {total}
-Active Referrals: {active}
-Pending: {total - active}
+async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    dob_text = update.message.text.strip()
+    try:
+        dob_date = datetime.strptime(dob_text, "%d-%m-%Y").date()
+        age = calculate_age(dob_date)
+        if age < 18:
+            await update.message.reply_text(f"❌ Sorry, you are {age} years old. 18+ only required! Please enter valid DOB again or contact support.")
+            return DOB
+        if age > 100:
+            await update.message.reply_text("Please enter valid DOB (DD-MM-YYYY):")
+            return DOB
+    except:
+        await update.message.reply_text("❌ Invalid format! Use DD-MM-YYYY\nExample: 15-08-2000")
+        return DOB
+    
+    users_db[user_id]['dob'] = dob_text
+    users_db[user_id]['age'] = age
+    await update.message.reply_text(f"✅ Age verified: {age} years\n\n4️⃣ Enter your UPI ID for payments:\nExample: yourname@phonepe / 9876543210@ybl")
+    return UPI
 
-Your Referral Link:
-https://t.me/{bot_username}?start={user_id}
+async def get_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    upi = update.message.text.strip()
+    # Simple UPI validation: something@something
+    if not re.match(r"^[\w.\-_]{2,256}@[a-zA-Z]{2,64}$", upi) and "@" not in upi:
+        await update.message.reply_text("❌ Invalid UPI! Enter correct UPI ID (e.g., name@phonepe):")
+        return UPI
+    users_db[user_id]['upi'] = upi
+    await update.message.reply_text("5️⃣ Enter your Pincode (6 digits):\nExample: 517408")
+    return PINCODE
 
-Share this link and earn ₹10 per active user!
-You need 5 active referrals to unlock wallet.
-"""
-        await query.message.reply_text(text)
+async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    pin = update.message.text.strip()
+    if not re.match(r"^\d{6}$", pin):
+        await update.message.reply_text("❌ Invalid Pincode! Enter 6 digit pincode (e.g., 517408):")
+        return PINCODE
+    users_db[user_id]['pincode'] = pin
+    keyboard = [["Student", "Employee", "Self-Employed", "Business"], ["Freelancer", "Other"]]
+    await update.message.reply_text(
+        "6️⃣ Last step - Select your Profession:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+    return PROFESSION
 
-    elif query.data == "wallet":
-        active = user["active_referrals"]
-        balance = user["wallet"]
-        if active >= 5:
-            status = "✅ Unlocked"
-        else:
-            status = f"🔒 Locked (Need {5 - active} more active referrals)"
+async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    profession = update.message.text.strip()
+    users_db[user_id]['profession'] = profession
+    users_db[user_id]['registered'] = True
+    users_db[user_id]['registered_at'] = datetime.now().isoformat()
 
-        text = f"""💰 Wallet
+    # Save summary
+    data = users_db[user_id]
+    summary = (
+        f"🎉 Registration Successful!\n\n"
+        f"👤 Name: {data['name']}\n"
+        f"⚧ Gender: {data['gender']}\n"
+        f"🎂 DOB: {data['dob']} (Age: {data['age']})\n"
+        f"💳 UPI: {data['upi']}\n"
+        f"📍 Pincode: {data['pincode']}\n"
+        f"💼 Profession: {data['profession']}\n\n"
+        f"Your Referral Link:\n"
+        f"https://t.me/S2E_Daily_Earning_bot?start={user_id}\n\n"
+        f"Now share your link - ₹10 per active referral! 🚀\n\n"
+        f"Use /menu to see Wallet, My Referrals, Daily Task"
+    )
+    await update.message.reply_text(summary, reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
 
-Balance: ₹{balance}
-Status: {status}
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Registration cancelled. Type /start to restart.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
 
-Active Referrals: {active}/5
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
+        [InlineKeyboardButton("📅 Daily Task", callback_data="daily")]
+    ]
+    await update.message.reply_text("S2E Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-Minimum withdrawal: ₹50
-Earn ₹10 for each active referral.
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
 
-Your Referral Link:
-https://t.me/{bot_username}?start={user_id}
-"""
-        await query.message.reply_text(text)
+    # Registration conversation - starts after check_joined
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(check_joined_callback, pattern="^check_joined$")],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+            DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+            UPI: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
+            PINCODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
+            PROFESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_user=True,
+        per_chat=True,
+    )
 
-    elif query.data == "daily_task":
-        text = f"""📅 Daily Task
-
-✅ Task 1: Join our channel - Completed if you verified
-⏳ Task 2: Refer 5 friends - {user['active_referrals']}/5
-
-Complete daily tasks to keep your account active!
-
-Your Link:
-https://t.me/{bot_username}?start={user_id}
-"""
-        await query.message.reply_text(text)
-
-# --- Main ---
-if __name__ == "__main__":
-    # Start dummy web server for Render
-    threading.Thread(target=start_web_server, daemon=True).start()
-
-    if not BOT_TOKEN:
-        print("❌ BOT_TOKEN not found in Environment Variables!")
-        exit(1)
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CommandHandler("menu", menu))
+    app.add_handler(conv_handler)
+    # Also keep your existing handlers for wallet, referrals etc. - add them here
 
-    print("Bot started! English version LIVE with port binding...")
-    app.run_polling()
+    print("Bot started! ✅")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
+    
