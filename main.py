@@ -206,15 +206,15 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
             return False, f"Invalid close {close_time_or_interval}"
     else:
         interval_mins = parse_interval_str(close_time_or_interval)
-        open_dt = datetime.combine(get_ist_today(), open_time)
+        open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
         close_dt = open_dt + timedelta(minutes=interval_mins)
         close_time = close_dt.time()
     next_time = parse_time_str(next_time_str)
     if not next_time:
         return False, f"Invalid next {next_time_str}"
-    open_dt = datetime.combine(get_ist_today(), open_time)
-    close_dt = datetime.combine(get_ist_today(), close_time)
-    next_dt = datetime.combine(get_ist_today(), next_time)
+    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
+    close_dt = datetime.combine(get_ist_today(), close_time, tzinfo=IST)
+    next_dt = datetime.combine(get_ist_today(), next_time, tzinfo=IST)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
     if next_dt < close_dt:
