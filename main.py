@@ -274,7 +274,7 @@ def check_missed_tasks_with_interval(uid):
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'])
+        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'], tzinfo=IST)
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
@@ -998,7 +998,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     try:
         text = update.message.text.replace('/add_task','').strip()
         if not text:
-            await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5")
+            await update.message.reply_text("Usage: /add_task open close next title")
             return
         import re
         urls = re.findall(r'https?://\S+', text)
@@ -1408,8 +1408,8 @@ def main():
         states={
             SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True, per_chat=True, per_message=True
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
+        per_user=True, per_chat=True, per_message=False
     )
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("admin", admin_panel))
@@ -1424,6 +1424,7 @@ def main():
     app.add_handler(CommandHandler("warnings", warnings_cmd))
     app.add_handler(CommandHandler("banned", banned_cmd))
     app.add_handler(CommandHandler("unban", unban_cmd))
+    app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
     app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
     app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
     app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -1463,6 +1464,7 @@ def main():
     except:
         pass
     try:
+        import threading
         threading.Thread(target=notification_thread_func, daemon=True).start()
     except:
         pass
