@@ -1370,133 +1370,151 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
-    print("🚀 Starting bot...")
-    # Retry loop for Conflict handling
-    max_retries = 5
-    for attempt in range(max_retries):
+    print("🚀 Starting bot with Conflict protection...")
+    
+    # Single retry loop for Conflict
+    retry_count = 0
+    max_retries = 20
+    
+    while retry_count < max_retries:
+        app = None
         try:
+            print(f"\n🔄 Build attempt {retry_count+1}/{max_retries}")
             app = Application.builder().token(BOT_TOKEN).build()
-            print(f"✅ Bot build attempt {attempt+1}")
+            
+            # Register error handler first
+            app.add_error_handler(error_handler)
+            
+            # Register all handlers
+            conv_reg = ConversationHandler(
+                entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
+                states={
+                    NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+                    GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+                    DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+                    MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
+                    UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
+                    PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
+                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_screenshot = ConversationHandler(
+                entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
+                states={
+                    UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
+                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
+                    PROMO_DETAILS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_promo_views_count)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_skip = ConversationHandler(
+                entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
+                states={
+                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_set_image = ConversationHandler(
+                entry_points=[CommandHandler("set_task_image", set_task_image_cmd)],
+                states={
+                    SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            app.add_handler(conv_reg)
+            app.add_handler(conv_screenshot)
+            app.add_handler(conv_skip)
+            app.add_handler(conv_set_image)
+            app.add_handler(CommandHandler("menu", menu))
+            app.add_handler(CommandHandler("admin", admin_panel))
+            app.add_handler(CommandHandler("pending", pending_cmd))
+            app.add_handler(CommandHandler("approve", approve_cmd))
+            app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
+            app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
+            app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
+            app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
+            app.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
+            app.add_handler(CommandHandler("warnings", warnings_cmd))
+            app.add_handler(CommandHandler("banned", banned_cmd))
+            app.add_handler(CommandHandler("unban", unban_cmd))
+            app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+            app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
+            app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
+            app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
+            app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
+            app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
+            app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
+            app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
+            app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
+            app.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
+            app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
+            app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
+            app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
+            app.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
+            app.add_handler(CallbackQueryHandler(promo_reject_cb, pattern="^promo_reject_"))
+            app.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
+            app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
+            app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
+            app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
+            app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
+            app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
+            app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
+            app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
+            
+            global bot_application
+            bot_application = app
+            try:
+                threading.Thread(target=notification_thread_func, daemon=True).start()
+                print("✅ Notifier started")
+            except:
+                pass
+            
+            print("✅ Handlers registered, starting polling...")
+            # This blocks until error
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            
+            # If polling exits cleanly, break
+            print("✅ Polling ended cleanly")
             break
+            
         except Exception as e:
-            print(f"Build failed attempt {attempt+1}: {e}")
-            import time as time_retry
-            time_retry.sleep(5)
-    else:
-        print("❌ Failed to build bot after retries")
-        return
-    print("✅ Bot building, webhook will be handled by polling")
-    global bot_application
-    bot_application = app
-    try:
-        app.add_error_handler(error_handler)
-        print("✅ Error handler registered - Conflict will be handled")
-    except Exception as e:
-        print(f"Error handler register: {e}")
-    try:
-        threading.Thread(target=notification_thread_func, daemon=True).start()
-        print("✅ 30 sec notifier started")
-    except Exception as e:
-        print(f"Notifier start: {e}")
+            err_str = str(e)
+            print(f"❌ Polling error: {err_str[:1000]}")
+            if "Conflict" in err_str or "terminated by other" in err_str:
+                retry_count += 1
+                wait_time = 20 + (retry_count * 5)
+                print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s... Retry {retry_count}/{max_retries}")
+                print("💡 FIX: Go to Render dashboard -> Stop previous deploys, or wait 30 sec")
+                import time as t_sleep
+                t_sleep.sleep(wait_time)
+                continue
+            else:
+                retry_count += 1
+                print(f"⚠️ Other error, retrying in 10s... {retry_count}/{max_retries}")
+                import time as t_sleep
+                t_sleep.sleep(10)
+                continue
+    
+    print("🛑 Bot main loop ended")
 
-
-    conv_reg = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
-        states={
-            NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
-            DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
-            MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
-            UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
-            PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
-            PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True, per_chat=True, per_message=False
-    )
-    conv_screenshot = ConversationHandler(
-        entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
-        states={
-            UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
-            SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
-            PROMO_DETAILS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_promo_views_count)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
-        per_user=True, per_chat=True, per_message=False
-    )
-    conv_skip = ConversationHandler(
-        entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
-        states={
-            SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
-        per_user=True, per_chat=True, per_message=False
-    )
-    conv_set_image = ConversationHandler(
-        entry_points=[CommandHandler("set_task_image", set_task_image_cmd)],
-        states={
-            SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
-        per_user=True, per_chat=True, per_message=False
-    )
-    app.add_handler(CommandHandler("menu", menu))
-    app.add_handler(CommandHandler("admin", admin_panel))
-    app.add_handler(CommandHandler("pending", pending_cmd))
-    app.add_handler(CommandHandler("approve", approve_cmd))
-    app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
-    app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
-    app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
-    app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
-    app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
-    app.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
-    app.add_handler(CommandHandler("warnings", warnings_cmd))
-    app.add_handler(CommandHandler("banned", banned_cmd))
-    app.add_handler(CommandHandler("unban", unban_cmd))
-    app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
-    app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
-    app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
-    app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
-    app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
-    app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
-    app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
-    app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
-    app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
-    app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
-    app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
-    app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
-    app.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
-    app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
-    app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
-    app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
-    app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
-    app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
-    app.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
-    app.add_handler(CallbackQueryHandler(promo_reject_cb, pattern="^promo_reject_"))
-    app.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
-    app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
-    app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
-    app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
-    app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
-    app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
-    app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
-    app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
-    app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
-    app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_basic$"))
-    app.add_handler(CallbackQueryHandler(verify_plan_cb, pattern="^verify_premium$"))
-    app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
-    app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
-    app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
-    app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
-    app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
-    app.add_handler(conv_reg)
-    app.add_handler(conv_screenshot)
-    app.add_handler(conv_skip)
-    app.add_handler(conv_set_image)
-    # Also handle photo with caption for quick set
-    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"/set_task_image"), handle_task_image_upload))
-    print(f"Bot Started! Super Fixed + Poster Support - TASK 3/TASK 4 Image Feature Active!")
-    app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
     main()
