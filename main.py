@@ -32,7 +32,11 @@ if _env:
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
 bot_application = None
-
+async def plan_basic_activate_cb(update, context):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
 def notification_thread_func():
     import asyncio
     while True:
