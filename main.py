@@ -1,10 +1,8 @@
 import os, re, threading, json, asyncio
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
-# === TIMEZONE FIX - IST (India) ===
+# === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
 def get_ist_now():
     return datetime.now(IST)
@@ -12,6 +10,8 @@ def get_ist_today():
     return get_ist_now().date()
 def get_ist_time():
     return get_ist_time()
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@s2edayincome")
@@ -178,7 +178,7 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     next_dt = datetime.combine(get_ist_today(), next_time)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
-    if next_dt <= close_dt:
+    if next_dt < close_dt:
         return False, f"Next {next_time.strftime('%H:%M')} must be after close"
     task = {
         'id': scheduled_task_counter,
@@ -956,7 +956,8 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    text = update.message.text.replace('/add_task','').strip()
+    try:
+        text = update.message.text.replace('/add_task','').strip()
     if not text:
         await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
         return
@@ -986,10 +987,13 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
     title = remaining if remaining else f"Task at {open_str}"
     success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
-    if success:
-        await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nSkippable: {result['skippable']}\n\n🖼️ To add your TASK 3/TASK 4 poster image:\n/set_task_image {result['id']}\nThen send the poster photo!")
-    else:
-        await update.message.reply_text(f"❌ Failed: {result}")
+        if success:
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nPoster optional! Use /set_task_image {result['id']}")
+        else:
+            await update.message.reply_text(f"❌ Failed: {result}\nTried: {open_str} {close_str} {next_str}")
+    except Exception as e:
+        print(f"add_task error {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)[:200]} Try /add_task 2:30PM 15min 2:46PM Test 5")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
