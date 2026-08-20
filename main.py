@@ -955,45 +955,52 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
+    if not is_admin(update.effective_user.id): 
+        return
     try:
         text = update.message.text.replace('/add_task','').strip()
-    if not text:
-        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
-        return
-    import re
-    urls = re.findall(r'https?://\S+', text)
-    link = urls[0] if urls else CHANNEL_LINK
-    numbers = re.findall(r'\b\d+\b', text)
-    reward = 5
-    if numbers:
-        last_num = int(numbers[-1])
-        if last_num <= 100:
-            reward = last_num
-    time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
-    times = re.findall(time_pattern, text, re.IGNORECASE)
-    if len(times) < 3:
-        parts = text.split()
-        if len(parts) >= 3:
-            times = parts[:3]
-        else:
-            await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
+        if not text:
+            await update.message.reply_text("Usage: /add_task open close next title reward\nExample: /add_task 2:30PM 15min 2:46PM Task 7 Test 5")
             return
-    open_str, close_str, next_str = times[0], times[1], times[2]
-    remaining = text
-    for t in times[:3]:
-        remaining = remaining.replace(t, '', 1)
-    remaining = remaining.replace(link, '').strip()
-    remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
-    title = remaining if remaining else f"Task at {open_str}"
-    success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
+        urls = re.findall(r'https?://\S+', text)
+        link = urls[0].rstrip('.,;!?') if urls else CHANNEL_LINK
+        parts_all = text.split()
+        reward = 5
+        text_for_title = text
+        if parts_all and parts_all[-1].isdigit():
+            try:
+                r = int(parts_all[-1])
+                if 1 <= r <= 100:
+                    reward = r
+                    text_for_title = ' '.join(parts_all[:-1])
+            except:
+                text_for_title = text
+        time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
+        times = re.findall(time_pattern, text_for_title, re.IGNORECASE)
+        if len(times) < 3:
+            p = text_for_title.split()
+            if len(p) >= 3:
+                times = p[:3]
+            else:
+                await update.message.reply_text(f"Need 3 times: open close next. You sent: {text_for_title[:100]}")
+                return
+        open_str, close_str, next_str = times[0], times[1], times[2]
+        remaining = text_for_title
+        for t in times[:3]:
+            remaining = remaining.replace(t, '', 1)
+        remaining = re.sub(r'https?://\S+', '', remaining).strip()
+        title = remaining[:200] if remaining else f"Task at {open_str}"
+        success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nPoster optional! Use /set_task_image {result['id']}")
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nPoster optional!")
         else:
-            await update.message.reply_text(f"❌ Failed: {result}\nTried: {open_str} {close_str} {next_str}")
+            await update.message.reply_text(f"❌ Failed: {result}")
     except Exception as e:
-        print(f"add_task error {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)[:200]} Try /add_task 2:30PM 15min 2:46PM Test 5")
+        print(f"add_task error: {e}")
+        try:
+            await update.message.reply_text(f"❌ Error: {str(e)[:200]}\nTry: /add_task 2:30PM 15min 2:46PM Test 5")
+        except:
+            pass
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
