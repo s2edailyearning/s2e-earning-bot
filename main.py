@@ -33,12 +33,12 @@ TASK_COMPLETION_WINDOW_MINUTES = 15
 
 app_flask = Flask(__name__)
 @app_flask.route('/')
-def home(): return "S2E Super Fixed - Admin + Member All Working"
+def home(): return "S2E Super Fixed + Image Poster Support"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host="0.0.0.0", port=port)
 
-NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS = range(10)
+NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS, SET_IMAGE = range(11)
 
 users_db = {}
 referrals_db = {}
@@ -69,6 +69,7 @@ promo_campaign_counter = 1
 promo_earnings_db = {}
 promo_views_db = {}
 promo_pending = {}
+task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
     global promo_campaign_counter
@@ -145,7 +146,7 @@ def parse_interval_str(interval_str):
     except:
         return TASK_COMPLETION_WINDOW_MINUTES
 
-def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=5):
+def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=5, image_file_id=None):
     global scheduled_task_counter
     open_time = parse_time_str(open_time_str)
     if not open_time:
@@ -185,8 +186,11 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
         'date': str(date.today()),
         'created_at': datetime.now(),
         'window_minutes': int((close_dt - open_dt).total_seconds() / 60),
-        'skippable': True if any(x in title.lower() for x in ['angel', 'upstox', 'demat', 'trading']) else False
+        'skippable': True if any(x in title.lower() for x in ['angel', 'upstox', 'demat', 'trading']) else False,
+        'image_file_id': image_file_id
     }
+    if image_file_id:
+        task_images_db[task['id']] = image_file_id
     scheduled_tasks_db.append(task)
     scheduled_tasks_db.sort(key=lambda x: x['open_time'])
     scheduled_task_counter += 1
@@ -423,30 +427,28 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Cancelled!", reply_markup=main_menu())
     return ConversationHandler.END
 
-# === ADMIN PANEL - SUPER FIXED WITH BUTTONS ===
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("You are not admin!")
         return
     active_promos = len(get_active_promo_campaigns())
     total_views = sum(c['total_views'] for c in promo_campaigns_db)
-    msg = f"🔐 ADMIN PANEL - S2E Ultimate\n\n"
+    msg = f"🔐 ADMIN PANEL - S2E Ultimate + Poster\n\n"
     msg += f"👥 Users: {len(users_db)}\n"
     msg += f"📋 Pending Daily: {len(pending_daily)}\n"
     msg += f"💰 Pending Withdraw: {len([w for w in withdraw_requests.values() if w.get('status')=='processing'])}\n"
     msg += f"📢 Promo Campaigns: {len(promo_campaigns_db)} Active: {active_promos}\n"
     msg += f"👁️ Total Promo Views: {total_views}\n"
     msg += f"⏰ Scheduled Today: {len(get_tasks_for_today())}\n"
+    msg += f"🖼️ Tasks with Poster: {len(task_images_db)}\n"
     msg += f"⏭️ Skipped Today: {sum(len(v) for v in skip_db.values())}\n"
     msg += f"🚫 Banned: {len(banned_users)}\n\n"
     msg += f"Plan Limits: Basic {DAILY_TASK_LIMIT_BASIC}/day Rs{DAILY_EARNING_CAP_BASIC} cap | Premium {DAILY_TASK_LIMIT_PREMIUM}/day Rs{DAILY_EARNING_CAP_PREMIUM} cap\n\n"
-    msg += f"Commands Quick Help:\n"
-    msg += f"/pending - Check pending tasks\n"
-    msg += f"/approve <id> - Approve user task\n"
-    msg += f"/add_task open close next title link reward\nExample: /add_task 10:00 10:15 11:00 Join Channel https://t.me/s2edayincome 5\n\n"
-    msg += f"/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
-    msg += f"/list_tasks /list_promos /skipped all\n"
-    msg += f"/warnings /banned /unban <id>"
+    msg += f"Commands:\n"
+    msg += f"/add_task open close next title link reward\n"
+    msg += f"/set_task_image <id> - Then send poster image!\n"
+    msg += f"Example: /add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\nThen /set_task_image 1 + send TASK 3 poster!\n\n"
+    msg += f"/list_tasks /list_promos /skipped all /warnings /banned"
     
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
@@ -488,18 +490,19 @@ async def admin_view_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_admin(q.from_user.id): return
     today_tasks = get_tasks_for_today()
     if not today_tasks:
-        await q.message.reply_text("📋 No scheduled tasks for today!\n\nAdd via:\n/add_task 10:00 10:15 11:00 Title https://link 5", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
+        await q.message.reply_text("📋 No scheduled tasks for today!\n\nAdd via:\n/add_task 12:45PM 15min 1:03PM Title https://link 5\nThen /set_task_image <id> to add poster!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
     msg = f"⏰ Scheduled Tasks Today {date.today()} - Total {len(today_tasks)}:\n\n"
     for task in today_tasks:
-        msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']}\n"
+        has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster"
+        msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n/set_task_image {task['id']}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 async def admin_view_promos_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
     if not promo_campaigns_db:
-        await q.message.reply_text("🏪 No promo campaigns!\n\nAdd via:\n/add_promo Kavali Fashions|Ramesh|9876543210|Kavali|Clothing|Diwali Sale|Desc|https://poster|50% off|10000|200", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
+        await q.message.reply_text("🏪 No promo campaigns!\n\nAdd via:\n/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
     msg = f"🏪 Promo Campaigns Total {len(promo_campaigns_db)}:\n\n"
     for c in promo_campaigns_db[-20:]:
@@ -509,7 +512,7 @@ async def admin_view_promos_cb(update: Update, context: ContextTypes.DEFAULT_TYP
 async def admin_view_stats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
-    msg = f"📊 Detailed Stats\n\nUsers: {len(users_db)}\nTasks Completed: {sum(tasks_db.values())}\nReferrals: {len(referrals_db)}\nBonus Distributed: Rs{sum(bonus_balance.values())}\nReferral Earnings: Rs{sum(referral_earnings.values())}\nPromo Earnings: Rs{sum(promo_earnings_db.values())}\nPending Daily: {len(pending_daily)}\nPromo Pending: {len(promo_pending)}\nBanned: {len(banned_users)}\nWarnings: {len(warnings_db)}"
+    msg = f"📊 Detailed Stats\n\nUsers: {len(users_db)}\nTasks Completed: {sum(tasks_db.values())}\nReferrals: {len(referrals_db)}\nBonus Distributed: Rs{sum(bonus_balance.values())}\nReferral Earnings: Rs{sum(referral_earnings.values())}\nPromo Earnings: Rs{sum(promo_earnings_db.values())}\nPending Daily: {len(pending_daily)}\nPromo Pending: {len(promo_pending)}\nBanned: {len(banned_users)}\nWarnings: {len(warnings_db)}\nPosters: {len(task_images_db)}"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -528,7 +531,6 @@ async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     await admin_panel(q, context)
 
-# === MEMBER CALLBACKS - FIXED ===
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid = q.from_user.id
@@ -608,7 +610,7 @@ async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_active, plan_name, _ = check_plan_active(uid)
     msg = f"📋 Scheduled Tasks Today - {date.today()}\nWindow: {TASK_COMPLETION_WINDOW_MINUTES} mins\n\nYour Plan: {plan_name} Daily: {count}/{limit} Cap Rs{cap}\nTotal Tasks Today: {len(today_tasks)}\n\n"
     if not today_tasks:
-        msg += "No tasks scheduled today! Admin will add tasks via /add_task\n\nExample: /add_task 10:00 10:15 11:00 Join Channel https://t.me/s2edayincome 5"
+        msg += "No tasks scheduled today! Admin will add tasks via /add_task\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5"
     else:
         for task in today_tasks:
             task_id = task['id']
@@ -621,7 +623,8 @@ async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     status = 'pending'
             icon = "✅" if status == 'completed' else "❌" if status == 'missed' else "⏭️" if status == 'skipped' else "🔴 LIVE NOW" if current and current['id'] == task_id else "⏰"
-            msg += f"{icon} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {status}\n"
+            has_img = "🖼️" if task.get('image_file_id') or task['id'] in task_images_db else ""
+            msg += f"{icon}{has_img} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {status}\n"
     await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
 async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -671,6 +674,14 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
     if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
         msg += "\n\n⚠️ Already have account? Click Skip Task!"
+    # If task has image, send photo with caption - THIS IS YOUR IMAGE FEATURE
+    image_file_id = current.get('image_file_id') or task_images_db.get(current['id'])
+    if image_file_id:
+        try:
+            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+            return
+        except Exception as e:
+            print(f"Image send error {e}")
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
 
 async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -775,15 +786,35 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"✅ Screenshot received for Promo Campaign {campaign_id}!\n\nNow type how many views you got:\nExample: 150\nCheck your WhatsApp status -> eye icon -> views number\nType views count now:")
         return PROMO_DETAILS
     current, next_task = get_current_scheduled_task_with_interval()
+    # FIXED: Allow fallback task when no scheduled task active (bug fix for admin panel empty + 12:45 task not showing)
     if not current:
-        await update.message.reply_text("❌ No active task now! Check Scheduled Tasks for next task time!", reply_markup=main_menu())
-        return ConversationHandler.END
+        fallback = get_today_task_for_user(uid)
+        if fallback:
+            from datetime import time as dt_time
+            current = {
+                'id': 0,
+                'task_number': 0,
+                'open_time': '00:00',
+                'close_time': '23:59',
+                'close_time_obj': dt_time(23,59),
+                'next_time': '00:00',
+                'next_time_obj': dt_time(0,0),
+                'title': fallback.get('title','Join Channel'),
+                'link': fallback.get('link', CHANNEL_LINK),
+                'reward': fallback.get('reward',5),
+                'window_minutes': 1440,
+                'image_file_id': None
+            }
+            next_task = None
+        else:
+            await update.message.reply_text("❌ No active task now! Check Scheduled Tasks for next task time!", reply_markup=main_menu())
+            return ConversationHandler.END
     now = datetime.now().time()
-    if now > current['close_time_obj']:
+    if current['id'] != 0 and now > current['close_time_obj']:
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][current['id']] = {'status': 'missed', 'missed_at': datetime.now(), 'task_number': current['task_number']}
-        await update.message.reply_text(f"❌ Time over! Task {current['task_number']} closed at {current['close_time']}!", reply_markup=main_menu())
+        await update.message.reply_text(f"❌ Time over! Task {current['task_number']} closed at {current['close_time']}! Check Scheduled Tasks!", reply_markup=main_menu())
         return ConversationHandler.END
     photo = update.message.photo[-1]
     file_id = photo.file_id
@@ -846,7 +877,52 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop('promo_screenshot_campaign_id', None)
     return ConversationHandler.END
 
-# === OTHER COMMANDS ===
+# === NEW IMAGE POSTER COMMANDS ===
+async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("Usage: /set_task_image <task_id>\n\nThen send photo with caption /set_task_image <id> OR reply to this message with photo\n\nExample:\nFirst add task:\n/add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\nThen set image:\n/set_task_image 1\nThen send your TASK 3 poster image as PHOTO!")
+        return
+    try:
+        task_id = int(context.args[0])
+    except:
+        await update.message.reply_text("Task ID must be number! Use /list_tasks to see IDs")
+        return
+    task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
+    if not task:
+        await update.message.reply_text(f"Task ID {task_id} not found! Use /list_tasks")
+        return
+    context.user_data['set_image_task_id'] = task_id
+    await update.message.reply_text(f"📸 Now send the poster/image for Task {task_id}: {task['title']}\n\nSend as PHOTO! (Not file)\nYou can send your TASK 3 / TASK 4 images like you showed me - Members will see this image when they open Daily Task!\n\nWaiting for photo...")
+    return SET_IMAGE
+
+async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    task_id = context.user_data.get('set_image_task_id')
+    if not task_id and update.message.caption:
+        m = re.search(r'/set_task_image\s+(\d+)', update.message.caption)
+        if m:
+            task_id = int(m.group(1))
+    if not task_id:
+        # Check if admin is replying directly
+        if update.message.photo and is_admin(update.effective_user.id):
+            # If no task_id set but admin sends photo, try to set for last task
+            if scheduled_tasks_db:
+                task_id = scheduled_tasks_db[-1]['id']
+            else:
+                return
+    if not update.message.photo:
+        await update.message.reply_text("Please send as PHOTO, not file!")
+        return SET_IMAGE
+    file_id = update.message.photo[-1].file_id
+    task_images_db[task_id] = file_id
+    task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
+    if task:
+        task['image_file_id'] = file_id
+    await update.message.reply_text(f"✅ Image Poster Set for Task {task_id}!\n{task['title'] if task else ''}\n\n🖼️ Members will now see YOUR TASK 3 / TASK 4 poster image when they click Daily Task!\n\nCheck: /menu -> Daily Task", reply_markup=main_menu())
+    context.user_data.pop('set_image_task_id', None)
+    return ConversationHandler.END
+
 async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     if not pending_daily:
@@ -893,7 +969,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     if not is_admin(update.effective_user.id): return
     text = update.message.text.replace('/add_task','').strip()
     if not text:
-        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 10:00 10:15 11:00 Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20")
+        await update.message.reply_text("Usage: /add_task open close next title link reward\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5\nOr: /add_task 10:00 15min 11:00 Angel One https://angelone.in 20\n\nTo add poster image after:\n/set_task_image <task_id> then send TASK 3/TASK 4 image!")
         return
     import re
     urls = re.findall(r'https?://\S+', text)
@@ -911,7 +987,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         if len(parts) >= 3:
             times = parts[:3]
         else:
-            await update.message.reply_text("Need 3 times: open close next\nExample: 10:00 10:15 11:00")
+            await update.message.reply_text("Need 3 times: open close next\nExample: 12:45PM 15min 1:03PM")
             return
     open_str, close_str, next_str = times[0], times[1], times[2]
     remaining = text
@@ -922,7 +998,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     title = remaining if remaining else f"Task at {open_str}"
     success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
     if success:
-        await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nSkippable: {result['skippable']}")
+        await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}\nSkippable: {result['skippable']}\n\n🖼️ To add your TASK 3/TASK 4 poster image:\n/set_task_image {result['id']}\nThen send the poster photo!")
     else:
         await update.message.reply_text(f"❌ Failed: {result}")
 
@@ -934,7 +1010,8 @@ async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT
         return
     msg = f"⏰ Scheduled Tasks Today {date.today()} - Total {len(today_tasks)}:\n\n"
     for task in today_tasks:
-        msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']}\n"
+        has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster - /set_task_image"
+        msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n"
     await update.message.reply_text(msg[:4000])
 
 async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1294,6 +1371,14 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
         per_user=True, per_chat=True, per_message=False
     )
+    conv_set_image = ConversationHandler(
+        entry_points=[CommandHandler("set_task_image", set_task_image_cmd)],
+        states={
+            SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(back_menu_cb, pattern="^back_menu$")],
+        per_user=True, per_chat=True, per_message=False
+    )
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("pending", pending_cmd))
@@ -1307,6 +1392,7 @@ def main():
     app.add_handler(CommandHandler("warnings", warnings_cmd))
     app.add_handler(CommandHandler("banned", banned_cmd))
     app.add_handler(CommandHandler("unban", unban_cmd))
+    app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
     app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
     app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
     app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -1345,7 +1431,10 @@ def main():
     app.add_handler(conv_reg)
     app.add_handler(conv_screenshot)
     app.add_handler(conv_skip)
-    print(f"Bot Started! Super Fixed - Admin + Member All Working! Promo + Skip + Scheduled!")
+    app.add_handler(conv_set_image)
+    # Also handle photo with caption for quick set
+    app.add_handler(MessageHandler(filters.PHOTO & filters.CaptionRegex(r"/set_task_image"), handle_task_image_upload))
+    print(f"Bot Started! Super Fixed + Poster Support - TASK 3/TASK 4 Image Feature Active!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
