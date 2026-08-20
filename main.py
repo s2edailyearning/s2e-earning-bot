@@ -169,8 +169,8 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     next_dt = datetime.combine(date.today(), next_time)
     if close_dt <= open_dt:
         return False, f"Close {close_time.strftime('%H:%M')} must be after open"
-    if next_dt <= close_dt:
-        return False, f"Next {next_time.strftime('%H:%M')} must be after close"
+    if next_dt < close_dt:
+        return False, f"Next {next_time.strftime('%H:%M')} must be after close (you gave next {next_time.strftime('%H:%M')} but close is {close_time.strftime('%H:%M')}) - Try next 1 min after close like 1:31PM"
     task = {
         'id': scheduled_task_counter,
         'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(date.today())]) + 1,
@@ -786,35 +786,15 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"✅ Screenshot received for Promo Campaign {campaign_id}!\n\nNow type how many views you got:\nExample: 150\nCheck your WhatsApp status -> eye icon -> views number\nType views count now:")
         return PROMO_DETAILS
     current, next_task = get_current_scheduled_task_with_interval()
-    # FIXED: Allow fallback task when no scheduled task active (bug fix for admin panel empty + 12:45 task not showing)
     if not current:
-        fallback = get_today_task_for_user(uid)
-        if fallback:
-            from datetime import time as dt_time
-            current = {
-                'id': 0,
-                'task_number': 0,
-                'open_time': '00:00',
-                'close_time': '23:59',
-                'close_time_obj': dt_time(23,59),
-                'next_time': '00:00',
-                'next_time_obj': dt_time(0,0),
-                'title': fallback.get('title','Join Channel'),
-                'link': fallback.get('link', CHANNEL_LINK),
-                'reward': fallback.get('reward',5),
-                'window_minutes': 1440,
-                'image_file_id': None
-            }
-            next_task = None
-        else:
-            await update.message.reply_text("❌ No active task now! Check Scheduled Tasks for next task time!", reply_markup=main_menu())
-            return ConversationHandler.END
+        await update.message.reply_text("❌ No active task now! Check Scheduled Tasks for next task time!", reply_markup=main_menu())
+        return ConversationHandler.END
     now = datetime.now().time()
-    if current['id'] != 0 and now > current['close_time_obj']:
+    if now > current['close_time_obj']:
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][current['id']] = {'status': 'missed', 'missed_at': datetime.now(), 'task_number': current['task_number']}
-        await update.message.reply_text(f"❌ Time over! Task {current['task_number']} closed at {current['close_time']}! Check Scheduled Tasks!", reply_markup=main_menu())
+        await update.message.reply_text(f"❌ Time over! Task {current['task_number']} closed at {current['close_time']}!", reply_markup=main_menu())
         return ConversationHandler.END
     photo = update.message.photo[-1]
     file_id = photo.file_id
