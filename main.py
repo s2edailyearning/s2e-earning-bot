@@ -11,7 +11,7 @@ def get_ist_now():
 def get_ist_today():
     return get_ist_now().date()
 def get_ist_time():
-    return get_ist_time()
+    return get_ist_now().time()
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
@@ -1420,7 +1420,6 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     print("🚀 Starting bot with Conflict protection...")
     
-    # Single retry loop for Conflict
     retry_count = 0
     max_retries = 20
     
@@ -1530,47 +1529,35 @@ def main():
             global bot_application
             bot_application = app
 
-        # Flask ni background lo run chey - Render port kosam
+            # Notifier thread - using correct function name
             try:
-            from flask import Flask
-            flask_app = Flask(__name__)
-            @flask_app.route('/')
-            def home():
-                return "Bot is running!"
-            threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=10000, use_reloader=False), daemon=True).start()
-            print("✅ Flask started on port 10000")
+                threading.Thread(target=notification_thread_func, daemon=True).start()
+                print("✅ Notifier started")
+            except Exception as e:
+                print(f"Notifier error: {e}")
+
+            print("✅ Handlers registered, starting polling...")
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+
+            print("✅ Polling ended cleanly")
+            break
+
         except Exception as e:
-            print(f"Flask error: {e}")
-
-        # Notifier thread
-        try:
-            threading.Thread(target=notification_loop, daemon=True).start()
-            print("✅ Notifier started")
-        except:
-            pass
-
-        print("✅ Handlers registered, starting polling...")
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-
-        print("✅ Polling ended cleanly")
-        break
-
-    except Exception as e:
-        err_str = str(e)
-        print(f"❌ Polling error: {err_str[:1000]}")
-        if "Conflict" in err_str or "terminated by other" in err_str:
-            retry_count += 1
-            wait_time = 20 + (retry_count * 5)
-            print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
-            import time as t_sleep
-            t_sleep.sleep(wait_time)
-            continue
-        else:
-            retry_count += 1
-            print(f"⚠️ Other error, retrying in 10s... {retry_count}")
-            import time as t_sleep
-            t_sleep.sleep(10)
-            continue
+            err_str = str(e)
+            print(f"❌ Polling error: {err_str[:1000]}")
+            if "Conflict" in err_str or "terminated by other" in err_str:
+                retry_count += 1
+                wait_time = 20 + (retry_count * 5)
+                print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
+                import time as t_sleep
+                t_sleep.sleep(wait_time)
+                continue
+            else:
+                retry_count += 1
+                print(f"⚠️ Other error, retrying in 10s... {retry_count}")
+                import time as t_sleep
+                t_sleep.sleep(10)
+                continue
 
 if __name__=="__main__":
     main()
