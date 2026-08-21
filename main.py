@@ -1870,14 +1870,6 @@ async def scheduled_tasks_cb_fixed(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         print(f"scheduled cb error {e}")
 
-async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("SUPPORT PLANS FIXED CLICKED")
-    try:
-        if update.callback_query:
-            try:
-                await update.callback_query.answer()
-            except:
-                pass
         uid = update.effective_user.id
         txt = "SUPPORT PLANS\n\n"
         for p in support_plans_db:
@@ -2796,16 +2788,14 @@ async def bulk_task_image_handler(update, context):
 
 
 UPI_ID_GLOBAL = "s2edaily@upi"
-UPI_NAME_GLOBAL = "S2E"
 async def set_upi_cmd(update, context):
-    global UPI_ID_GLOBAL, UPI_NAME_GLOBAL
+    global UPI_ID_GLOBAL
     try:
         if not context.args:
-            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL} Usage: /set_upi upi@upi Name")
+            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL}")
             return
         UPI_ID_GLOBAL = context.args[0]
-        UPI_NAME_GLOBAL = " ".join(context.args[1:]) if len(context.args)>1 else "S2E"
-        await update.message.reply_text(f"UPI SET! {UPI_ID_GLOBAL} {UPI_NAME_GLOBAL}")
+        await update.message.reply_text(f"UPI SET! {UPI_ID_GLOBAL}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
@@ -2818,19 +2808,16 @@ async def support_plans_cb(update, context):
     except:
         pass
     try:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        plans=support_plans_db if 'support_plans_db' in globals() and support_plans_db else []
-        if not plans:
-            plans=[{"id":1,"name":"Basic","price":199,"duration":30,"daily_limit":10,"max_earning":500},{"id":2,"name":"Premium","price":499,"duration":60,"daily_limit":20,"max_earning":2000}]
+        plans=support_plans_db if 'support_plans_db' in globals() and support_plans_db else [{"id":1,"name":"Basic","price":199,"max_earning":500}]
         msg="SUPPORT PLANS\n"
         for p in plans:
-            msg+=f"{p['name']} Rs{p['price']} {p['duration']}D Max Rs{p.get('max_earning',500)}\n"
+            msg+=f"{p['name']} Rs{p['price']} Max Rs{p.get('max_earning',500)}\n"
         kb=[]
         for p in plans:
             kb.append([InlineKeyboardButton(f"{p['name']} Rs{p['price']}", callback_data=f"buy_plan_{p['id']}")])
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(e)
+    except:
+        pass
 
 async def support_plans_fixed_cb(update, context):
     await support_plans_cb(update, context)
@@ -2843,17 +2830,99 @@ async def buy_plan_dynamic_cb(update, context):
         pass
     try:
         pid=int(q.data.replace("buy_plan_","")) if "buy_plan_" in q.data else 1
-        await q.message.reply_text(f"Plan {pid} UPI: {UPI_ID_GLOBAL} Amount pay then upload screenshot! Use /set_upi done? Current {UPI_ID_GLOBAL}")
+        upi=get_current_upi()
+        await q.message.reply_text(f"Plan {pid} UPI: {upi} Pay then upload screenshot!")
     except:
         pass
 
 async def upload_payment_cb(update, context):
-    pass
+    q=update.callback_query
+    try:
+        await q.answer()
+        pid=int(q.data.replace("upload_pay_",""))
+        context.user_data['awaiting_payment_screenshot']=pid
+        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now!")
+    except:
+        pass
 
 async def handle_payment_screenshot(update, context):
-    return False
+    try:
+        pid=context.user_data.get('awaiting_payment_screenshot')
+        if not pid or not update.message.photo:
+            return False
+        uid=update.effective_user.id
+        pending_plans[uid]={'plan':{"id":pid},'screenshot_file_id':update.message.photo[-1].file_id,'user_id':uid}
+        context.user_data['awaiting_payment_screenshot']=None
+        await update.message.reply_text(f"Payment screenshot received for Plan {pid}! Admin verify.")
+        for admin_id in ADMIN_ID_LIST:
+            try:
+                await context.bot.send_photo(chat_id=admin_id, photo=update.message.photo[-1].file_id, caption=f"Payment Plan {pid} by {uid}")
+                kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_plan_{uid}")]]
+                await context.bot.send_message(chat_id=admin_id, text=f"Approve?", reply_markup=InlineKeyboardMarkup(kb))
+            except:
+                pass
+        return True
+    except:
+        return False
 
+async def handle_task_screenshot(update, context):
+    try:
+        task_id=context.user_data.get('awaiting_task_screenshot')
+        if not task_id or not update.message.photo:
+            return False
+        context.user_data['awaiting_task_screenshot']=None
+        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}!")
+        return True
+    except:
+        return False
 
+async def add_plan_cmd(update, context):
+    try:
+        args=context.args
+        if len(args)<4:
+            await update.message.reply_text("Usage: /add_plan name price duration daily_limit [max_earning]")
+            return
+        name=args[0]
+        price=int(args[1])
+        duration=int(args[2])
+        daily_limit=int(args[3])
+        max_earning=int(args[4]) if len(args)>=5 and args[4].isdigit() else 500
+        global support_plans_db, support_plan_counter
+        try:
+            support_plans_db
+        except:
+            support_plans_db=[]
+        try:
+            support_plan_counter
+        except:
+            support_plan_counter=1
+        plan={'id':support_plan_counter,'name':name,'price':price,'duration':duration,'daily_limit':daily_limit,'max_earning':max_earning}
+        support_plans_db.append(plan)
+        support_plan_counter+=1
+        await update.message.reply_text(f"Plan Added ID:{plan['id']} {name} Rs{price} Max Rs{max_earning}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def admin_approve_plan_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        uid=int(update.callback_query.data.replace("admin_approve_plan_",""))
+        if uid in pending_plans:
+            del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Approved {uid}")
+            await context.bot.send_message(chat_id=uid, text="Plan approved!")
+    except:
+        pass
+
+async def admin_reject_plan_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        uid=int(update.callback_query.data.replace("admin_reject_plan_",""))
+        if uid in pending_plans:
+            del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Rejected {uid}")
+    except:
+        pass
 
 
 def main():
@@ -2861,8 +2930,8 @@ def main():
     print("="*70)
     print("S2E Bot FINAL V20 - V12 Working + 70 Sec + Manual + Plans - NO NameError")
     print("="*70)
-    print("Waiting 70 sec for old instance to die...")
-    time.sleep(70)
+    print("Waiting 120 sec for old instance to die...")
+    time.sleep(120)
     print("70 sec done! Deleting webhook 3 times...")
     try:
         import httpx
@@ -2889,7 +2958,7 @@ def main():
     max_retries = 100
     
     while retry_count < max_retries:
-        print(f"\nBuild attempt {retry_count+1}/{max_retries} - Waiting 70 sec logic active")
+        print(f"\nBuild attempt {retry_count+1}/{max_retries} - Waiting 120 sec logic active")
         app = None
         try:
             print(f"\n🔄 Build attempt {retry_count+1}/{max_retries}")
@@ -2924,6 +2993,8 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
+            app.add_handler(MessageHandler(filters.PHOTO, handle_payment_screenshot))
+            app.add_handler(MessageHandler(filters.PHOTO, handle_task_screenshot))
             app.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
             app.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
             conv_screenshot = ConversationHandler(
