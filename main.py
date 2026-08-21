@@ -704,7 +704,7 @@ async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     active_campaigns = get_active_promo_campaigns()
     if not active_campaigns:
-        msg = "🏪 Promo Tasks Ante Yemiti?\n\nNuvvu adigina idea ye - Local shops promotion!\n\n🏪 Shop owners ki customers kavali - Vallaki yela promote cheyalo talidu\n📱 Mana members (nuvvu) valla shop poster ni WhatsApp Status lo pedtaru\n👀 Nee status ni 200 mandi chustaru - Views vastayi\n💰 Nuvvu Rs10 per 100 views earn chestavu! 200 views = Rs20!\n\nExample:\nKavali Fashions shop Diwali Sale 50% Off poster istundi\nNuvvu status lo pedtav - Nee friends 250 mandi chustaru\nNuvvu screenshot upload cheste Rs25 vastundi wallet lo!\n\nIppudu active campaigns levu - Admin add chestadu!\nShop owners contact @s2edayincome"
+        msg = "🏪 Promo Tasks - Coming Soon!\n\nWe will update you soon!\n\n💡 What is Promo Tasks?\nLocal shops want customers - You promote their poster in your WhatsApp Status!\n👀 Earn Rs10 per 100 status views!\n\nExample: Shop gives Diwali Sale poster, you put in status, get 250 views = Rs25 earnings!\n\nActive campaigns will be added soon! Stay tuned!\nContact: @s2edayincome"
         await q.message.reply_text(msg, reply_markup=main_menu())
         return
     msg = f"🏪 Promo Tasks - Local Shops Promotion!\n\nTotal Active: {len(active_campaigns)}\nYour Promo Earnings: Rs{promo_earnings_db.get(uid,0)}\n\n"
@@ -1541,6 +1541,7 @@ def main():
     application.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
     application.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
     application.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
+    application.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
     application.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
     application.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
     application.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
