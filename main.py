@@ -1692,10 +1692,11 @@ def main():
                     PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
                     PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
                 },
-                fallbacks=[CommandHandler("cancel", cancel)],
+                fallbacks=[CommandHandler("cancel", cancel), CommandHandler("add_task", add_scheduled_task_with_interval_cmd), CommandHandler("admin", admin_cmd), CommandHandler("start", start)],
                 per_user=True, per_chat=True, per_message=False
             )
             conv_screenshot = ConversationHandler(
+                allow_reentry=True,
                 entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
                 states={
                     UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
@@ -1721,6 +1722,15 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
+            # GLOBAL COMMANDS - Always work, even if in conversation (Group -1 = highest priority)
+            app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd), group=-1)
+            app.add_handler(CommandHandler("admin", admin_cmd), group=-1)
+            app.add_handler(CommandHandler("start", start), group=-1)
+            app.add_handler(CommandHandler("menu", menu), group=-1)
+            app.add_handler(CommandHandler("tasks", list_scheduled_tasks_cmd), group=-1)
+            app.add_handler(CommandHandler("missed", my_missed_tasks_cmd), group=-1)
+            app.add_handler(CommandHandler("my_missed", my_missed_tasks_cmd), group=-1)
+            
             app.add_handler(conv_reg)
             app.add_handler(conv_screenshot)
             app.add_handler(conv_skip)
@@ -1786,6 +1796,7 @@ def main():
             except Exception as e:
                 print(f"Notifier error: {e}")
 
+            print("✅ Handlers registered with GLOBAL commands (add_task/admin always work) - starting polling...")
             print("✅ Handlers registered, starting polling...")
             app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
