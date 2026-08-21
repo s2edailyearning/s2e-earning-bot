@@ -37,6 +37,21 @@ async def plan_basic_activate_cb(update, context):
         await update.callback_query.answer()
     except:
         pass
+    try:
+        await update.callback_query.edit_message_text("Basic Plan - Contact Admin @s2edayincome")
+    except:
+        pass
+
+async def plan_premium_activate_cb(update, context):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text("Premium Plan - Contact Admin @s2edayincome")
+    except:
+        pass
+
 def notification_thread_func():
     import asyncio
     while True:
