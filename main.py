@@ -1229,14 +1229,12 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
                 reward = last_num
         time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
         times = re.findall(time_pattern, text, re.IGNORECASE)
-        if len(times) < 3:
-            parts = text.split()
-            if len(parts) >= 3:
-                times = parts[:3]
-            else:
-                await update.message.reply_text("Need 3 times")
-                return
-        open_str, close_str, next_str = times[0], times[1], times[2]
+        if len(times) < 2:
+            await update.message.reply_text("Need 2 times! Ex: /add_task 9:40PM 9:50PM Task link 40")
+            return
+        open_str = times[0]
+        close_str = times[1] if len(times) > 1 else times[0]
+        next_str = times[2] if len(times) > 2 else close_str
         remaining = text
         for t in times[:3]:
             remaining = remaining.replace(t, '', 1)
@@ -2796,6 +2794,136 @@ async def bulk_task_image_handler(update, context):
         return True
     except:
         return False
+
+
+
+
+# === OVERRIDE SUPPORT PLANS WITH DYNAMIC VERSION ===
+async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    kb = []
+    try:
+        try:
+            plans = support_plans_db
+        except NameError:
+            plans = []
+        if plans:
+            for p in plans:
+                name = p.get('name','Plan')
+                price = p.get('price',0)
+                pid = p.get('id',0)
+                kb.append([InlineKeyboardButton(f"{name} Rs{price}", callback_data=f"buy_plan_{pid}")])
+        else:
+            kb = [[InlineKeyboardButton("Basic Rs199", callback_data="plan_basic")],
+                  [InlineKeyboardButton("Premium Rs499", callback_data="plan_premium")]]
+    except:
+        kb = [[InlineKeyboardButton("Basic Rs199", callback_data="plan_basic")],
+              [InlineKeyboardButton("Premium Rs499", callback_data="plan_premium")]]
+    try:
+        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
+    except:
+        try:
+            await update.callback_query.message.reply_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
+        except:
+            pass
+
+def support_plans_fixed_cb(update, context):
+    q=update.callback_query
+    try:
+        import asyncio
+        asyncio.create_task(q.answer())
+    except:
+        try:
+            q.answer()
+        except:
+            pass
+    try:
+        try:
+            plans = support_plans_db
+        except NameError:
+            plans = []
+        if plans:
+            msg = "SUPPORT PLANS - Dynamic\n\n"
+            kb = []
+            for p in plans:
+                name = p.get('name','Plan')
+                price = p.get('price',0)
+                duration = p.get('duration',30)
+                limit = p.get('daily_limit',15)
+                desc = p.get('description','')
+                msg += f"{p['id']}. {name} - Rs{price} - {duration} days - {limit} tasks/day\n{desc}\n\n"
+                kb.append([InlineKeyboardButton(f"Buy {name} Rs{price}", callback_data=f"buy_plan_{p['id']}")])
+            kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
+            q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+    except Exception as e:
+        print(f"support_plans_fixed_cb error {e}")
+        try:
+            q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+        except:
+            pass
+
+# For async version also
+async def support_plans_fixed_cb_async(update, context):
+    q=update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        try:
+            plans = support_plans_db
+        except NameError:
+            plans = []
+        if plans:
+            msg = "SUPPORT PLANS\n\n"
+            kb = []
+            for p in plans:
+                name = p.get('name','Plan')
+                price = p.get('price',0)
+                duration = p.get('duration',30)
+                limit = p.get('daily_limit',15)
+                desc = p.get('description','')
+                msg += f"{p['id']}. {name} - Rs{price} - {duration}d - {limit}/day\n{desc}\n\n"
+                kb.append([InlineKeyboardButton(f"Buy {name} Rs{price}", callback_data=f"buy_plan_{p['id']}")])
+            kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
+            await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+    except Exception as e:
+        print(e)
+
+async def buy_plan_dynamic_cb(update, context):
+    q=update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        pid = int(q.data.replace("buy_plan_",""))
+        try:
+            plans = support_plans_db
+        except:
+            plans = []
+        plan = None
+        for p in plans:
+            if p['id'] == pid:
+                plan = p
+                break
+        if plan:
+            msg = f"Plan: {plan['name']}\nPrice: Rs{plan['price']}\nDuration: {plan['duration']} days\nDaily: {plan['daily_limit']} tasks\n{plan.get('description','')}\n\nContact @s2edayincome to buy!"
+            await q.message.reply_text(msg)
+        else:
+            await q.message.reply_text(f"Plan {pid} not found!")
+    except Exception as e:
+        print(f"buy_plan error {e}")
+
+# Override the old fixed cb with async version for compatibility
+support_plans_fixed_cb = support_plans_fixed_cb_async
 
 
 def main():
