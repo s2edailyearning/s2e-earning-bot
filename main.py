@@ -2549,530 +2549,320 @@ async def support_plans_fixed_cb(update, context):
 
 
 
-# === MANUAL ADMIN COMMANDS - ADDED FOR EASY MANAGEMENT ===
 
-async def add_task_manual_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_task_manual_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        # Usage: /add_task_manual 10:00 10:30 Title https://link.com 5
         args = context.args
         if len(args) < 5:
-            await update.message.reply_text("❌ Usage:\n/add_task_manual <open> <close> <title> <link> <reward>\nEx: /add_task_manual 10:00 10:30 MyTask https://t.me/link 5\n\nOr use old: /add_task 10:00 10:30 next Title Link 5")
+            await update.message.reply_text("Usage: /add_task_manual <open> <close> <title> <link> <reward>")
             return
-        open_time = args[0]
-        close_time = args[1]
-        title = args[2]
-        link = args[3]
+        open_time, close_time, title, link = args[0], args[1], args[2], args[3]
         try:
             reward = int(args[4])
         except:
             reward = 5
-        
-        # Add to scheduled_tasks_db
-        from datetime import datetime, time as dt_time
+        from datetime import datetime
         today = str(get_ist_today())
         global scheduled_task_counter
-        try:
-            ot = datetime.strptime(open_time, "%H:%M").time()
-            ct = datetime.strptime(close_time, "%H:%M").time()
-        except:
-            await update.message.reply_text("❌ Time format wrong! Use HH:MM ex: 10:00")
-            return
-        
-        task = {
-            'id': scheduled_task_counter,
-            'date': today,
-            'open_time': open_time,
-            'close_time': close_time,
-            'open_time_obj': ot,
-            'close_time_obj': ct,
-            'title': title,
-            'link': link,
-            'reward': reward,
-            'task_number': len([t for t in scheduled_tasks_db if t['date']==today]) + 1
-        }
+        ot = datetime.strptime(open_time, "%H:%M").time()
+        ct = datetime.strptime(close_time, "%H:%M").time()
+        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1}
         scheduled_tasks_db.append(task)
-        scheduled_task_counter += 1
+        scheduled_task_counter+=1
         save_data()
-        await update.message.reply_text(f"✅ Task Added!\nID: {task['id']}\nTitle: {title}\nTime: {open_time}->{close_time}\nReward: Rs{reward}\nLink: {link}\nTotal tasks today: {len([t for t in scheduled_tasks_db if t['date']==today])}")
+        await update.message.reply_text(f"Task Added ID:{task['id']} {title} Rs{reward}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-        print(e)
 
-async def remove_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_task_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
         if not context.args:
-            await update.message.reply_text("❌ Usage: /remove_task <task_id>\nEx: /remove_task 1\nUse /list_tasks to see IDs")
+            await update.message.reply_text("Usage: /remove_task <id>")
             return
-        try:
-            tid = int(context.args[0])
-        except:
-            await update.message.reply_text("❌ Task ID number ivvu! Ex: /remove_task 1")
-            return
+        tid = int(context.args[0])
         global scheduled_tasks_db
-        before = len(scheduled_tasks_db)
-        scheduled_tasks_db = [t for t in scheduled_tasks_db if t['id'] != tid]
-        after = len(scheduled_tasks_db)
-        if before == after:
-            await update.message.reply_text(f"❌ Task ID {tid} not found!")
-        else:
-            save_data()
-            await update.message.reply_text(f"✅ Task ID {tid} removed! Before: {before} After: {after}")
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-
-async def add_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("❌ Usage: /add_balance <user_id> <amount>\nEx: /add_balance 8544307598 100")
-            return
-        target_id = int(context.args[0])
-        amount = int(context.args[1])
-        if target_id not in users_db:
-            await update.message.reply_text(f"❌ User {target_id} not found in DB!")
-            return
-        bonus_balance[target_id] = bonus_balance.get(target_id, 0) + amount
+        before=len(scheduled_tasks_db)
+        scheduled_tasks_db=[t for t in scheduled_tasks_db if t['id']!=tid]
         save_data()
-        await update.message.reply_text(f"✅ Added Rs{amount} to {target_id}\nNew Bonus: Rs{bonus_balance[target_id]}\nTotal Balance: Rs{get_balance(target_id)}")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"💰 Admin added Rs{amount} to your wallet!\nNew Balance: Rs{get_balance(target_id)}")
-        except:
-            pass
+        await update.message.reply_text(f"Removed {tid} Before:{before} After:{len(scheduled_tasks_db)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
-async def remove_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_balance_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        if len(context.args) < 2:
-            await update.message.reply_text("❌ Usage: /remove_balance <user_id> <amount>\nEx: /remove_balance 8544307598 50")
+        if len(context.args)<2:
+            await update.message.reply_text("Usage: /add_balance <user_id> <amount>")
             return
-        target_id = int(context.args[0])
-        amount = int(context.args[1])
-        if target_id not in users_db:
-            await update.message.reply_text(f"❌ User {target_id} not found!")
+        target=int(context.args[0]); amount=int(context.args[1])
+        if target not in users_db:
+            await update.message.reply_text("User not found")
             return
-        current = bonus_balance.get(target_id, 0) + tasks_db.get(target_id,0)*5 + referral_earnings.get(target_id,0)
-        bonus_balance[target_id] = max(0, bonus_balance.get(target_id, 0) - amount)
+        bonus_balance[target]=bonus_balance.get(target,0)+amount
         save_data()
-        await update.message.reply_text(f"✅ Removed Rs{amount} from {target_id}\nNew Bonus: Rs{bonus_balance[target_id]}\nTotal Balance: Rs{get_balance(target_id)}")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"💰 Admin deducted Rs{amount} from your wallet!\nNew Balance: Rs{get_balance(target_id)}")
-        except:
-            pass
+        await update.message.reply_text(f"Added Rs{amount} to {target} New: Rs{get_balance(target)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
-async def set_task_count_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_balance_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        if len(context.args) < 2:
-            await update.message.reply_text("❌ Usage: /set_tasks <user_id> <count>\nEx: /set_tasks 8544307598 4\nThis will change 2/15 to 4/15")
+        if len(context.args)<2:
+            await update.message.reply_text("Usage: /remove_balance <user_id> <amount>")
             return
-        target_id = int(context.args[0])
-        new_count = int(context.args[1])
-        if target_id not in users_db:
-            await update.message.reply_text(f"❌ User {target_id} not found!")
-            return
-        # daily_task_count is dict {uid: {date: count}}
-        today = str(get_ist_today())
-        if target_id not in daily_task_count:
-            daily_task_count[target_id] = {}
-        old = daily_task_count[target_id].get(today, 0)
-        daily_task_count[target_id][today] = new_count
-        # Also update tasks_db total
-        tasks_db[target_id] = new_count
+        target=int(context.args[0]); amount=int(context.args[1])
+        bonus_balance[target]=max(0, bonus_balance.get(target,0)-amount)
         save_data()
-        await update.message.reply_text(f"✅ Task count changed for {target_id}\nBefore: {old}/15 -> After: {new_count}/15\nUser: {users_db.get(target_id,{}).get('name','Unknown')}")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"📋 Admin updated your tasks: {new_count}/15\nBalance: Rs{get_balance(target_id)}")
-        except:
-            pass
+        await update.message.reply_text(f"Removed Rs{amount} from {target} New: Rs{get_balance(target)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
-async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_task_count_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if len(context.args)<2:
+            await update.message.reply_text("Usage: /set_tasks <user_id> <count>")
+            return
+        target=int(context.args[0]); new_count=int(context.args[1])
+        today=str(get_ist_today())
+        if target not in daily_task_count:
+            daily_task_count[target]={}
+        old=daily_task_count[target].get(today,0)
+        daily_task_count[target][today]=new_count
+        tasks_db[target]=new_count
+        save_data()
+        await update.message.reply_text(f"{target} {old}/15 -> {new_count}/15")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def approve_all_pending_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
         if not pending_daily:
-            await update.message.reply_text("✅ No pending tasks!")
+            await update.message.reply_text("No pending")
             return
-        count = len(pending_daily)
-        await update.message.reply_text(f"⏳ Approving {count} pending screenshots...")
-        approved = 0
-        for target_id, data in list(pending_daily.items())[:50]:  # Approve 50 at once
+        count=len(pending_daily)
+        approved=0
+        for tid, data in list(pending_daily.items())[:50]:
             try:
-                task = data.get('task', {})
-                reward = task.get('reward', 5)
-                # Add to user's balance/tasks
-                tid = task.get('id')
-                if tid:
-                    mark_task_completed_with_interval(target_id, tid)
-                tasks_db[target_id] = tasks_db.get(target_id, 0) + 1
-                today = str(get_ist_today())
-                if target_id not in daily_task_count:
-                    daily_task_count[target_id] = {}
-                daily_task_count[target_id][today] = daily_task_count[target_id].get(today, 0) + 1
-                
-                # Referral bonus
-                ref_id = referral_map.get(target_id)
-                if ref_id:
-                    # Check if first time
-                    is_first = tasks_db.get(target_id, 0) == 1
-                    if is_first:
-                        referrals_db[ref_id] = referrals_db.get(ref_id, 0) + 1
-                        referral_earnings[ref_id] = referral_earnings.get(ref_id, 0) + 10
-                
-                del pending_daily[target_id]
-                approved += 1
-                try:
-                    await context.bot.send_message(chat_id=target_id, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(target_id)}\nTasks: {get_tasks(target_id)}/15")
-                except:
-                    pass
-            except Exception as e:
-                print(f"Approve error {target_id} {e}")
-        
+                tasks_db[tid]=tasks_db.get(tid,0)+1
+                today=str(get_ist_today())
+                if tid not in daily_task_count:
+                    daily_task_count[tid]={}
+                daily_task_count[tid][today]=daily_task_count[tid].get(today,0)+1
+                del pending_daily[tid]
+                approved+=1
+            except:
+                pass
         save_data()
-        await update.message.reply_text(f"✅ Approved {approved}/{count} screenshots!\nRemaining: {len(pending_daily)}")
+        await update.message.reply_text(f"Approved {approved}/{count}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-        print(e)
 
-async def list_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_pending_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
         if not pending_daily:
-            await update.message.reply_text("✅ No pending!")
+            await update.message.reply_text("No pending")
             return
-        msg = f"📋 Pending: {len(pending_daily)}\n\n"
+        msg=f"Pending {len(pending_daily)}\n"
         for tid, data in list(pending_daily.items())[:10]:
-            name = users_db.get(tid, {}).get('name', 'Unknown')
-            task = data.get('task', {})
-            msg += f"ID:{tid} {name} - Task {task.get('task_number')} Rs{task.get('reward',5)}\n"
-        msg += f"\nUse /approve_all to approve all at once!\nOr approve from admin panel buttons"
+            msg+=f"{tid} - Task {data.get('task',{}).get('task_number')} \n"
         await update.message.reply_text(msg)
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
-# Add to main handler list
-
-
-
-
-# === BULK UPLOAD FEATURES ===
-
-async def bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_week_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        await update.message.reply_text(
-            "📦 **BULK TASKS UPLOAD - 2 Methods:**\n\n"
-            "**Method 1 - JSON File:**\n"
-            "1. Create JSON file like this:\n"
-            "```json\n"
-            "[\n"
-            '  {"date":"2026-08-22","open":"10:00","close":"10:30","title":"Task1","link":"https://t.me/link1","reward":5},\n'
-            '  {"date":"2026-08-22","open":"11:00","close":"11:30","title":"Task2","link":"https://t.me/link2","reward":5},\n'
-            '  {"date":"2026-08-23","open":"10:00","close":"10:30","title":"Task3","link":"https://t.me/link3","reward":10}\n'
-            "]\n```\n"
-            "2. Send file with /bulk_file\n\n"
-            "**Method 2 - Text Format:**\n"
-            "Use /bulk_text and send like:\n"
-            "```\n"
-            "2026-08-22|10:00|10:30|Task1|https://t.me/link1|5\n"
-            "2026-08-22|11:00|11:30|Task2|https://t.me/link2|5\n"
-            "2026-08-23|10:00|10:30|Task3|https://t.me/link3|10\n"
-            "```\n\n"
-            "**Method 3 - One Week:**\n"
-            "/add_week 2026-08-22 15 - Adds 15 tasks daily for week starting 2026-08-22\n"
-            "/add_date 2026-08-22 15 - Adds 15 tasks for specific date",
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        print(e)
-
-async def bulk_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if len(context.args)<2:
+            await update.message.reply_text("Usage: /add_week <YYYY-MM-DD> <per_day> [reward]")
             return
-        doc = update.message.document
-        if not doc:
-            return
-        file = await context.bot.get_file(doc.file_id)
-        file_path = f"/tmp/bulk_{uid}.json"
-        await file.download_to_drive(file_path)
-        with open(file_path,'r',encoding='utf-8') as f:
-            data = json.load(f)
-        
-        added = 0
-        from datetime import datetime
+        from datetime import datetime, timedelta
+        start_date_str=context.args[0]
+        per_day=int(context.args[1])
+        reward=int(context.args[2]) if len(context.args)>2 else 5
+        start_date=datetime.strptime(start_date_str, "%Y-%m-%d").date()
         global scheduled_task_counter
-        for item in data:
-            try:
-                date_str = item.get('date', str(get_ist_today()))
-                open_time = item.get('open','10:00')
-                close_time = item.get('close','10:30')
-                title = item.get('title','Task')
-                link = item.get('link','https://t.me/S2E_Daily_Earning')
-                reward = int(item.get('reward',5))
-                ot = datetime.strptime(open_time, "%H:%M").time()
-                ct = datetime.strptime(close_time, "%H:%M").time()
-                task = {
-                    'id': scheduled_task_counter,
-                    'date': date_str,
-                    'open_time': open_time,
-                    'close_time': close_time,
-                    'open_time_obj': ot,
-                    'close_time_obj': ct,
-                    'title': title,
-                    'link': link,
-                    'reward': reward,
-                    'task_number': len([t for t in scheduled_tasks_db if t['date']==date_str]) + 1
-                }
+        added=0
+        for d in range(7):
+            cur=start_date+timedelta(days=d)
+            date_str=str(cur)
+            for i in range(per_day):
+                ot=datetime.strptime(f"{9+i:02d}:00", "%H:%M").time()
+                ct=datetime.strptime(f"{9+i:02d}:30", "%H:%M").time()
+                task={'id': scheduled_task_counter, 'date': date_str, 'open_time': f"{9+i:02d}:00", 'close_time': f"{9+i:02d}:30", 'open_time_obj': ot, 'close_time_obj': ct, 'title': f"Task {i+1} - {date_str}", 'link': "https://t.me/S2E_Daily_Earning", 'reward': reward, 'task_number': i+1}
                 scheduled_tasks_db.append(task)
-                scheduled_task_counter += 1
-                added += 1
-            except Exception as e:
-                print(f"Bulk item error {e} {item}")
-        
+                scheduled_task_counter+=1
+                added+=1
         save_data()
-        await update.message.reply_text(f"✅ Bulk Upload Done! Added {added} tasks!\nTotal tasks: {len(scheduled_tasks_db)}")
+        await update.message.reply_text(f"Week Added Total {added} tasks")
     except Exception as e:
-        await update.message.reply_text(f"❌ Bulk file error: {e}\nMake sure JSON format is correct!")
-        print(e)
+        await update.message.reply_text(f"Error {e}")
 
-async def bulk_text_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_date_cmd(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
+        if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        await update.message.reply_text(
-            "📝 Send bulk tasks in text format now (one per line):\n"
-            "Format: date|open|close|title|link|reward\n"
-            "Ex:\n2026-08-22|10:00|10:30|Morning Task|https://t.me/link|5\n\n"
-            "Send your tasks now, or /cancel to cancel"
-        )
-        context.user_data['awaiting_bulk_text'] = True
-    except Exception as e:
-        print(e)
-
-async def handle_bulk_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not context.user_data.get('awaiting_bulk_text'):
-            return False
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return False
-        
-        text = update.message.text.strip()
-        if text == '/cancel':
-            context.user_data['awaiting_bulk_text'] = False
-            await update.message.reply_text("❌ Bulk text cancelled")
-            return True
-        
-        lines = text.split('\n')
-        added = 0
+        if len(context.args)<2:
+            await update.message.reply_text("Usage: /add_date <YYYY-MM-DD> <count> [reward]")
+            return
         from datetime import datetime
+        date_str=context.args[0]
+        cnt=int(context.args[1])
+        reward=int(context.args[2]) if len(context.args)>2 else 5
         global scheduled_task_counter
-        
-        for line in lines:
-            line=line.strip()
-            if not line or '|' not in line:
-                continue
-            try:
-                parts = line.split('|')
-                if len(parts) < 6:
-                    continue
-                date_str = parts[0].strip()
-                open_time = parts[1].strip()
-                close_time = parts[2].strip()
-                title = parts[3].strip()
-                link = parts[4].strip()
-                reward = int(parts[5].strip())
-                ot = datetime.strptime(open_time, "%H:%M").time()
-                ct = datetime.strptime(close_time, "%H:%M").time()
-                task = {
-                    'id': scheduled_task_counter,
-                    'date': date_str,
-                    'open_time': open_time,
-                    'close_time': close_time,
-                    'open_time_obj': ot,
-                    'close_time_obj': ct,
-                    'title': title,
-                    'link': link,
-                    'reward': reward,
-                    'task_number': len([t for t in scheduled_tasks_db if t['date']==date_str]) + 1
-                }
-                scheduled_tasks_db.append(task)
-                scheduled_task_counter += 1
-                added += 1
-            except Exception as e:
-                print(f"Bulk text line error {e} {line}")
-        
+        added=0
+        for i in range(cnt):
+            ot=datetime.strptime(f"{9+i:02d}:00", "%H:%M").time()
+            ct=datetime.strptime(f"{9+i:02d}:30", "%H:%M").time()
+            task={'id': scheduled_task_counter, 'date': date_str, 'open_time': f"{9+i:02d}:00", 'close_time': f"{9+i:02d}:30", 'open_time_obj': ot, 'close_time_obj': ct, 'title': f"Task {i+1} - {date_str}", 'link': "https://t.me/S2E_Daily_Earning", 'reward': reward, 'task_number': i+1}
+            scheduled_tasks_db.append(task)
+            scheduled_task_counter+=1
+            added+=1
         save_data()
-        context.user_data['awaiting_bulk_text'] = False
-        await update.message.reply_text(f"✅ Bulk Text Done! Added {added} tasks!")
+        await update.message.reply_text(f"Date {date_str} Added {added} tasks")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def add_support_plan_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if len(context.args)<4:
+            await update.message.reply_text("Usage: /add_plan <name> <price> <duration> <daily_limit>")
+            return
+        name=context.args[0]
+        price=int(context.args[1])
+        duration=int(context.args[2])
+        daily_limit=int(context.args[3])
+        desc=" ".join(context.args[4:]) if len(context.args)>4 else f"{name} {daily_limit} tasks daily"
+        global support_plans_db
+        try:
+            support_plans_db
+        except:
+            globals()['support_plans_db']=[]
+        plan={'id': len(support_plans_db)+1, 'name': name, 'price': price, 'duration': duration, 'daily_limit': daily_limit, 'description': desc, 'created': str(get_ist_now())}
+        support_plans_db.append(plan)
+        save_data()
+        await update.message.reply_text(f"Plan Added ID:{plan['id']} {name} Rs{price} {duration}d {daily_limit}/day")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def list_plans_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        try:
+            support_plans_db
+        except:
+            await update.message.reply_text("No plans")
+            return
+        if not support_plans_db:
+            await update.message.reply_text("No plans")
+            return
+        msg="Support Plans:\n"
+        for p in support_plans_db:
+            msg+=f"ID:{p['id']} {p['name']} Rs{p['price']} {p['duration']}d {p['daily_limit']}/day\n"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def remove_plan_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /remove_plan <id>")
+            return
+        pid=int(context.args[0])
+        global support_plans_db
+        before=len(support_plans_db)
+        support_plans_db=[p for p in support_plans_db if p['id']!=pid]
+        save_data()
+        await update.message.reply_text(f"Plan {pid} removed {before}->{len(support_plans_db)}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def set_plan_image_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /set_plan_image <plan_id> then send photo")
+            return
+        pid=int(context.args[0])
+        context.user_data['awaiting_plan_image']=pid
+        await update.message.reply_text(f"Send photo for Plan {pid} now!")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def bulk_tasks_help_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        await update.message.reply_text("BULK: /add_week 2026-08-22 15 5, /add_date 2026-08-22 15 5, /add_task_manual 10:00 10:30 Title Link 5, Plans: /add_plan Basic 299 30 15")
+    except:
+        pass
+
+async def handle_plan_image_upload(update, context):
+    try:
+        pid=context.user_data.get('awaiting_plan_image')
+        if not pid:
+            return False
+        if not update.message.photo:
+            return False
+        photo=update.message.photo[-1]
+        file_id=photo.file_id
+        global support_plans_db
+        for p in support_plans_db:
+            if p['id']==pid:
+                p['image_file_id']=file_id
+                break
+        save_data()
+        context.user_data['awaiting_plan_image']=None
+        await update.message.reply_text(f"Image set for Plan {pid}!")
         return True
-    except Exception as e:
-        print(e)
+    except:
         return False
 
-async def add_week_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def bulk_task_image_handler(update, context):
     try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("❌ Usage: /add_week <start_date> <tasks_per_day> [reward]\nEx: /add_week 2026-08-22 15 5\nThis adds 15 tasks daily for 7 days starting 2026-08-22")
-            return
-        start_date_str = context.args[0]
-        try:
-            tasks_per_day = int(context.args[1])
-            reward = int(context.args[2]) if len(context.args) > 2 else 5
-        except:
-            await update.message.reply_text("❌ tasks_per_day must be number! Ex: /add_week 2026-08-22 15")
-            return
-        
-        from datetime import datetime, timedelta
-        try:
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        except:
-            await update.message.reply_text("❌ Date format YYYY-MM-DD! Ex: 2026-08-22")
-            return
-        
-        global scheduled_task_counter
-        added = 0
-        for day_offset in range(7):
-            cur_date = start_date + timedelta(days=day_offset)
-            date_str = str(cur_date)
-            for i in range(tasks_per_day):
-                open_h = 9 + i
-                if open_h >= 24:
-                    open_h = open_h - 24
-                open_time = f"{open_h:02d}:00"
-                close_time = f"{open_h:02d}:30"
-                title = f"Task {i+1} - {date_str}"
-                link = "https://t.me/S2E_Daily_Earning"
-                ot = datetime.strptime(open_time, "%H:%M").time()
-                ct = datetime.strptime(close_time, "%H:%M").time()
-                task = {
-                    'id': scheduled_task_counter,
-                    'date': date_str,
-                    'open_time': open_time,
-                    'close_time': close_time,
-                    'open_time_obj': ot,
-                    'close_time_obj': ct,
-                    'title': title,
-                    'link': link,
-                    'reward': reward,
-                    'task_number': i+1
-                }
-                scheduled_tasks_db.append(task)
-                scheduled_task_counter += 1
-                added += 1
-        
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return False
+        if not update.message.photo:
+            return False
+        caption=update.message.caption
+        if not caption or not caption.strip().isdigit():
+            return False
+        tid=int(caption.strip())
+        photo=update.message.photo[-1]
+        file_id=photo.file_id
+        for t in scheduled_tasks_db:
+            if t['id']==tid:
+                t['image_file_id']=file_id
+                break
         save_data()
-        await update.message.reply_text(f"✅ Week Added!\nStart: {start_date_str}\nDays: 7\nPer day: {tasks_per_day}\nTotal added: {added} tasks\nReward: Rs{reward}")
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-        print(e)
-
-async def add_date_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("❌ Usage: /add_date <date> <tasks_count> [reward]\nEx: /add_date 2026-08-22 15 5")
-            return
-        date_str = context.args[0]
-        try:
-            tasks_count = int(context.args[1])
-            reward = int(context.args[2]) if len(context.args) > 2 else 5
-        except:
-            await update.message.reply_text("❌ Count must be number!")
-            return
-        
-        from datetime import datetime
-        try:
-            datetime.strptime(date_str, "%Y-%m-%d")
-        except:
-            await update.message.reply_text("❌ Date YYYY-MM-DD! Ex: 2026-08-22")
-            return
-        
-        global scheduled_task_counter
-        added = 0
-        for i in range(tasks_count):
-            open_h = 9 + i
-            if open_h >= 24:
-                open_h = open_h - 24
-            open_time = f"{open_h:02d}:00"
-            close_time = f"{open_h:02d}:30"
-            title = f"Task {i+1} - {date_str}"
-            link = "https://t.me/S2E_Daily_Earning"
-            ot = datetime.strptime(open_time, "%H:%M").time()
-            ct = datetime.strptime(close_time, "%H:%M").time()
-            task = {
-                'id': scheduled_task_counter,
-                'date': date_str,
-                'open_time': open_time,
-                'close_time': close_time,
-                'open_time_obj': ot,
-                'close_time_obj': ct,
-                'title': title,
-                'link': link,
-                'reward': reward,
-                'task_number': i+1
-            }
-            scheduled_tasks_db.append(task)
-            scheduled_task_counter += 1
-            added += 1
-        
-        save_data()
-        await update.message.reply_text(f"✅ Date Added!\nDate: {date_str}\nTasks: {tasks_count}\nTotal added: {added}\nReward: Rs{reward}")
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-
-async def bulk_images_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return
-        await update.message.reply_text(
-            "🖼️ **BULK IMAGES UPLOAD:**\n\n"
-            "1. Send photos one by one with caption: task_id\n"
-            "Ex: Photo with caption '1' -> sets image for Task ID 1\n"
-            "2. Or use /set_task_image 1 and send photo\n\n"
-            "For bulk: Send multiple photos quickly with captions like 1,2,3...\n"
-            "Bot will auto-set images!\n\n"
-            "Current tasks: Use /list_tasks to see IDs"
-        )
-    except Exception as e:
-        print(e)
+        await update.message.reply_text(f"Image set for Task {tid}")
+        return True
+    except:
+        return False
 
 
 def main():
     import time, os, threading
     print("="*70)
-    print("S2E Bot FINAL V16 - 70 Sec + Manual Admin + No Conflict")
+    print("S2E Bot FINAL V18 - 70 Sec + Manual + Bulk + Support Plan")
     print("="*70)
     print("Waiting 70 sec for old instance...")
     time.sleep(70)
@@ -3081,7 +2871,6 @@ def main():
         import httpx
         tok=os.getenv("BOT_TOKEN")
         if tok:
-            print("Deleting webhook 3 times...")
             for i in range(3):
                 try:
                     httpx.get(f"https://api.telegram.org/bot{tok}/deleteWebhook?drop_pending_updates=true", timeout=15)
@@ -3132,12 +2921,13 @@ def main():
             app.add_handler(CommandHandler("set_tasks", set_task_count_cmd))
             app.add_handler(CommandHandler("approve_all", approve_all_pending_cmd))
             app.add_handler(CommandHandler("list_pending", list_pending_cmd))
-            app.add_handler(CommandHandler("bulk_tasks", bulk_tasks_cmd))
-            app.add_handler(CommandHandler("bulk_text", bulk_text_cmd))
             app.add_handler(CommandHandler("add_week", add_week_cmd))
             app.add_handler(CommandHandler("add_date", add_date_cmd))
-            app.add_handler(CommandHandler("bulk_images", bulk_images_cmd))
-            app.add_handler(CommandHandler("bulk_file", bulk_tasks_cmd))
+            app.add_handler(CommandHandler("bulk_tasks", bulk_tasks_help_cmd))
+            app.add_handler(CommandHandler("add_plan", add_support_plan_cmd))
+            app.add_handler(CommandHandler("list_plans", list_plans_cmd))
+            app.add_handler(CommandHandler("remove_plan", remove_plan_cmd))
+            app.add_handler(CommandHandler("set_plan_image", set_plan_image_cmd))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
             app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
             app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
@@ -3170,8 +2960,8 @@ def main():
                 app.add_handler(promo_conv_handler)
             except:
                 pass
-            app.add_handler(MessageHandler(filters.Document.ALL, bulk_file_handler))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bulk_text_input))
+            app.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
+            app.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
             app.add_handler(MessageHandler(filters.PHOTO, handle_screenshot_upload))
             app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_member))
             global bot_application
@@ -3184,7 +2974,7 @@ def main():
             import traceback
             traceback.print_exc()
             if "Conflict" in str(e) or "terminated by other" in str(e):
-                print("Conflict detected! Waiting 70 sec...")
+                print("Conflict! Waiting 70 sec...")
                 time.sleep(70)
                 try:
                     import httpx
