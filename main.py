@@ -2689,11 +2689,12 @@ def main():
         except Exception as e:
             err_str = str(e)
             print(f"❌ Polling error: {err_str[:1000]}")
-            if "Conflict" in err_str or "terminated by other" in err_str:
+            if "Conflict" in err_str or "terminated by other" in err_str or "Conflict" in str(e):
                 retry_count += 1
                 print(f"Conflict detected, old instance still running! Waiting 30 sec for it to die... Retry {retry_count}/20")
                 import time
-                time.sleep(30)  # Wait for old instance to die
+                time.sleep(30)
+                print("Old instance should be dead now, retrying...")
                 wait_time = 20 + (retry_count * 5)
                 print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
                 import time as t_sleep
