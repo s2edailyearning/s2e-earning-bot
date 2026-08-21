@@ -18,45 +18,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# === 3 CHANNELS CONFIG - FINAL MERGED ===
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004428587527")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
 SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004428587527"))
 WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
 JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
-BACKUP_CHANNEL = int(os.getenv("BACKUP_CHANNEL", "0"))
-CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004428587527")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
-SCREENSHOT_LINK = os.getenv("SCREENSHOT_LINK", "https://t.me/S2E_Daily_Earning")
-WITHDRAW_LINK = os.getenv("WITHDRAW_LINK", "https://t.me/S2E_Daily_Earning")
-JOIN_LINK = os.getenv("JOIN_LINK", "https://t.me/S2E_Daily_Earning")
-REFERRAL_PLAN_PERCENT = 8
-REFERRAL_DAILY_PERCENT = 1.5
-REFERRAL_BONUS = 10
+SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
+WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
+JOIN_LINK = "https://t.me/S2E_Daily_Earning"
 MISSED_ENABLED = True
 
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
-
-
-async def post_to_screenshot_channel(context, text, photo=None):
-    try:
-        if photo:
-            await context.bot.send_photo(chat_id=SCREENSHOT_CHANNEL, photo=photo, caption=text[:1000])
-        else:
-            await context.bot.send_message(chat_id=SCREENSHOT_CHANNEL, text=text[:1000])
-    except Exception as e:
-        print(f"Screenshot channel error {e}")
-
-async def post_to_withdraw_channel(context, text):
-    try:
-        await context.bot.send_message(chat_id=WITHDRAW_CHANNEL, text=text[:1000])
-    except Exception as e:
-        print(f"Withdraw channel error {e}")
-
-async def post_to_join_channel(context, text):
-    try:
-        await context.bot.send_message(chat_id=JOIN_CHANNEL, text=text[:1000])
-    except Exception as e:
-        print(f"Join channel error {e}")
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
 _env = os.getenv("ADMIN_IDS") or ""
@@ -2502,148 +2475,151 @@ async def referral_stats_cmd(update, context):
         await update.message.reply_text(f"Error {e}")
 
 
-
-
-
-
-
-
-
-
-
-async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+async def admin_backup_cb(update, context):
     try:
-        await q.answer("Preparing backup...")
-    except:
-        pass
+        await update.callback_query.answer()
+        await backup_cmd(update.effective_message, context)
+    except: pass
+async def admin_add_admin_cb(update, context):
     try:
-        import os, json, glob
-        files = []
-        for jf in ["bot_data.json", "channel_config.json", "bot_config.json", "users_progress.json", "referrals.json"]:
-            if os.path.exists(jf):
-                files.append(jf)
-        for jf in glob.glob("*_db*.json"):
-            if os.path.exists(jf) and jf not in files:
-                files.append(jf)
-        if not os.path.exists("bot_config.json"):
-            with open("bot_config.json","w") as f:
-                json.dump({"admins": ADMIN_ID_LIST, "channels": {"screenshot": SCREENSHOT_CHANNEL, "withdraw": WITHDRAW_CHANNEL, "join": JOIN_CHANNEL}}, f)
-            files.append("bot_config.json")
-        sent = 0
-        for fp in files[:10]:
-            try:
-                if os.path.exists(fp):
-                    await q.message.reply_document(document=open(fp, 'rb'), filename=fp)
-                    sent += 1
-            except Exception as e:
-                print(e)
-        await q.message.reply_text(f"✅ {sent} Backup files sent!\nTask:{SCREENSHOT_CHANNEL} Withdraw:{WITHDRAW_CHANNEL} Join:{JOIN_CHANNEL}\nSave to Drive!")
-    except Exception as e:
-        try:
-            await q.message.reply_text(f"Backup error {e}")
-        except:
-            pass
-
-async def admin_missed_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+        await update.callback_query.answer()
+        await update.effective_message.reply_text("Use /add_admin USER_ID")
+    except: pass
+async def admin_referral_cb(update, context):
     try:
-        await q.answer()
-    except:
-        pass
+        await update.callback_query.answer()
+        await update.effective_message.reply_text("Referral L1 10%+2% L2 0.2%")
+    except: pass
+async def admin_missed_toggle_cb(update, context):
     try:
+        await update.callback_query.answer()
         global MISSED_ENABLED
-        MISSED_ENABLED = not MISSED_ENABLED
-        st = "ON ✅" if MISSED_ENABLED else "OFF ❌"
-        await q.message.reply_text(f"⏰ Missed Tasks now {st}\nWhen ON, users see missed tasks!")
+        MISSED_ENABLED=not MISSED_ENABLED
+        await update.effective_message.reply_text(f"Missed {'ON' if MISSED_ENABLED else 'OFF'}")
+    except: pass
+
+
+async def channels_status_cmd(update, context):
+    try:
+        await update.message.reply_text(f"📢 Channels Status\nChannel: {CHANNEL_ID}\nLink: {CHANNEL_LINK}\nActive: Yes\nUse /channels_list to see all")
     except Exception as e:
         print(e)
 
-async def admin_add_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+async def channels_list_cmd(update, context):
     try:
-        await q.answer()
-    except:
-        pass
-    try:
-        await q.message.reply_text("👑 Add Admin\nUse: /add_admin USER_ID\nEx: /add_admin 8544307598")
-    except:
-        pass
-
-async def admin_referral_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
-    try:
-        await q.message.reply_text(f"🔗 Referral L1 {REFERRAL_PLAN_PERCENT}% Plan + {REFERRAL_DAILY_PERCENT}% Daily + Rs10\nL2 0.2%\n3 Channels Ready!")
-    except:
-        pass
-
-async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        uid = update.effective_user.id
-        if uid not in ADMIN_ID_LIST:
-            return
-        await update.message.reply_text(f"📢 Channels Status\nTask Screenshots: {SCREENSHOT_CHANNEL}\nLink: {SCREENSHOT_LINK}\n\nWithdraw: {WITHDRAW_CHANNEL}\nLink: {WITHDRAW_LINK}\n\nMembers Join: {JOIN_CHANNEL}\nLink: {JOIN_LINK}\nActive: Yes\nUse /channels_list")
+        await update.message.reply_text(f"📢 Channels List\n1. Main: {CHANNEL_ID} - {CHANNEL_LINK}\nTotal: 1")
     except Exception as e:
         print(e)
 
-async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def support_plans_fixed_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
     try:
-        await update.message.reply_text(f"📢 Channels List\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3")
-    except Exception as e:
-        print(e)
-
-
+        # Prevent duplicate - edit message instead of sending new
+        await q.message.reply_text("💎 SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+    except: pass
 
 
 def main():
-    import time, os
-    print("="*70)
-    print("S2E Bot FINAL ULTIMATE FIXED SYNTAX")
-    print("="*70)
-    print("Waiting 70 sec...")
-    time.sleep(70)
-    try:
-        import httpx
-        token=os.getenv("BOT_TOKEN")
-        if token:
-            for i in range(3):
-                try:
-                    httpx.get(f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true", timeout=15)
-                    time.sleep(2)
-                except:
-                    pass
-    except:
-        pass
     load_data()
+    threading.Thread(target=run_flask, daemon=True).start()
     try:
-        threading.Thread(target=run_flask, daemon=True).start()
+        threading.Thread(target=keep_alive_pinger, daemon=True).start()
+        print('Keep-alive started')
     except:
         pass
-    from telegram.ext import ApplicationBuilder
-    from telegram import Update
-    attempt=0
-    while True:
-        attempt+=1
+    print("🚀 Starting bot with Conflict protection...")
+    
+    retry_count = 0
+    max_retries = 20
+    
+    while retry_count < max_retries:
+        app = None
         try:
-            print(f"Starting attempt {attempt}")
-            app=ApplicationBuilder().token(BOT_TOKEN).build()
-            app.add_handler(CommandHandler("start", start_cmd))
-            app.add_handler(CommandHandler("admin", admin_cmd))
-            app.add_handler(CommandHandler("menu", menu_cmd))
-            app.add_handler(CommandHandler("add_task", add_task_cmd))
-            app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
-            app.add_handler(CommandHandler("list_tasks", list_tasks_cmd))
-            app.add_handler(CommandHandler("list_promos", list_promos_cmd))
-            app.add_handler(CommandHandler("backup", backup_cmd))
-            app.add_handler(CommandHandler("bacup", backup_cmd))
-            app.add_handler(CommandHandler("add_admin", add_admin_cmd))
-            app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
-            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
-            app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            print(f"\n🔄 Build attempt {retry_count+1}/{max_retries}")
+            app = Application.builder().token(BOT_TOKEN).build()
+            
+            # Register error handler first
+            app.add_error_handler(error_handler)
+            try:
+                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
+                app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
+                app.add_handler(CallbackQueryHandler(withdraw_cb_fixed, pattern='^withdraw$',), group=-2)
+                app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
+                print('V25 All Fixed group -2')
+                app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
+            except Exception as e:
+                print(f'V25 fix {e}')
+            
+            # Register all handlers
+            conv_reg = ConversationHandler(
+                entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
+                states={
+                    NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+                    GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+                    DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+                    MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
+                    UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
+                    PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
+                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_screenshot = ConversationHandler(
+                entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
+                states={
+                    UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
+                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
+                    PROMO_DETAILS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_promo_views_count)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_skip = ConversationHandler(
+                entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
+                states={
+                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            conv_set_image = ConversationHandler(
+                entry_points=[CommandHandler("set_task_image", set_task_image_cmd)],
+                states={
+                    SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            app.add_handler(conv_reg)
+            app.add_handler(conv_screenshot)
+            app.add_handler(conv_skip)
+            app.add_handler(conv_set_image)
+            app.add_handler(CommandHandler("menu", menu))
+            app.add_handler(CommandHandler("admin", admin_panel))
+            app.add_handler(CommandHandler("pending", pending_cmd))
+            app.add_handler(CommandHandler("approve", approve_cmd))
+            app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
+            app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
+            app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
+            app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
+            app.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
+            app.add_handler(CommandHandler("warnings", warnings_cmd))
+            app.add_handler(CommandHandler("banned", banned_cmd))
+            app.add_handler(CommandHandler("unban", unban_cmd))
+            app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+            app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
+            app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
+            app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
+            app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
+            app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
             app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
             app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
@@ -2651,42 +2627,124 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
             app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
             app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
-            app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
             app.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
-            app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
-            app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
-            app.add_handler(CallbackQueryHandler(daily_task_cb, pattern="^daily$"))
-            app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
-            app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
-            app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
-            app.add_handler(CallbackQueryHandler(scheduled_tasks_cb, pattern="^scheduled_tasks$"))
+            app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
+            app.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
+            app.add_handler(CallbackQueryHandler(promo_reject_cb, pattern="^promo_reject_"))
+            app.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
+            app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
+            app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
+            app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
+            app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
+            app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
             app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
-            app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
-            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern="^admin_backup$"))
-            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern="^admin_add_admin$"))
-            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern="^admin_referral$"))
-            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern="^admin_missed_toggle$"))
-            app.add_handler(conv_handler)
+            app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
+            app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
+            
+
+            app.add_handler(CommandHandler("backup", backup_cmd))
+            app.add_handler(CommandHandler("bacup", backup_cmd))
+            app.add_handler(CommandHandler("add_admin", add_admin_cmd))
+            app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+
+            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
+            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
+            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
+            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^support_plans$"))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^view_plans$"))
             global bot_application
-            bot_application=app
-            print("Polling...")
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-            break
-        except Exception as e:
-            print(f"Error {attempt}: {e}")
-            if "Conflict" in str(e) or "terminated by other" in str(e):
-                print("Conflict, waiting 70 sec")
-                time.sleep(70)
+            bot_application = app
+
+            # Notifier thread - using correct function name
+            try:
+                threading.Thread(target=notification_thread_func, daemon=True).start()
+                print("✅ Notifier started")
+            except Exception as e:
+                print(f"Notifier error: {e}")
+
+            # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                # Run delete webhook
                 try:
-                    import httpx
-                    tok=os.getenv("BOT_TOKEN")
-                    if tok:
-                        httpx.get(f"https://api.telegram.org/bot{tok}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                    asyncio.get_event_loop().run_until_complete(del_hook())
                 except:
-                    pass
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
+
+            print("✅ Handlers registered, starting polling...")
+                        # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
+
+            print("✅ Handlers registered, starting polling...")
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES, close_loop=False)
+
+            print("✅ Polling ended cleanly")
+            break
+
+        except Exception as e:
+            err_str = str(e)
+            print(f"❌ Polling error: {err_str[:1000]}")
+            if "Conflict" in err_str or "terminated by other" in err_str or "Conflict" in str(e):
+                retry_count += 1
+                print(f"Conflict detected, old instance still running! Waiting 60 sec for it to die... Retry {retry_count}/20")
+                import time
+                time.sleep(60)
+                print("Old instance should be dead now, retrying...")
+                wait_time = 20 + (retry_count * 5)
+                print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
+                import time as t_sleep
+                t_sleep.sleep(wait_time)
                 continue
-            time.sleep(15)
-            continue
+            else:
+                retry_count += 1
+                print(f"⚠️ Other error, retrying in 10s... {retry_count}")
+                import time as t_sleep
+                t_sleep.sleep(10)
+                continue
+
+if __name__=="__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
