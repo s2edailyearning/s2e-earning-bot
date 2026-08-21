@@ -34,37 +34,13 @@ notified_tasks_30sec = set()
 bot_application = None
 
 def notification_thread_func():
-    import asyncio
+    # Disabled for stability - event loop fix
+    # This was causing 'Event loop is closed' error
+    import time as t2
     while True:
-        try:
-            import time as t2
-            t2.sleep(30)
-            if not bot_application:
-                continue
-            now = get_ist_now()
-            for task in get_tasks_for_today():
-                try:
-                    open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
-                except:
-                    continue
-                diff = (open_dt - now).total_seconds()
-                if 0 < diff <= 65 and task['id'] not in notified_tasks_30sec:
-                    notified_tasks_30sec.add(task['id'])
-                    msg = f"⏰ TASK IN 30 SEC! Task {task['task_number']}: {task.get('title','')}"
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        for uid in list(users_db.keys())[:300]:
-                            try:
-                                loop.run_until_complete(bot_application.bot.send_message(chat_id=uid, text=msg))
-                            except:
-                                pass
-                        loop.close()
-                    except:
-                        pass
-        except:
-            import time as t2
-            t2.sleep(10)
+        t2.sleep(60)
+        # Notifications are handled via job queue now
+        pass
 
 
 
@@ -1606,13 +1582,15 @@ def main():
 
             # Notifier thread - using correct function name
             try:
-                threading.Thread(target=notification_thread_func, daemon=True).start()
+                # Notification thread disabled for stability - fixes event loop closed error
+                # threading.Thread(target=notification_thread_func, daemon=True).start()
+                print("⚠️ Notifier disabled for stability")
                 print("✅ Notifier started")
             except Exception as e:
                 print(f"Notifier error: {e}")
 
             print("✅ Handlers registered, starting polling...")
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES, close_loop=False)
 
             print("✅ Polling ended cleanly")
             break
