@@ -160,11 +160,6 @@ async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TY
     except:
         pass
 
-async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
     kb = [[InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
           [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")]]
     try:
@@ -1229,12 +1224,14 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
                 reward = last_num
         time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
         times = re.findall(time_pattern, text, re.IGNORECASE)
-        if len(times) < 2:
-            await update.message.reply_text("Need 2 times! Ex: /add_task 9:40PM 9:50PM Task link 40")
-            return
-        open_str = times[0]
-        close_str = times[1] if len(times) > 1 else times[0]
-        next_str = times[2] if len(times) > 2 else close_str
+        if len(times) < 3:
+            parts = text.split()
+            if len(parts) >= 3:
+                times = parts[:3]
+            else:
+                await update.message.reply_text("Need 3 times")
+                return
+        open_str, close_str, next_str = times[0], times[1], times[2]
         remaining = text
         for t in times[:3]:
             remaining = remaining.replace(t, '', 1)
@@ -2536,10 +2533,6 @@ async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(e)
 
-async def support_plans_fixed_cb(update, context):
-    q=update.callback_query
-    try: await q.answer()
-    except: pass
     try:
         # Prevent duplicate - edit message instead of sending new
         await q.message.reply_text("💎 SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
@@ -2798,104 +2791,82 @@ async def bulk_task_image_handler(update, context):
 
 
 
-# === OVERRIDE SUPPORT PLANS WITH DYNAMIC VERSION ===
-async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+UPI_ID="s2edaily@upi"
+UPI_NAME="S2E"
+def load_upi_config():
+    global UPI_ID, UPI_NAME
+    try:
+        import json, os
+        if os.path.exists("upi_config.json"):
+            with open("upi_config.json","r") as fr:
+                d=json.load(fr)
+                UPI_ID=d.get("upi",UPI_ID)
+                UPI_NAME=d.get("name",UPI_NAME)
+    except:
+        pass
+
+async def set_upi_cmd(update, context):
+    global UPI_ID, UPI_NAME
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if not context.args:
+            await update.message.reply_text(f"UPI: {UPI_ID} Usage: /set_upi upi@upi name")
+            return
+        UPI_ID=context.args[0]
+        if len(context.args)>1:
+            UPI_NAME=" ".join(context.args[1:])
+        try:
+            import json
+            with open("upi_config.json","w") as fw:
+                json.dump({"upi":UPI_ID,"name":UPI_NAME}, fw)
+        except:
+            pass
+        await update.message.reply_text(f"UPI Set {UPI_ID}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+DEFAULT_PLANS=[
+    {"id":1,"name":"Basic","price":199,"duration":30,"daily_limit":10,"max_earning":500,"features":["10 Tasks/Day","30 Days","Max Rs500"],"emoji":"⭐"},
+    {"id":2,"name":"Premium","price":499,"duration":60,"daily_limit":20,"max_earning":2000,"features":["20 Tasks/Day","60 Days","Max Rs2000","Family 2"],"emoji":"💎"},
+    {"id":3,"name":"Gold","price":999,"duration":90,"daily_limit":30,"max_earning":5000,"features":["30 Tasks/Day","90 Days","Max Rs5000","Family 4"],"emoji":"👑"},
+]
+
+def get_all_plans():
+    try:
+        plans=support_plans_db
+        if not plans:
+            return DEFAULT_PLANS
+        enriched=[]
+        for p in plans:
+            if 'max_earning' not in p:
+                price=p.get('price',199)
+                p['max_earning']=500 if price<=200 else 2000 if price<=500 else 5000
+            enriched.append(p)
+        return enriched
+    except:
+        return DEFAULT_PLANS
+
+async def support_plans_cb(update, context):
     try:
         await update.callback_query.answer()
     except:
         pass
-    kb = []
     try:
-        try:
-            plans = support_plans_db
-        except NameError:
-            plans = []
-        if plans:
-            for p in plans:
-                name = p.get('name','Plan')
-                price = p.get('price',0)
-                pid = p.get('id',0)
-                kb.append([InlineKeyboardButton(f"{name} Rs{price}", callback_data=f"buy_plan_{pid}")])
-        else:
-            kb = [[InlineKeyboardButton("Basic Rs199", callback_data="plan_basic")],
-                  [InlineKeyboardButton("Premium Rs499", callback_data="plan_premium")]]
-    except:
-        kb = [[InlineKeyboardButton("Basic Rs199", callback_data="plan_basic")],
-              [InlineKeyboardButton("Premium Rs499", callback_data="plan_premium")]]
-    try:
-        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
-    except:
-        try:
-            await update.callback_query.message.reply_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
-        except:
-            pass
-
-def support_plans_fixed_cb(update, context):
-    q=update.callback_query
-    try:
-        import asyncio
-        asyncio.create_task(q.answer())
-    except:
-        try:
-            q.answer()
-        except:
-            pass
-    try:
-        try:
-            plans = support_plans_db
-        except NameError:
-            plans = []
-        if plans:
-            msg = "SUPPORT PLANS - Dynamic\n\n"
-            kb = []
-            for p in plans:
-                name = p.get('name','Plan')
-                price = p.get('price',0)
-                duration = p.get('duration',30)
-                limit = p.get('daily_limit',15)
-                desc = p.get('description','')
-                msg += f"{p['id']}. {name} - Rs{price} - {duration} days - {limit} tasks/day\n{desc}\n\n"
-                kb.append([InlineKeyboardButton(f"Buy {name} Rs{price}", callback_data=f"buy_plan_{p['id']}")])
-            kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
-            q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
-    except Exception as e:
-        print(f"support_plans_fixed_cb error {e}")
-        try:
-            q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
-        except:
-            pass
-
-# For async version also
-async def support_plans_fixed_cb_async(update, context):
-    q=update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
-    try:
-        try:
-            plans = support_plans_db
-        except NameError:
-            plans = []
-        if plans:
-            msg = "SUPPORT PLANS\n\n"
-            kb = []
-            for p in plans:
-                name = p.get('name','Plan')
-                price = p.get('price',0)
-                duration = p.get('duration',30)
-                limit = p.get('daily_limit',15)
-                desc = p.get('description','')
-                msg += f"{p['id']}. {name} - Rs{price} - {duration}d - {limit}/day\n{desc}\n\n"
-                kb.append([InlineKeyboardButton(f"Buy {name} Rs{price}", callback_data=f"buy_plan_{p['id']}")])
-            kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
-            await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await q.message.reply_text("SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+        plans=get_all_plans()
+        msg="SUPPORT PLANS - OTT Comparison\n\n"
+        for p in plans:
+            msg+=f"{p.get('emoji','⭐')} {p['name']} Rs{p['price']} - {p['duration']}D {p['daily_limit']}/Day Max Rs{p.get('max_earning',500)}\n"
+        kb=[]
+        for p in plans:
+            kb.append([InlineKeyboardButton(f"{p.get('emoji')} {p['name']} Rs{p['price']} {p['duration']}D Max Rs{p.get('max_earning')}", callback_data=f"buy_plan_{p['id']}")])
+        kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
+        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
         print(e)
+
+async def support_plans_fixed_cb(update, context):
+    await support_plans_cb(update, context)
 
 async def buy_plan_dynamic_cb(update, context):
     q=update.callback_query
@@ -2904,26 +2875,172 @@ async def buy_plan_dynamic_cb(update, context):
     except:
         pass
     try:
-        pid = int(q.data.replace("buy_plan_",""))
-        try:
-            plans = support_plans_db
-        except:
-            plans = []
-        plan = None
+        data=q.data
+        pid=int(data.replace("buy_plan_","")) if "buy_plan_" in data else 1
+        if data=="plan_basic":
+            pid=1
+        elif data=="plan_premium":
+            pid=2
+        plans=get_all_plans()
+        plan=None
         for p in plans:
-            if p['id'] == pid:
-                plan = p
+            if p['id']==pid:
+                plan=p
                 break
-        if plan:
-            msg = f"Plan: {plan['name']}\nPrice: Rs{plan['price']}\nDuration: {plan['duration']} days\nDaily: {plan['daily_limit']} tasks\n{plan.get('description','')}\n\nContact @s2edayincome to buy!"
-            await q.message.reply_text(msg)
+        if not plan:
+            await q.message.reply_text("Plan not found!")
+            return
+        load_upi_config()
+        msg=f"{plan.get('emoji','')} {plan['name']} DETAILS\nPrice Rs{plan['price']}\nValidity {plan['duration']} Days\nDaily {plan['daily_limit']} Tasks\nMax Earn Rs{plan.get('max_earning',500)}\nFeatures: {', '.join(plan.get('features',[]))}\n\nUPI: {UPI_ID}\nName: {UPI_NAME}\nAmount Rs{plan['price']}\nPay via GPay/PhonePe then upload screenshot!"
+        kb=[[InlineKeyboardButton("Upload Screenshot", callback_data=f"upload_pay_{plan['id']}")],[InlineKeyboardButton("Back", callback_data="support_plans")]]
+        img=plan.get('image_file_id')
+        if img:
+            try:
+                await q.message.reply_photo(photo=img, caption=msg, reply_markup=InlineKeyboardMarkup(kb))
+            except:
+                await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         else:
-            await q.message.reply_text(f"Plan {pid} not found!")
+            await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
-        print(f"buy_plan error {e}")
+        print(e)
 
-# Override the old fixed cb with async version for compatibility
-support_plans_fixed_cb = support_plans_fixed_cb_async
+async def upload_payment_cb(update, context):
+    q=update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        pid=int(q.data.replace("upload_pay_",""))
+        context.user_data['awaiting_payment_screenshot']=pid
+        await q.message.reply_text(f"Upload screenshot for Plan {pid} now!")
+    except:
+        pass
+
+async def handle_payment_screenshot(update, context):
+    try:
+        pid=context.user_data.get('awaiting_payment_screenshot')
+        if not pid or not update.message.photo:
+            return False
+        photo=update.message.photo[-1]
+        file_id=photo.file_id
+        uid=update.effective_user.id
+        plans=get_all_plans()
+        plan=None
+        for p in plans:
+            if p['id']==pid:
+                plan=p
+                break
+        if not plan:
+            await update.message.reply_text("Plan not found!")
+            return True
+        pending_plans[uid]={'plan':plan,'screenshot_file_id':file_id,'user_id':uid,'username':update.effective_user.username,'time':str(get_ist_now())}
+        try:
+            save_data()
+        except:
+            pass
+        context.user_data['awaiting_payment_screenshot']=None
+        await update.message.reply_text(f"Screenshot received for {plan['name']} Rs{plan['price']}! Admin verify.")
+        try:
+            for admin_id in ADMIN_ID_LIST:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=f"Payment! User {uid} Plan {plan['name']} Rs{plan['price']}")
+                    await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"Payment {plan['name']} by {uid}")
+                    kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_plan_{uid}")],[InlineKeyboardButton(f"Reject {uid}", callback_data=f"admin_reject_plan_{uid}")]]
+                    await context.bot.send_message(chat_id=admin_id, text="Approve?", reply_markup=InlineKeyboardMarkup(kb))
+                except:
+                    pass
+        except:
+            pass
+        return True
+    except:
+        return False
+
+def check_plan_limits(uid):
+    try:
+        from datetime import datetime, timedelta, date
+        if uid not in user_plans:
+            today=str(get_ist_today())
+            count=daily_task_count.get(uid,{}).get(today,0)
+            if count>=1:
+                return False, "Free: 1 task/day. Buy Basic Rs199 for 10/day!"
+            return True, "free"
+        pdata=user_plans[uid]
+        today=get_ist_today()
+        if isinstance(today, str):
+            today=datetime.strptime(today, "%Y-%m-%d").date()
+        end_str=pdata.get('end_date')
+        if end_str:
+            try:
+                end=datetime.strptime(end_str, "%Y-%m-%d").date() if isinstance(end_str,str) else end_str
+                if today>end:
+                    return False, f"⏰ {pdata.get('duration',30)} days completed! Plan expired. Renew now!"
+            except:
+                pass
+        max_earn=pdata.get('max_earning', pdata.get('plan',{}).get('max_earning',500))
+        earned=bonus_balance.get(uid,0)
+        if earned>=max_earn:
+            return False, f"🎉 Max earning Rs{max_earn} reached! Renew or upgrade:\nPremium Rs499 Max Rs2000\nGold Rs999 Max Rs5000"
+        today_s=str(get_ist_today())
+        count=daily_task_count.get(uid,{}).get(today_s,0)
+        daily_limit=pdata.get('daily_limit', pdata.get('plan',{}).get('daily_limit',10))
+        if count>=daily_limit:
+            return False, f"📅 Daily limit {daily_limit} tasks reached! Try tomorrow!"
+        return True, "ok"
+    except Exception as e:
+        print(e)
+        return True, "ok"
+
+async def admin_approve_plan_cb(update, context):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        uid=int(update.callback_query.data.replace("admin_approve_plan_",""))
+        if uid in pending_plans:
+            pdata=pending_plans[uid]
+            plan=pdata['plan']
+            from datetime import datetime, timedelta, date
+            today=get_ist_today()
+            if isinstance(today, str):
+                today=datetime.strptime(today, "%Y-%m-%d").date()
+            duration=plan.get('duration',30)
+            end_date=today+timedelta(days=duration)
+            user_plans[uid]={'plan_id':plan['id'],'plan':plan,'start_date':str(today),'end_date':str(end_date),'duration':duration,'daily_limit':plan.get('daily_limit',10),'max_earning':plan.get('max_earning',500),'approved_time':str(get_ist_now())}
+            del pending_plans[uid]
+            try:
+                save_data()
+            except:
+                pass
+            await update.callback_query.edit_message_text(f"Approved {plan['name']} for {uid} - {duration} days Max Rs{plan.get('max_earning',500)}")
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"✅ {plan['name']} approved! {duration} days {plan.get('daily_limit',10)}/day Max Rs{plan.get('max_earning',500)} Start earning!")
+            except:
+                pass
+    except Exception as e:
+        print(e)
+
+async def admin_reject_plan_cb(update, context):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        uid=int(update.callback_query.data.replace("admin_reject_plan_",""))
+        if uid in pending_plans:
+            del pending_plans[uid]
+            try:
+                save_data()
+            except:
+                pass
+            await update.callback_query.edit_message_text(f"Rejected {uid}")
+            try:
+                await context.bot.send_message(chat_id=uid, text="❌ Payment rejected. Contact @s2edayincome")
+            except:
+                pass
+    except:
+        pass
 
 
 def main():
@@ -2947,6 +3064,10 @@ def main():
     except:
         pass
     load_data()
+    try:
+        load_upi_config()
+    except:
+        pass
     threading.Thread(target=run_flask, daemon=True).start()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
@@ -2994,6 +3115,7 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
+            app.add_handler(MessageHandler(filters.PHOTO, handle_payment_screenshot))
             app.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
             app.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
             conv_screenshot = ConversationHandler(
