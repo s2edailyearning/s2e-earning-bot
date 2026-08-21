@@ -18,10 +18,45 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@s2edayincome")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/s2edayincome")
+# === 3 CHANNELS CONFIG - MERGED ===
+SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004428587527"))
+WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
+JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
+BACKUP_CHANNEL = int(os.getenv("BACKUP_CHANNEL", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004428587527")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
+SCREENSHOT_LINK = os.getenv("SCREENSHOT_LINK", "https://t.me/S2E_Daily_Earning")
+WITHDRAW_LINK = os.getenv("WITHDRAW_LINK", "https://t.me/S2E_Daily_Earning")
+JOIN_LINK = os.getenv("JOIN_LINK", "https://t.me/S2E_Daily_Earning")
+REFERRAL_PLAN_PERCENT = 8
+REFERRAL_DAILY_PERCENT = 1.5
+REFERRAL_BONUS = 10
+MISSED_ENABLED = True
+
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
+
+
+async def post_to_screenshot_channel(context, text, photo=None):
+    try:
+        if photo:
+            await context.bot.send_photo(chat_id=SCREENSHOT_CHANNEL, photo=photo, caption=text[:1000])
+        else:
+            await context.bot.send_message(chat_id=SCREENSHOT_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(f"Screenshot ch error {e}")
+
+async def post_to_withdraw_channel(context, text):
+    try:
+        await context.bot.send_message(chat_id=WITHDRAW_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(e)
+
+async def post_to_join_channel(context, text):
+    try:
+        await context.bot.send_message(chat_id=JOIN_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(e)
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
 _env = os.getenv("ADMIN_IDS") or ""
@@ -660,8 +695,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
         [InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"), InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
-        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
-        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
         [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
     ])
     
@@ -775,9 +808,7 @@ async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = []
     for campaign in active_campaigns[:10]:
         kb.append([InlineKeyboardButton(f"🏪 {campaign['shop_name']} - {campaign['title'][:20]}", callback_data=f"promo_join_{campaign['id']}")])
-    kb.append([InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
-        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
-        [InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
+    kb.append([InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
 
 async def promo_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2382,135 +2413,64 @@ async def pending_bulk_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=mk)
 
 
-# === BACKUP FIX - ADDED FOR 3 FILES BACKUP ===
-async def backup_cmd(update, context):
-    from telegram import Update
-    from telegram.ext import ContextTypes
-    uid = update.effective_user.id
-    if uid not in ADMIN_ID_LIST:
-        return
-    try:
-        import os, json, glob
-        files_to_backup = []
-        # Original DB files
-        for jf in ["bot_data.json", "channel_config.json"]:
-            if os.path.exists(jf):
-                files_to_backup.append(jf)
-        # Also backup all _db jsons if exists
-        for jf in glob.glob("*_db*.json"):
-            if jf not in files_to_backup and os.path.exists(jf):
-                files_to_backup.append(jf)
-        # Ensure config exists
-        if not os.path.exists("bot_data.json"):
-            with open("bot_data.json","w") as f: json.dump({}, f)
-            files_to_backup.append("bot_data.json")
-        if not os.path.exists("channel_config.json"):
-            with open("channel_config.json","w") as f: json.dump({}, f)
-            files_to_backup.append("channel_config.json")
-        
-        # Also create combined backup
-        combined = {}
-        for jf in files_to_backup:
-            try:
-                with open(jf,"r") as f: combined[jf]=json.load(f)
-            except:
-                pass
-        with open("bot_config.json","w") as f: json.dump({"admins": ADMIN_ID_LIST, "backup_time": str(get_ist_now())}, f, indent=2)
-        files_to_backup.append("bot_config.json")
-        
-        with open("users_progress.json","w") as f: json.dump(combined, f, indent=2)
-        with open("referrals.json","w") as f: json.dump(combined, f, indent=2)
-        
-        for fp in files_to_backup[:10]:  # limit to 10 files max telegram
-            try:
-                await update.message.reply_document(document=open(fp,'rb'), filename=fp)
-            except Exception as e:
-                print(f"Backup send error {fp}: {e}")
-        await update.message.reply_text("✅ All Backup files - Save to Drive! If bot deleted, upload these to new bot - total users will restore! Backup + Referral L1/L2 system ready! Original 2000+ lines file!")
-    except Exception as e:
-        await update.message.reply_text(f"Backup error {e}")
-
-async def add_admin_cmd(update, context):
-    uid = update.effective_user.id
-    if uid not in ADMIN_ID_LIST:
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /add_admin USER_ID")
-        return
-    try:
-        new_id = int(context.args[0])
-        if new_id not in ADMIN_ID_LIST:
-            ADMIN_ID_LIST.append(new_id)
-            await update.message.reply_text(f"✅ Admin added: {new_id}. Total admins: {ADMIN_ID_LIST}. If one blocked, other can control!")
-        else:
-            await update.message.reply_text("Already admin")
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-
-async def referral_stats_cmd(update, context):
-    uid = update.effective_user.id
-    if uid not in ADMIN_ID_LIST:
-        return
-    try:
-        from glob import glob
-        msg = "📊 Referral Stats\n"
-        # Try to read referrals_db
-        try:
-            import json
-            if "referrals_db" in globals():
-                total = len(referrals_db) if isinstance(referrals_db, dict) else 0
-                msg += f"Total referral users: {total}\n"
-        except:
-            pass
-        await update.message.reply_text(msg)
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-
-
-async def admin_backup_cb(update, context):
-    try:
-        await update.callback_query.answer()
-        await backup_cmd(update.effective_message, context)
-    except: pass
-async def admin_add_admin_cb(update, context):
-    try:
-        await update.callback_query.answer()
-        await update.effective_message.reply_text("Use /add_admin USER_ID")
-    except: pass
-async def admin_referral_cb(update, context):
-    try:
-        await update.callback_query.answer()
-        await update.effective_message.reply_text("Referral L1 10%+2% L2 0.2%")
-    except: pass
-async def admin_missed_toggle_cb(update, context):
-    try:
-        await update.callback_query.answer()
-        global MISSED_ENABLED
-        MISSED_ENABLED=not MISSED_ENABLED
-        await update.effective_message.reply_text(f"Missed {'ON' if MISSED_ENABLED else 'OFF'}")
-    except: pass
-
-
 async def channels_status_cmd(update, context):
     try:
-        await update.message.reply_text(f"📢 Channels Status\nChannel: {CHANNEL_ID}\nLink: {CHANNEL_LINK}\nActive: Yes\nUse /channels_list to see all")
+        uid=update.effective_user.id
+        if uid not in ADMIN_ID_LIST:
+            await update.message.reply_text("Admin only!")
+            return
+        await update.message.reply_text(f"📢 Channels Status\nTask: {SCREENSHOT_CHANNEL}\nWithdraw: {WITHDRAW_CHANNEL}\nJoin: {JOIN_CHANNEL}\nActive: Yes")
     except Exception as e:
         print(e)
 
 async def channels_list_cmd(update, context):
     try:
-        await update.message.reply_text(f"📢 Channels List\n1. Main: {CHANNEL_ID} - {CHANNEL_LINK}\nTotal: 1")
+        await update.message.reply_text(f"📢 Channels List\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3")
     except Exception as e:
         print(e)
 
-async def support_plans_fixed_cb(update, context):
+async def admin_backup_cb(update, context):
+    q=update.callback_query
+    try: await q.answer("Backup...")
+    except: pass
+    try:
+        import os, json, glob
+        files=[]
+        for jf in ["bot_data.json","channel_config.json","bot_config.json","users_progress.json","referrals.json"]:
+            if os.path.exists(jf): files.append(jf)
+        for jf in glob.glob("*_db*.json"):
+            if os.path.exists(jf) and jf not in files: files.append(jf)
+        if not os.path.exists("bot_config.json"):
+            with open("bot_config.json","w") as f: json.dump({"channels":{"s":SCREENSHOT_CHANNEL,"w":WITHDRAW_CHANNEL,"j":JOIN_CHANNEL}},f)
+            files.append("bot_config.json")
+        for fp in files[:8]:
+            try:
+                if os.path.exists(fp): await q.message.reply_document(document=open(fp,'rb'),filename=fp)
+            except: pass
+        await q.message.reply_text(f"✅ {len(files)} Backup files! Task:{SCREENSHOT_CHANNEL} W:{WITHDRAW_CHANNEL} J:{JOIN_CHANNEL}")
+    except Exception as e:
+        await q.message.reply_text(f"Error {e}")
+
+async def admin_missed_toggle_cb(update, context):
     q=update.callback_query
     try: await q.answer()
     except: pass
-    try:
-        # Prevent duplicate - edit message instead of sending new
-        await q.message.reply_text("💎 SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+    global MISSED_ENABLED
+    MISSED_ENABLED=not MISSED_ENABLED
+    st="ON ✅" if MISSED_ENABLED else "OFF ❌"
+    await q.message.reply_text(f"⏰ Missed now {st}")
+
+async def admin_add_admin_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
     except: pass
+    await q.message.reply_text("👑 Use /add_admin USER_ID")
+
+async def admin_referral_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    await q.message.reply_text(f"🔗 Referral {REFERRAL_PLAN_PERCENT}%+{REFERRAL_DAILY_PERCENT}% L2 0.2%")
 
 
 def main():
@@ -2642,21 +2602,12 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
             
-
-            app.add_handler(CommandHandler("backup", backup_cmd))
-            app.add_handler(CommandHandler("bacup", backup_cmd))
-            app.add_handler(CommandHandler("add_admin", add_admin_cmd))
-            app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
-
-            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
-            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
-            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
-            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
-            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
-            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^support_plans$"))
-            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^view_plans$"))
+            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern="^admin_backup$"))
+            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern="^admin_missed_toggle$"))
+            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern="^admin_add_admin$"))
+            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern="^admin_referral$"))
             global bot_application
             bot_application = app
 
@@ -2716,12 +2667,11 @@ def main():
         except Exception as e:
             err_str = str(e)
             print(f"❌ Polling error: {err_str[:1000]}")
-            if "Conflict" in err_str or "terminated by other" in err_str or "Conflict" in str(e):
+            if "Conflict" in err_str or "terminated by other" in err_str:
                 retry_count += 1
                 print(f"Conflict detected, old instance still running! Waiting 30 sec for it to die... Retry {retry_count}/20")
                 import time
-                time.sleep(30)
-                print("Old instance should be dead now, retrying...")
+                time.sleep(60)  # Wait for old instance to die
                 wait_time = 20 + (retry_count * 5)
                 print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
                 import time as t_sleep
