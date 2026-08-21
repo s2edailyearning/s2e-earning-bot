@@ -15,7 +15,11 @@ def get_ist_time():
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+# Clean duplicate prefix bug
+if BOT_TOKEN.count(":")>=2 and "8819208182:8819208182:" in BOT_TOKEN:
+    BOT_TOKEN = BOT_TOKEN.replace("8819208182:8819208182:", "8819208182:")
+BOT_TOKEN = BOT_TOKEN.strip()
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@s2edayincome")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/s2edayincome")
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
