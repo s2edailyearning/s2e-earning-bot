@@ -3048,9 +3048,20 @@ def main():
     print("="*70)
     print("S2E Bot FINAL V20 - V12 Working + 70 Sec + Manual + Plans - NO NameError")
     print("="*70)
-    print("Waiting 70 sec for old instance to die...")
-    time.sleep(70)
-    print("70 sec done! Deleting webhook 3 times...")
+    print("Waiting 120 sec for old instance to die... Render slow...")
+    time.sleep(120)
+    print("120 sec done! Deleting webhook 5 times with delay...")
+    try:
+        import requests
+        for i in range(5):
+            try:
+                requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                print(f"Webhook delete {i+1}/5")
+                time.sleep(2)
+            except:
+                pass
+    except:
+        pass
     try:
         import httpx
         tok=os.getenv("BOT_TOKEN")
