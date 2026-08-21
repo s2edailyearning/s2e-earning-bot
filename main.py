@@ -316,6 +316,18 @@ def parse_interval_str(interval_str):
         return TASK_COMPLETION_WINDOW_MINUTES
 
 def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=5, image_file_id=None):
+    # ===== DUPLICATE PROTECTION - 2 times bug fix =====
+    import time as _time
+    _now = _time.time()
+    if hasattr(add_scheduled_task_with_interval, '_last_t'):
+        _elapsed = _now - add_scheduled_task_with_interval._last_t
+        _last_title = getattr(add_scheduled_task_with_interval, '_last_title', '')
+        if _elapsed < 8 and _last_title == title and title.strip() != "":
+            print(f"⚠️ Duplicate task blocked (2x bug): {title} in {_elapsed:.1f}s")
+            return False, f"Duplicate - Task already added! Wait 10 sec"
+    add_scheduled_task_with_interval._last_t = _now
+    add_scheduled_task_with_interval._last_title = title
+
     global scheduled_task_counter
     open_time = parse_time_str(open_time_str)
     if not open_time:
@@ -1650,21 +1662,6 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def main():
-    print("🚀 Starting bot with Conflict protection V8 - FINAL WORKING!")
-    # IMPORTANT: Delete webhook first to avoid conflict on Render
-    try:
-        import httpx
-        token = BOT_TOKEN
-        try:
-            httpx.get(f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=True", timeout=10)
-            print("✅ Old webhook deleted - polling can start")
-        except Exception as e:
-            print(f"Webhook delete: {e}")
-    except Exception as e:
-        print(f"Import error: {e}")
-    import time
-    time.sleep(3)
-
     threading.Thread(target=run_flask, daemon=True).start()
     print("🚀 Starting bot with Conflict protection...")
     
@@ -1679,6 +1676,12 @@ def main():
             
             # Register error handler first
             app.add_error_handler(error_handler)
+            try:
+                app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"), group=-1)
+                app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"), group=-1)
+                print("✅ Global Back buttons registered - Back to Admin fixed")
+            except Exception as e:
+                print(f"Global back fix: {e}")
             
             # Register all handlers
             conv_reg = ConversationHandler(
@@ -1721,17 +1724,6 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
-            # GLOBAL COMMANDS - Fix for not responding when in conversation
-            try:
-                app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd), group=-1)
-                app.add_handler(CommandHandler("admin", admin_cmd), group=-1)
-                app.add_handler(CommandHandler("start", start), group=-1)
-                app.add_handler(CommandHandler("menu", menu), group=-1)
-                app.add_handler(CommandHandler("tasks", list_scheduled_tasks_cmd), group=-1)
-                app.add_handler(CommandHandler("cancel", cancel), group=-1)
-                print("✅ Global commands registered")
-            except Exception as e:
-                print(f"Global handler error: {e}")
             app.add_handler(conv_reg)
             app.add_handler(conv_screenshot)
             app.add_handler(conv_skip)
@@ -1797,8 +1789,48 @@ def main():
             except Exception as e:
                 print(f"Notifier error: {e}")
 
+            # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                # Run delete webhook
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
+
             print("✅ Handlers registered, starting polling...")
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+                        # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
+
+            print("✅ Handlers registered, starting polling...")
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES, close_loop=False)
 
             print("✅ Polling ended cleanly")
             break
@@ -1808,6 +1840,9 @@ def main():
             print(f"❌ Polling error: {err_str[:1000]}")
             if "Conflict" in err_str or "terminated by other" in err_str:
                 retry_count += 1
+                print(f"Conflict detected, old instance still running! Waiting 30 sec for it to die... Retry {retry_count}/20")
+                import time
+                time.sleep(30)  # Wait for old instance to die
                 wait_time = 20 + (retry_count * 5)
                 print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
                 import time as t_sleep
