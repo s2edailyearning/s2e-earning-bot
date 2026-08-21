@@ -1,6 +1,3 @@
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='telegram')
-warnings.filterwarnings('ignore', message='.*per_message.*')
 import os, re, threading, json, asyncio
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
@@ -9,6 +6,26 @@ from flask import Flask
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
+
+def keep_alive_pinger():
+    import time, threading
+    url = "https://s2e-earning-bot.onrender.com/"
+    while True:
+        try:
+            time.sleep(240)
+            try:
+                import httpx
+                httpx.get(url, timeout=10)
+                print(f"✅ Keep-alive ping {time.strftime('%H:%M:%S')}")
+            except:
+                import urllib.request
+                urllib.request.urlopen(url, timeout=10)
+                print("✅ Keep-alive ping OK")
+        except Exception as e:
+            print(f"Keep-alive error {e}")
+            time.sleep(60)
+
+
 def get_ist_now():
     return datetime.now(IST)
 def get_ist_today():
@@ -716,66 +733,62 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
         msg += f"👤 {uid} {name} /unban {uid}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
+
 async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("BACK ADMIN CLICKED")
     try:
-        q = update.callback_query
-        if q:
+        if update.callback_query:
             try:
-                await q.answer("Opening Admin...")
+                await update.callback_query.answer()
             except:
                 pass
-        # Call admin - handle both message and callback
         uid = update.effective_user.id
-        if not is_admin(uid):
-            try:
-                await q.edit_message_text(f"❌ Not admin")
-            except:
-                await update.effective_message.reply_text(f"❌ Not admin")
-            return
-        # Build admin panel directly (don't call admin_cmd which expects message)
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         try:
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            total_users = len(users)
-            total_tasks = len(scheduled_tasks_data)
-            active_campaigns = len([t for t in scheduled_tasks_data.values() if True])
-            pending_daily = len([v for v in daily_verifications.values() if v.get('status')=='pending'])
-            pending_wd = len([w for w in withdraw_requests.values() if w.get('status')=='pending'])
-            text = f"👑 ADMIN PANEL\n\n👥 Users: {total_users}\n📋 Tasks: {total_tasks}\n⏳ Pending Daily: {pending_daily}\n💸 Pending WD: {pending_wd}\n\nCommands:\n/add_task open close next title link reward\n/set_task_image <id> - Then send poster!\nExample: /add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\nThen /set_task_image 1 + send TASK 3 poster!\n\n/list_tasks /list_promos /skipped all /warnings /banned"
-            keyboard = [
-                [InlineKeyboardButton(f"📋 Pending Daily ({pending_daily})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({pending_wd})", callback_data="admin_view_withdraw")],
-                [InlineKeyboardButton("📅 Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("📢 Promo Campaigns", callback_data="admin_view_promos")],
-                [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("🚫 Banned List", callback_data="admin_banned")],
-                [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
-            ]
-            markup = InlineKeyboardMarkup(keyboard)
-            if q:
-                try:
-                    await q.edit_message_text(text, reply_markup=markup)
-                except Exception as e:
-                    print(f"Edit admin failed {e}, sending new")
-                    await context.bot.send_message(chat_id=uid, text=text, reply_markup=markup)
-            else:
-                await update.message.reply_text(text, reply_markup=markup)
-        except Exception as e:
-            print(f"back_admin_cb error: {e}")
+            pd = len([v for v in daily_verifications.values() if v.get('status')=='pending'])
+            wd = len([w for w in withdraw_requests.values() if w.get('status')=='pending'])
+        except:
+            pd=0
+            wd=0
+        try:
+            tu = len(users)
+            tt = len(scheduled_tasks_data)
+        except:
+            tu=0
+            tt=0
+        txt = f"👑 ADMIN PANEL\n\n👥 Users: {tu}\n📋 Tasks: {tt}\n⏳ Pending Daily: {pd}\n💸 Pending WD: {wd}\n\n/add_task open close next title link reward"
+        kb = [
+            [InlineKeyboardButton(f"📋 Pending Daily ({pd})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({wd})", callback_data="admin_view_withdraw")],
+            [InlineKeyboardButton("📅 Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("📢 Promo", callback_data="admin_view_promos")],
+            [InlineKeyboardButton("📊 Stats", callback_data="admin_stats"), InlineKeyboardButton("🚫 Banned", callback_data="admin_banned")],
+            [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
+        ]
+        mk = InlineKeyboardMarkup(kb)
+        if update.callback_query:
             try:
-                await context.bot.send_message(chat_id=update.effective_user.id, text="👑 Admin Panel - use /admin")
-            except:
-                pass
+                await update.callback_query.edit_message_text(txt, reply_markup=mk)
+                print("Edited to admin")
+                return
+            except Exception as e:
+                print(f"Edit fail {e}")
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+        print("Sent admin new")
     except Exception as e:
-        print(f"back_admin_cb outer error: {e}")
+        print(f"back_admin error {e}")
+        import traceback; traceback.print_exc()
 
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("BACK MENU CLICKED")
     try:
-        q = update.callback_query
-        if q:
+        if update.callback_query:
             try:
-                await q.answer()
+                await update.callback_query.answer()
             except:
                 pass
         await menu(update, context)
     except Exception as e:
-        print(f"back_menu error: {e}")
+        print(f"back_menu error {e}")
+
 
 
 async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1086,6 +1099,11 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
+    try:
+        threading.Thread(target=keep_alive_pinger, daemon=True).start()
+        print('✅ Keep-alive started')
+    except Exception as e:
+        print(f'Keep-alive start fail {e}')
     print("🚀 Starting bot with Conflict protection...")
     
     retry_count = 0
