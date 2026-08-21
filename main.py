@@ -1133,7 +1133,23 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=target_id, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(target_id)}", reply_markup=main_menu())
         except: pass
 
+# Duplicate update protection for Render double instance
+_processed_updates = set()
+
 async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Block duplicate update_id (when 2 instances process same Telegram update)
+    try:
+        uid_check = update.update_id
+        if uid_check in _processed_updates:
+            print(f"⚠️ Duplicate update_id {uid_check} blocked - Render double instance")
+            return
+        _processed_updates.add(uid_check)
+        # Keep only last 100 ids
+        if len(_processed_updates) > 100:
+            _processed_updates.clear()
+    except:
+        pass
+
     uid = update.effective_user.id
     print(f"📥 /add_task from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
