@@ -10,289 +10,324 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN","").strip()
 SCREENSHOT_CHANNEL = int(os.environ.get("SCREENSHOT_CHANNEL","-1004428587527"))
 WITHDRAW_CHANNEL = int(os.environ.get("WITHDRAW_CHANNEL","-1004319888475"))
 JOIN_CHANNEL = int(os.environ.get("JOIN_CHANNEL","-1004352241439"))
+BACKUP_CHANNEL = int(os.environ.get("BACKUP_CHANNEL","0")) # Private channel for backup, optional
 ADMIN_IDS = [int(x) for x in os.environ.get("ADMIN_IDS","7256515560").split(",") if x.strip().isdigit()]
 
 CONFIG_FILE="bot_config.json"
 USERS_FILE="users_progress.json"
+REFERRAL_FILE="referrals.json"
 
 DAILY_TASKS=[{"id":i,"title":f"Task {i}"} for i in range(1,11)]
 
-PLANS=[
-  {"id":1,"name":"Basic Plan","price":199,"desc":"HD Quality, 1 Device, Basic Support"},
-  {"id":2,"name":"Standard Plan","price":399,"desc":"Full HD, 2 Devices, Priority Support"},
-  {"id":3,"name":"Premium Plan","price":499,"desc":"4K Ultra, 4 Devices, 24/7 Support + Extra Earnings"}
-]
-
-def load_config():
+def load_json(file, default):
   try:
-    if os.path.exists(CONFIG_FILE):
-      with open(CONFIG_FILE) as f: return json.load(f)
+    if os.path.exists(file):
+      with open(file) as f: return json.load(f)
   except: pass
-  return {"missed_enabled":False,"plan_image_file_id":None,"plan_image_url":None}
+  return default
 
-def save_config(c):
+def save_json(file, data):
   try:
-    with open(CONFIG_FILE,"w") as f: json.dump(c,f)
-  except: pass
+    with open(file,"w") as f: json.dump(f,f if False else data)
+    with open(file,"w") as f: json.dump(data,f)
+  except Exception as e:
+    print(f"Save error {e}")
 
-config=load_config()
-
-def load_users():
-  try:
-    if os.path.exists(USERS_FILE):
-      with open(USERS_FILE) as f: return json.load(f)
-  except: pass
-  return {}
-
-def save_users(d):
-  try:
-    with open(USERS_FILE,"w") as f: json.dump(d,f)
-  except: pass
-
-users_data=load_users()
+config=load_json(CONFIG_FILE, {"missed_enabled":False,"plan_image_file_id":None,"admins":ADMIN_IDS})
+users_data=load_json(USERS_FILE, {})
+referrals=load_json(REFERRAL_FILE, {}) # {user_id: {referred_by, level1:[], level2:[], earnings:{l1_plan:0,l1_daily:0,l2:0}}}
 
 def today_str():
-  ist=pytz.timezone("Asia/Kolkata")
-  return datetime.now(ist).strftime("%Y-%m-%d")
+  return datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
 
-def get_completed(uid):
-  return users_data.get(str(uid),{}).get(today_str(),[])
-
+def get_completed(uid): return users_data.get(str(uid),{}).get(today_str(),[])
 def set_completed(uid,tid):
   s=str(uid); t=today_str()
   if s not in users_data: users_data[s]={}
   if t not in users_data[s]: users_data[s][t]=[]
   if tid not in users_data[s][t]: users_data[s][t].append(tid)
-  save_users(users_data)
+  save_json(USERS_FILE, users_data)
 
 def get_missed(uid):
   comp=get_completed(uid)
   return [t["id"] for t in DAILY_TASKS if t["id"] not in comp]
 
-def is_missed_active():
-  return config.get("missed_enabled",False)
+def is_missed_active(): return config.get("missed_enabled",False)
+
+def is_admin(uid):
+  admins=config.get("admins",ADMIN_IDS)
+  return uid in admins or uid in ADMIN_IDS
+
+def add_referral(new_user_id, referrer_id):
+  if new_user_id==referrer_id: return
+  new_s=str(new_user_id); ref_s=str(referrer_id)
+  if new_s in referrals: return # already has referrer
+  # Level 1
+  referrals[new_s]={"referred_by":ref_s, "level1":[], "level2":[], "joined":today_str()}
+  if ref_s not in referrals:
+    referrals[ref_s]={"referred_by":None,"level1":[],"level2":[],"joined":today_str(),"earnings":{"l1_plan":0,"l1_daily":0,"l2":0}}
+  if "earnings" not in referrals[ref_s]:
+    referrals[ref_s]["earnings"]={"l1_plan":0,"l1_daily":0,"l2":0}
+  if new_s not in referrals[ref_s]["level1"]:
+    referrals[ref_s]["level1"].append(new_s)
+  # Level 2 - referrer's referrer gets level2
+  level1_referrer = referrals[ref_s].get("referred_by")
+  if level1_referrer:
+    l2_s=str(level1_referrer)
+    if l2_s not in referrals:
+      referrals[l2_s]={"referred_by":None,"level1":[],"level2":[],"joined":today_str(),"earnings":{"l1_plan":0,"l1_daily":0,"l2":0}}
+    if "earnings" not in referrals[l2_s]:
+      referrals[l2_s]["earnings"]={"l1_plan":0,"l1_daily":0,"l2":0}
+    if new_s not in referrals[l2_s]["level2"]:
+      referrals[l2_s]["level2"].append(new_s)
+  save_json(REFERRAL_FILE, referrals)
+
+def add_commission(user_id, type_, amount):
+  # type_: plan_purchase, daily_work
+  s=str(user_id)
+  if s not in referrals: return
+  ref_by=referrals[s].get("referred_by")
+  if not ref_by: return
+  ref_s=str(ref_by)
+  if ref_s not in referrals: return
+  if "earnings" not in referrals[ref_s]:
+    referrals[ref_s]["earnings"]={"l1_plan":0,"l1_daily":0,"l2":0}
+  if type_=="plan_purchase":
+    # 10% to level1
+    comm=amount*0.10
+    referrals[ref_s]["earnings"]["l1_plan"]+=comm
+    # 0.2% to level2 if exists
+    l2=referrals[ref_s].get("referred_by")
+    if l2:
+      l2_s=str(l2)
+      if l2_s in referrals:
+        if "earnings" not in referrals[l2_s]:
+          referrals[l2_s]["earnings"]={"l1_plan":0,"l1_daily":0,"l2":0}
+        referrals[l2_s]["earnings"]["l2"]+=amount*0.002
+  elif type_=="daily_work":
+    # 2% to level1
+    comm=amount*0.02
+    referrals[ref_s]["earnings"]["l1_daily"]+=comm
+    l2=referrals[ref_s].get("referred_by")
+    if l2:
+      l2_s=str(l2)
+      if l2_s in referrals:
+        if "earnings" not in referrals[l2_s]:
+          referrals[l2_s]["earnings"]={"l1_plan":0,"l1_daily":0,"l2":0}
+        referrals[l2_s]["earnings"]["l2"]+=amount*0.002
+  save_json(REFERRAL_FILE, referrals)
 
 logging.basicConfig(level=logging.INFO)
 app_flask=Flask(__name__)
 @app_flask.route('/')
-def home(): return "S2E V33 Live"
+def home(): return f"S2E V34 Backup+Referral Live Admins:{config.get('admins')}"
 
 def run_flask():
   port=int(os.environ.get("PORT",10000))
   app_flask.run(host="0.0.0.0",port=port)
 
-def is_admin(uid): return uid in ADMIN_IDS
-
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def start(update:Update, context:ContextTypes.DEFAULT_TYPE):
   uid=update.effective_user.id
+  # Referral handling
+  if context.args and len(context.args)>0:
+    ref_code=context.args[0]
+    if ref_code.startswith("ref_"):
+      try:
+        referrer_id=int(ref_code.replace("ref_",""))
+        if referrer_id!=uid:
+          add_referral(uid, referrer_id)
+          try:
+            await context.bot.send_message(referrer_id, f"🎉 New Referral! User {uid} joined via your link!\nLevel 1 count: {len(referrals.get(str(referrer_id),{}).get('level1',[]))}")
+          except: pass
+      except: pass
+
   if is_admin(uid):
     kb=[
       [InlineKeyboardButton("📋 Tasks",callback_data="user_tasks"), InlineKeyboardButton("⚠️ Missed ON/OFF",callback_data="toggle_missed")],
-      [InlineKeyboardButton("💎 Supporting Plans",callback_data="supporting_plans"), InlineKeyboardButton("🖼️ Upload Plan Image",callback_data="upload_plan_image")],
-      [InlineKeyboardButton("📡 Channels",callback_data="channels"), InlineKeyboardButton("📊 Missed Status",callback_data="missed_status")]
+      [InlineKeyboardButton("💎 Plans",callback_data="supporting_plans"), InlineKeyboardButton("🖼️ Upload Plan Img",callback_data="upload_plan_image")],
+      [InlineKeyboardButton("📡 Channels",callback_data="channels"), InlineKeyboardButton("📊 Missed Status",callback_data="missed_status")],
+      [InlineKeyboardButton("💾 Backup",callback_data="backup"), InlineKeyboardButton("👥 Referral Stats",callback_data="referral_stats")],
+      [InlineKeyboardButton("➕ Add Admin",callback_data="add_admin"), InlineKeyboardButton("📋 All Admins",callback_data="list_admins")]
     ]
-    await update.message.reply_text(
-      f"S2E Admin V33\nMissed Manual: {'✅ ON' if is_missed_active() else '❌ OFF'}\nPlan Image: {'✅ Set' if config.get('plan_image_file_id') else '❌ Not Set'}\n\nCommands:\n/enable_missed /disable_missed\n/tasks /missed\n/supporting_plans",
-      reply_markup=InlineKeyboardMarkup(kb))
+    text=f"S2E Admin V34\nMissed: {'ON' if is_missed_active() else 'OFF'}\nPlan Img: {'Set' if config.get('plan_image_file_id') else 'Not Set'}\nTotal Users: {len(users_data)}\nTotal Referrals: {len(referrals)}\nAdmins: {config.get('admins')}\n\nBackup: /backup, /restore\nAdd Admin: /add_admin USER_ID\nReferral: /referral_stats"
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
   else:
-    await show_main_menu(update,context,True)
+    # Normal user menu
+    ref_link=f"https://t.me/{context.bot.username}?start=ref_{uid}"
+    kb=[
+      [InlineKeyboardButton("📋 Tasks",callback_data="user_tasks")],
+      [InlineKeyboardButton("💎 Supporting Plans",callback_data="supporting_plans")],
+      [InlineKeyboardButton("👥 My Referrals",callback_data="my_referrals"), InlineKeyboardButton("🔗 My Invite Link",callback_data="my_link")],
+      [InlineKeyboardButton("⚠️ My Missed",callback_data="my_missed")]
+    ]
+    await update.message.reply_text(f"Welcome! 🚀\nYour Invite: {ref_link}\n\nShare & Earn: L1 10% Plan + 2% Daily, L2 0.2%", reply_markup=InlineKeyboardMarkup(kb))
 
-async def show_main_menu(update,context,is_start=False):
-  kb=[
-    [InlineKeyboardButton("📋 Today's Tasks",callback_data="user_tasks")],
-    [InlineKeyboardButton("💎 Supporting Plans",callback_data="supporting_plans")],
-    [InlineKeyboardButton("⚠️ My Missed Tasks",callback_data="my_missed")]
-  ]
-  text="Welcome to S2E Daily Earning Bot! 🚀"
-  if is_start or update.message:
-    await update.message.reply_text(text,reply_markup=InlineKeyboardMarkup(kb))
-  else:
-    await update.callback_query.edit_message_text(text,reply_markup=InlineKeyboardMarkup(kb))
-
-async def show_tasks(update,context,is_start=False):
-  uid=update.effective_user.id if update.effective_user else update.callback_query.from_user.id
-  completed=get_completed(uid)
-  missed=get_missed(uid)
-  active=is_missed_active()
-  text=f"Today: {today_str()}\nDone: {len(completed)}/{len(DAILY_TASKS)}\n"
-  if missed and active:
-    text+=f"\n⚠️ YOU MISSED {len(missed)} TASKS! 🔔\nMissed: {missed}\nComplete before 11:59 PM!\n"
-  buttons=[]
-  for task in DAILY_TASKS:
-    tid=task["id"]
-    done="✅" if tid in completed else "❌"
-    hl="🔥 " if (tid in missed and active) else ""
-    buttons.append([InlineKeyboardButton(f"{hl}{done} {task['title']}",callback_data=f"task_{tid}")])
-  if missed and active:
-    buttons.append([InlineKeyboardButton(f"🔔 Only Missed ({len(missed)})",callback_data="view_missed")])
-  buttons.append([InlineKeyboardButton("⬅️ Back",callback_data="main_menu")])
-  markup=InlineKeyboardMarkup(buttons)
-  if is_start or (hasattr(update,'message') and update.message):
-    await update.message.reply_text(text,reply_markup=markup)
-  else:
-    await update.callback_query.edit_message_text(text,reply_markup=markup)
-
-async def show_supporting_plans(update,context):
-  # Show image if set
-  img_id=config.get("plan_image_file_id")
-  caption="💎 *S2E Supporting Plans - Comparison*\n\n"
-  caption+="OTT laga clear difference:\n"
-  for p in PLANS:
-    caption+=f"\n*{p['name']} - ₹{p['price']}*\n{p['desc']}\n"
-  caption+="\n👇 Select your plan:"
-  buttons=[]
-  for p in PLANS:
-    buttons.append([InlineKeyboardButton(f"💎 {p['name']} - ₹{p['price']}",callback_data=f"select_plan_{p['id']}")])
-  buttons.append([InlineKeyboardButton("⬅️ Back",callback_data="main_menu")])
-  markup=InlineKeyboardMarkup(buttons)
-  try:
-    if img_id:
-      if hasattr(update,'callback_query') and update.callback_query:
-        await update.callback_query.message.reply_photo(photo=img_id,caption=caption,reply_markup=markup,parse_mode="Markdown")
-      else:
-        await update.message.reply_photo(photo=img_id,caption=caption,reply_markup=markup,parse_mode="Markdown")
-    else:
-      # No image set - send text + placeholder info
-      caption+="\n\n⚠️ Admin has not uploaded comparison image yet"
-      if hasattr(update,'callback_query') and update.callback_query:
-        await update.callback_query.edit_message_text(caption,reply_markup=markup,parse_mode="Markdown")
-      else:
-        await update.message.reply_text(caption,reply_markup=markup,parse_mode="Markdown")
-  except Exception as e:
-    print(e)
-    if hasattr(update,'callback_query') and update.callback_query:
-      await update.callback_query.edit_message_text(caption,reply_markup=markup,parse_mode="Markdown")
-    else:
-      await update.message.reply_text(caption,reply_markup=markup,parse_mode="Markdown")
-
-async def button_handler(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def button_handler(update:Update, context:ContextTypes.DEFAULT_TYPE):
   query=update.callback_query
   await query.answer()
   data=query.data
   uid=query.from_user.id
-
+  if data=="user_tasks":
+    # simple tasks view
+    comp=get_completed(uid); missed=get_missed(uid)
+    text=f"Today {today_str()} Done {len(comp)}/10\nMissed: {missed} Active:{is_missed_active()}"
+    btns=[[InlineKeyboardButton(f"{'✅' if i in comp else '❌'} Task {i}",callback_data=f"task_{i}")] for i in range(1,11)]
+    btns.append([InlineKeyboardButton("Back",callback_data="main_menu")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(btns))
+    return
   if data.startswith("task_"):
     tid=int(data.split("_")[1])
     if tid not in get_completed(uid):
       set_completed(uid,tid)
-      try:
-        await context.bot.send_message(SCREENSHOT_CHANNEL,f"✅ Task Done User:{uid} Task:{tid} {'(MISSED RECOVERY)' if is_missed_active() else ''}")
-      except: pass
-      await query.answer(f"Task {tid} Done!")
-    await show_tasks(update,context,False)
+      add_commission(uid,"daily_work",10) # example daily earning 10rs
+    await query.answer("Done!")
     return
-
-  if data=="view_missed":
-    missed=get_missed(uid)
-    text=f"🔔 Missed {len(missed)} Tasks\n"
-    buttons=[]
-    for tid in missed:
-      buttons.append([InlineKeyboardButton(f"🔥 Do Task {tid}",callback_data=f"task_{tid}")])
-    buttons.append([InlineKeyboardButton("Back",callback_data="user_tasks")])
-    await query.edit_message_text(text,reply_markup=InlineKeyboardMarkup(buttons))
-    return
-
-  if data=="user_tasks":
-    await show_tasks(update,context,False); return
   if data=="main_menu":
-    await show_main_menu(update,context,False); return
-  if data=="my_missed":
-    missed=get_missed(uid)
-    if not missed: await query.edit_message_text("🎉 No missed!",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back",callback_data="main_menu")]])); return
-    text=f"⚠️ You missed {len(missed)}: {missed}\n"
-    text+="🔥 Can complete NOW!" if is_missed_active() else "⏰ Admin will enable after 7PM"
-    await query.edit_message_text(text,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("View Tasks",callback_data="user_tasks")],[InlineKeyboardButton("Back",callback_data="main_menu")]]))
+    await start(update,context)
     return
-
   if data=="supporting_plans":
-    await show_supporting_plans(update,context); return
-
-  if data.startswith("select_plan_"):
-    pid=int(data.split("_")[2])
-    plan=next((p for p in PLANS if p["id"]==pid),None)
-    if plan:
-      await query.edit_message_text(f"✅ You selected {plan['name']} - ₹{plan['price']}\n\nOur team will contact you.\nContact admin for payment.",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Plans",callback_data="supporting_plans")]]))
+    img=config.get("plan_image_file_id")
+    cap="💎 Plans: Basic 199 (HD), Standard 399 (FHD), Premium 499 (4K + Extra)\nL1: 10% Plan + 2% Daily, L2: 0.2%"
+    btns=[[InlineKeyboardButton(f"Buy {p}",callback_data=f"buy_{p}")] for p in ["Basic_199","Standard_399","Premium_499"]]
+    btns.append([InlineKeyboardButton("Back",callback_data="main_menu")])
+    if img:
       try:
-        await context.bot.send_message(JOIN_CHANNEL,f"💎 Plan Selected User:{uid} {query.from_user.first_name} Plan:{plan['name']} ₹{plan['price']}")
+        await query.message.reply_photo(photo=img,caption=cap,reply_markup=InlineKeyboardMarkup(btns))
+        return
       except: pass
+    await query.edit_message_text(cap, reply_markup=InlineKeyboardMarkup(btns))
     return
-
+  if data.startswith("buy_"):
+    plan=data.replace("buy_","")
+    price=int(plan.split("_")[-1])
+    add_commission(uid,"plan_purchase",price)
+    await query.edit_message_text(f"✅ Selected {plan}. Admin will contact.\nYour referrer gets commission!")
+    return
+  if data=="my_referrals":
+    r=referrals.get(str(uid),{})
+    l1=len(r.get("level1",[])); l2=len(r.get("level2",[]))
+    earn=r.get("earnings",{"l1_plan":0,"l1_daily":0,"l2":0})
+    text=f"👥 Your Referrals\nL1 (Direct): {l1} users - 10% plan + 2% daily\nL2 (Indirect): {l2} users - 0.2%\n\nEarnings:\nL1 Plan: ₹{earn.get('l1_plan',0):.2f}\nL1 Daily: ₹{earn.get('l1_daily',0):.2f}\nL2: ₹{earn.get('l2',0):.2f}"
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back",callback_data="main_menu")]]))
+    return
+  if data=="my_link":
+    link=f"https://t.me/{context.bot.username}?start=ref_{uid}"
+    await query.edit_message_text(f"🔗 Your Invite Link:\n{link}\n\nShare in WhatsApp/Telegram. L1 10% + 2%, L2 0.2%", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back",callback_data="main_menu")]]))
+    return
+  if data=="my_missed":
+    m=get_missed(uid)
+    await query.edit_message_text(f"Missed: {m} Active:{is_missed_active()}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back",callback_data="main_menu")]]))
+    return
   if not is_admin(uid): return
-
+  # Admin only
   if data=="toggle_missed":
     config["missed_enabled"]=not config.get("missed_enabled",False)
-    save_config(config)
-    await query.edit_message_text(f"{'✅ Missed ON' if config['missed_enabled'] else '❌ Missed OFF'} - Users {'see' if config['missed_enabled'] else 'dont see'} highlight now")
+    save_json(CONFIG_FILE,config)
+    await query.edit_message_text(f"Missed {'ON' if config['missed_enabled'] else 'OFF'}")
     return
   if data=="upload_plan_image":
-    await query.edit_message_text("🖼️ Send the comparison image now as PHOTO with caption /set_plan_image\n\nExample: OTT style image showing 199 vs 499 difference\nSend photo now!")
+    await query.edit_message_text("Send photo with caption /set_plan_image")
     return
   if data=="channels":
-    await query.edit_message_text(f"Channels Screenshot:{SCREENSHOT_CHANNEL} ✅ Withdraw:{WITHDRAW_CHANNEL} ✅ Join:{JOIN_CHANNEL} ✅")
+    await query.edit_message_text(f"Channels S:{SCREENSHOT_CHANNEL} W:{WITHDRAW_CHANNEL} J:{JOIN_CHANNEL}")
     return
   if data=="missed_status":
-    msg=f"Missed Status Today {today_str()} Active:{is_missed_active()}\n"
+    msg=f"Missed {today_str()} Active:{is_missed_active()}\n"
     for u,d in users_data.items():
       miss=[t for t in range(1,11) if t not in d.get(today_str(),[])]
-      if miss: msg+=f"User {u}: {miss}\n"
-    await query.edit_message_text(msg); return
+      if miss: msg+=f"{u}:{miss}\n"
+    await query.edit_message_text(msg[:4000])
+    return
+  if data=="backup":
+    # send backup files
+    try:
+      await query.message.reply_document(document=open(USERS_FILE,'rb') if os.path.exists(USERS_FILE) else json.dumps(users_data).encode(), filename="users_progress.json", caption="Backup Users")
+      await query.message.reply_document(document=open(REFERRAL_FILE,'rb') if os.path.exists(REFERRAL_FILE) else json.dumps(referrals).encode(), filename="referrals.json", caption="Backup Referrals")
+      await query.message.reply_document(document=open(CONFIG_FILE,'rb'), filename="bot_config.json", caption="Backup Config")
+      await query.edit_message_text("✅ Backup sent as files. Save in Google Drive!")
+    except Exception as e:
+      await query.edit_message_text(f"Backup error {e}")
+    return
+  if data=="referral_stats":
+    total_l1=sum(len(v.get("level1",[])) for v in referrals.values())
+    total_l2=sum(len(v.get("level2",[])) for v in referrals.values())
+    text=f"📊 Referral Stats Total Users:{len(referrals)} L1:{total_l1} L2:{total_l2}\n\nTop Referrers:\n"
+    sorted_ref=sorted(referrals.items(), key=lambda x: len(x[1].get("level1",[])), reverse=True)[:10]
+    for uid_s, val in sorted_ref:
+      text+=f"{uid_s}: L1 {len(val.get('level1',[]))} L2 {len(val.get('level2',[]))}\n"
+    await query.edit_message_text(text[:4000])
+    return
+  if data=="add_admin":
+    await query.edit_message_text("Use /add_admin USER_ID - Example: /add_admin 123456789")
+    return
+  if data=="list_admins":
+    await query.edit_message_text(f"Admins: {config.get('admins', ADMIN_IDS)}")
+    return
 
-async def photo_handler(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def photo_handler(update:Update, context:ContextTypes.DEFAULT_TYPE):
   if not is_admin(update.effective_user.id): return
-  # Check if caption has /set_plan_image
-  caption=update.message.caption or ""
-  if "/set_plan_image" in caption or "plan" in caption.lower():
+  cap=update.message.caption or ""
+  if "/set_plan_image" in cap or "plan" in cap.lower():
     file_id=update.message.photo[-1].file_id
     config["plan_image_file_id"]=file_id
-    save_config(config)
-    await update.message.reply_text(f"✅ Plan comparison image saved! File ID: {file_id[:20]}...\nNow when users click Supporting Plans, this image will show.")
-    # Preview
-    await update.message.reply_photo(photo=file_id,caption="✅ This is how users will see - Supporting Plans Comparison")
-  else:
-    # Screenshot submission flow can be here
-    pass
+    save_json(CONFIG_FILE,config)
+    await update.message.reply_text("✅ Plan image saved!")
+    await update.message.reply_photo(photo=file_id, caption="Users will see this")
 
-async def tasks_cmd(update,context): await show_tasks(update,context,True)
-async def missed_cmd(update,context):
-  uid=update.effective_user.id; m=get_missed(uid)
-  if not m: await update.message.reply_text("🎉 No missed!"); return
-  await update.message.reply_text(f"Missed: {m} {'Can do NOW!' if is_missed_active() else 'Wait for admin 7PM enable'}")
-
-async def enable_missed_cmd(update,context):
+async def backup_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
   if not is_admin(update.effective_user.id): return
-  config["missed_enabled"]=True; save_config(config)
-  await update.message.reply_text("✅ Manual Missed ON - Users see highlight")
+  try:
+    await update.message.reply_document(document=open(USERS_FILE,'rb') if os.path.exists(USERS_FILE) else json.dumps(users_data).encode(), filename="users_progress.json")
+    await update.message.reply_document(document=open(REFERRAL_FILE,'rb') if os.path.exists(REFERRAL_FILE) else json.dumps(referrals).encode(), filename="referrals.json")
+    await update.message.reply_document(document=open(CONFIG_FILE,'rb'), filename="bot_config.json")
+    await update.message.reply_text("✅ Backup files - Save to Drive. If bot deleted, upload these to new bot deployment.")
+  except Exception as e:
+    await update.message.reply_text(f"Backup error {e}")
 
-async def disable_missed_cmd(update,context):
+async def add_admin_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
   if not is_admin(update.effective_user.id): return
-  config["missed_enabled"]=False; save_config(config)
-  await update.message.reply_text("❌ Missed OFF")
+  if not context.args:
+    await update.message.reply_text("Usage: /add_admin USER_ID")
+    return
+  try:
+    new_id=int(context.args[0])
+    admins=config.get("admins",ADMIN_IDS.copy())
+    if new_id not in admins:
+      admins.append(new_id)
+      config["admins"]=admins
+      save_json(CONFIG_FILE,config)
+      await update.message.reply_text(f"✅ Admin added: {new_id}. Now if one admin blocked, other can control. Total admins: {admins}")
+    else:
+      await update.message.reply_text("Already admin")
+  except Exception as e:
+    await update.message.reply_text(f"Error {e}")
 
-async def supporting_plans_cmd(update,context): await show_supporting_plans(update,context)
-
-async def set_plan_image_cmd(update,context):
+async def set_plan_image_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
   if not is_admin(update.effective_user.id): return
-  await update.message.reply_text("🖼️ Send a PHOTO with caption /set_plan_image\nI will save it as comparison image")
+  await update.message.reply_text("Send photo with caption /set_plan_image")
 
-async def channels_status(update,context):
+async def channels_status(update:Update, context:ContextTypes.DEFAULT_TYPE):
   if not is_admin(update.effective_user.id): return
-  await update.message.reply_text(f"📡 V33 Channels ✅\nScreenshot:{SCREENSHOT_CHANNEL}\nWithdraw:{WITHDRAW_CHANNEL}\nJoin:{JOIN_CHANNEL}\nMissed:{'ON' if is_missed_active() else 'OFF'}\nPlanImg:{'Set' if config.get('plan_image_file_id') else 'Not Set'}")
+  await update.message.reply_text(f"V34 Backup+Referral\nS:{SCREENSHOT_CHANNEL} W:{WITHDRAW_CHANNEL} J:{JOIN_CHANNEL}\nAdmins:{config.get('admins')}\nUsers:{len(users_data)} Ref:{len(referrals)}")
+
+async def referral_stats_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
+  if not is_admin(update.effective_user.id): return
+  await update.message.reply_text(f"Total referral users {len(referrals)}")
 
 def main():
   if not BOT_TOKEN: print("TOKEN missing"); return
   threading.Thread(target=run_flask,daemon=True).start()
   app=ApplicationBuilder().token(BOT_TOKEN).build()
   app.add_handler(CommandHandler("start",start))
-  app.add_handler(CommandHandler("tasks",tasks_cmd))
-  app.add_handler(CommandHandler("missed",missed_cmd))
-  app.add_handler(CommandHandler("enable_missed",enable_missed_cmd))
-  app.add_handler(CommandHandler("disable_missed",disable_missed_cmd))
-  app.add_handler(CommandHandler("supporting_plans",supporting_plans_cmd))
+  app.add_handler(CommandHandler("backup",backup_cmd))
+  app.add_handler(CommandHandler("add_admin",add_admin_cmd))
   app.add_handler(CommandHandler("set_plan_image",set_plan_image_cmd))
   app.add_handler(CommandHandler("channels_status",channels_status))
-  app.add_handler(MessageHandler(filters.PHOTO,photo_handler))
+  app.add_handler(CommandHandler("referral_stats",referral_stats_cmd))
+  app.add_handler(CommandHandler("enable_missed", lambda u,c: (config.__setitem__("missed_enabled",True), save_json(CONFIG_FILE,config), c.bot.send_message(u.effective_chat.id,"ON"))[-1]))
+  app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
   app.add_handler(CallbackQueryHandler(button_handler))
-  print("V33 Starting")
+  print("V34 Starting")
   app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__": main()
