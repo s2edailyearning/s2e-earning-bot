@@ -18,9 +18,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004428587527")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004295034675")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
-SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004428587527"))
+SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004295034675"))
 WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
 JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
@@ -2475,11 +2475,38 @@ async def referral_stats_cmd(update, context):
         await update.message.reply_text(f"Error {e}")
 
 
-async def admin_backup_cb(update, context):
+async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
     try:
-        await update.callback_query.answer()
-        await backup_cmd(update.effective_message, context)
-    except: pass
+        await q.answer("Preparing backup...")
+    except:
+        pass
+    try:
+        import os, json, glob
+        files=[]
+        for jf in ["bot_data.json","channel_config.json","bot_config.json","users_progress.json","referrals.json"]:
+            if os.path.exists(jf): files.append(jf)
+        for jf in glob.glob("*_db*.json"):
+            if os.path.exists(jf) and jf not in files: files.append(jf)
+        if not os.path.exists("bot_config.json"):
+            with open("bot_config.json","w") as f:
+                json.dump({"channels":{"s":SCREENSHOT_CHANNEL,"w":WITHDRAW_CHANNEL,"j":JOIN_CHANNEL}},f)
+            files.append("bot_config.json")
+        sent=0
+        for fp in files[:8]:
+            try:
+                if os.path.exists(fp):
+                    await q.message.reply_document(document=open(fp,"rb"),filename=fp)
+                    sent+=1
+            except Exception as e:
+                print(e)
+        await q.message.reply_text(f"✅ {sent} Backup files! S:{SCREENSHOT_CHANNEL} W:{WITHDRAW_CHANNEL} J:{JOIN_CHANNEL}")
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"Backup err {e}")
+        except:
+            pass
+
 async def admin_add_admin_cb(update, context):
     try:
         await update.callback_query.answer()
@@ -2499,15 +2526,15 @@ async def admin_missed_toggle_cb(update, context):
     except: pass
 
 
-async def channels_status_cmd(update, context):
+async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels Status\nChannel: {CHANNEL_ID}\nLink: {CHANNEL_LINK}\nActive: Yes\nUse /channels_list to see all")
+        await update.message.reply_text(f"📢 Channels Status\nTask: {SCREENSHOT_CHANNEL}\nWithdraw: {WITHDRAW_CHANNEL}\nJoin: {JOIN_CHANNEL}\nActive: Yes Total:3")
     except Exception as e:
         print(e)
 
-async def channels_list_cmd(update, context):
+async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels List\n1. Main: {CHANNEL_ID} - {CHANNEL_LINK}\nTotal: 1")
+        await update.message.reply_text(f"📢 Channels List - 3 Channels\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3\nLink: https://t.me/S2E_Daily_Earning")
     except Exception as e:
         print(e)
 
