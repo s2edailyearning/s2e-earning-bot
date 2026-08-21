@@ -1,6 +1,4 @@
 import os, re, threading, json, asyncio
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
