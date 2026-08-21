@@ -25,7 +25,7 @@ CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/s2edayincome")
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
 
-ADMIN_ID_LIST = [7256515560, 8544307598]
+ADMIN_ID_LIST = [7256515560]  # MAIN ADMIN ONLY - add second admin only if needed
 _env = os.getenv("ADMIN_IDS") or ""
 if _env:
     for x in _env.replace(",", " ").split():
@@ -576,7 +576,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("You are not admin!")
+        await update.message.reply_text(f"❌ You are not admin!\nYour ID: {update.effective_user.id}\nOnly admin can use /admin")
         return
     active_promos = len(get_active_promo_campaigns())
     total_views = sum(c['total_views'] for c in promo_campaigns_db)
@@ -1533,6 +1533,80 @@ async def handle_upi_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ UPI Updated: {new_upi}\n\nNow confirm withdraw:\nAmount: Rs{amount} Net: Rs{net} UPI: {new_upi}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")]]))
 
 
+
+async def set_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID: {uid}")
+        return
+    # Format: /set_tasks user_id count  OR /set_tasks 15 (for self)
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage:\n/set_tasks <user_id> <count>  OR\n/set_tasks <count> for yourself\nExample: /set_tasks 8544307598 15  OR  /set_tasks 15")
+        return
+    try:
+        if len(args) == 1:
+            target_id = uid
+            count = int(args[0])
+        else:
+            target_id = int(args[0])
+            count = int(args[1])
+        tasks_db[target_id] = count
+        await update.message.reply_text(f"✅ Tasks set!\nUser {target_id} Tasks = {count}\nNow {count}/{TASKS_REQUIRED_FOR_WITHDRAW} completed! Withdraw eligible if balance >= {WITHDRAW_MIN}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def set_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text(f"❌ Not admin! Your ID: {uid}")
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage:\n/set_balance <user_id> <amount>  OR\n/set_balance <amount> for yourself\nExample: /set_balance 8544307598 400")
+        return
+    try:
+        if len(args) == 1:
+            target_id = uid
+            amount = int(args[0])
+        else:
+            target_id = int(args[0])
+            amount = int(args[1])
+        # Balance = tasks*5 + bonus + referral + promo. So we set bonus_balance to achieve desired total
+        # Simplest: set bonus_balance = amount - (tasks*5 + other earnings)
+        current_tasks = tasks_db.get(target_id,0)
+        current_other = referral_earnings.get(target_id,0) + promo_earnings_db.get(target_id,0)
+        current_from_tasks = current_tasks * 5
+        needed_bonus = amount - current_from_tasks - current_other
+        if needed_bonus < 0:
+            needed_bonus = amount  # fallback set bonus directly and reset tasks earning calc
+            # For test, just set bonus_balance to amount directly by overriding get_balance logic? We'll set bonus_balance = amount
+            bonus_balance[target_id] = amount
+        else:
+            bonus_balance[target_id] = needed_bonus
+        await update.message.reply_text(f"✅ Balance set!\nUser {target_id}\nTasks: {current_tasks} (Rs{current_tasks*5})\nBonus set: Rs{bonus_balance.get(target_id,0)}\nTotal Balance: Rs{get_balance(target_id)}\n\nNow check Withdraw!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def test_withdraw_setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return
+    args = context.args
+    target_id = uid
+    if args and args[0].isdigit():
+        target_id = int(args[0])
+    tasks_db[target_id] = 15
+    bonus_balance[target_id] = 325  # 15*5=75 + 325 = 400
+    # Ensure user has UPI
+    if target_id not in users_db:
+        users_db[target_id] = {'name': 'TestUser', 'upi': 'test@ybl'}
+    elif 'upi' not in users_db[target_id]:
+        users_db[target_id]['upi'] = 'test@ybl'
+    bal = get_balance(target_id)
+    await update.message.reply_text(f"✅ TEST SETUP DONE!\nUser {target_id}\nTasks: 15/15 ✅\nBalance: Rs{bal} (Target 400)\nUPI: {users_db[target_id].get('upi')}\n\nNow go to /menu -> Withdraw -> You will see 200,300 options! Select and test flow!")
+
+
 def main():
     import os
     print("🚀 Starting bot in WEBHOOK mode - Fixed v2...")
@@ -1584,6 +1658,9 @@ def main():
     application.add_handler(conv_skip)
     application.add_handler(conv_set_image)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_upi_edit))
+    application.add_handler(CommandHandler("set_tasks", set_tasks_cmd))
+    application.add_handler(CommandHandler("set_balance", set_balance_cmd))
+    application.add_handler(CommandHandler("test_withdraw", test_withdraw_setup_cmd))
     application.add_handler(CommandHandler("menu", menu))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("pending", pending_cmd))
