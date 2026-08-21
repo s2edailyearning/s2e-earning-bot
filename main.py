@@ -1,5 +1,5 @@
 
-import os, json, logging, threading
+import os, json, logging, threading, time
 from datetime import datetime
 import pytz
 from flask import Flask
@@ -315,6 +315,9 @@ async def referral_stats_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text(f"Total referral users {len(referrals)}")
 
 def main():
+    print("Waiting 15 sec for old instance to shutdown...")
+    time.sleep(15)  # Old instance off avvadam kosam wait
+    # tarvata polling start
   if not BOT_TOKEN: print("TOKEN missing"); return
   threading.Thread(target=run_flask,daemon=True).start()
   app=ApplicationBuilder().token(BOT_TOKEN).build()
@@ -328,6 +331,6 @@ def main():
   app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
   app.add_handler(CallbackQueryHandler(button_handler))
   print("V34 Starting")
-  app.run_polling(drop_pending_updates=True)
+  app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__=="__main__": main()
