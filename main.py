@@ -1650,7 +1650,7 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def main():
-    print("🚀 Starting bot V11 ULTRA STABLE - Keep-alive + Global Commands!")
+    print("🚀 Starting bot with Conflict protection V8 - FINAL WORKING!")
     # IMPORTANT: Delete webhook first to avoid conflict on Render
     try:
         import httpx
@@ -1666,8 +1666,6 @@ def main():
     time.sleep(3)
 
     threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=keep_alive_pinger, daemon=True).start()
-    print("✅ Flask + Keep-alive pinger started")
     print("🚀 Starting bot with Conflict protection...")
     
     retry_count = 0
@@ -1723,13 +1721,17 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
-            # GLOBAL COMMANDS - Always work even in conversation
-            app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd), group=-1)
-            app.add_handler(CommandHandler("admin", admin_cmd), group=-1)
-            app.add_handler(CommandHandler("start", start), group=-1)
-            app.add_handler(CommandHandler("menu", menu), group=-1)
-            app.add_handler(CommandHandler("tasks", list_scheduled_tasks_cmd), group=-1)
-            app.add_handler(CommandHandler("cancel", cancel), group=-1)
+            # GLOBAL COMMANDS - Fix for not responding when in conversation
+            try:
+                app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd), group=-1)
+                app.add_handler(CommandHandler("admin", admin_cmd), group=-1)
+                app.add_handler(CommandHandler("start", start), group=-1)
+                app.add_handler(CommandHandler("menu", menu), group=-1)
+                app.add_handler(CommandHandler("tasks", list_scheduled_tasks_cmd), group=-1)
+                app.add_handler(CommandHandler("cancel", cancel), group=-1)
+                print("✅ Global commands registered")
+            except Exception as e:
+                print(f"Global handler error: {e}")
             app.add_handler(conv_reg)
             app.add_handler(conv_screenshot)
             app.add_handler(conv_skip)
@@ -1802,8 +1804,6 @@ def main():
             break
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
             err_str = str(e)
             print(f"❌ Polling error: {err_str[:1000]}")
             if "Conflict" in err_str or "terminated by other" in err_str:
