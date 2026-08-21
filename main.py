@@ -1472,20 +1472,13 @@ async def error_handler(update, context):
     traceback.print_exc()
     
 
+
 def main():
     import os
-    from flask import Flask, request
-    from telegram import Update
-    
-    # Use same Flask app but add webhook route
-    flask_app = Flask(__name__)
-    
-    # Build bot application
-    print("🚀 Starting bot in WEBHOOK mode (no conflict)...")
+    print("🚀 Starting bot in WEBHOOK mode - Fixed v2...")
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_error_handler(error_handler)
     
-    # Register all handlers (same as before)
     conv_reg = ConversationHandler(
         entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
         states={
@@ -1579,52 +1572,20 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
     application.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
 
-    global bot_application
-    bot_application = application
-
-    @flask_app.route("/", methods=["GET"])
-    def home():
-        return "Bot is running in webhook mode! ✅", 200
-
-    @flask_app.route(f"/{BOT_TOKEN}", methods=["POST"])
-    def webhook():
-        try:
-            update = Update.de_json(request.get_json(force=True), application.bot)
-            application.update_queue.put_nowait(update)
-        except Exception as e:
-            print(f"Webhook error: {e}")
-        return "ok", 200
-
-    @flask_app.route("/setwebhook", methods=["GET"])
-    def set_webhook():
-        try:
-            url = f"https://s2e-earning-bot.onrender.com/{BOT_TOKEN}"
-            success = application.bot.set_webhook(url, drop_pending_updates=True)
-            return f"Webhook set to {url}: {success}", 200
-        except Exception as e:
-            return f"Error: {e}", 500
-
-    # Initialize application
-    import asyncio
-    async def init_app():
-        await application.initialize()
-        await application.start()
-        print("✅ Bot application initialized, webhook ready")
-        # Set webhook automatically
-        try:
-            url = f"https://s2e-earning-bot.onrender.com/{BOT_TOKEN}"
-            await application.bot.set_webhook(url, drop_pending_updates=True)
-            print(f"✅ Webhook set to {url}")
-        except Exception as e:
-            print(f"Webhook set error: {e}")
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_app())
-
-    print("✅ Handlers registered, starting Flask for webhook...")
     port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    webhook_url = f"https://s2e-earning-bot.onrender.com/{BOT_TOKEN}"
+    
+    print(f"✅ Starting webhook at {webhook_url}")
+    print(f"✅ Port: {port}")
+    
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path=BOT_TOKEN,
+        webhook_url=webhook_url,
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
 
 if __name__ == "__main__":
     main()
