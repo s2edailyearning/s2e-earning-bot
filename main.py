@@ -140,33 +140,6 @@ async def plan_premium_activate_cb(update: Update, context: ContextTypes.DEFAULT
     except:
         pass
 
-async def plan_basic_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Please upload payment screenshot for Basic Plan. Use /admin to contact.")
-    except:
-        pass
-
-async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Please upload payment screenshot for Premium Plan. Use /admin to contact.")
-    except:
-        pass
-
-    kb = [[InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
-          [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")]]
-    try:
-        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
-    except:
-        pass
-
 async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.callback_query.answer()
@@ -1870,6 +1843,14 @@ async def scheduled_tasks_cb_fixed(update: Update, context: ContextTypes.DEFAULT
     except Exception as e:
         print(f"scheduled cb error {e}")
 
+async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("SUPPORT PLANS FIXED CLICKED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
         uid = update.effective_user.id
         txt = "SUPPORT PLANS\n\n"
         for p in support_plans_db:
@@ -2788,19 +2769,60 @@ async def bulk_task_image_handler(update, context):
 
 
 UPI_ID_GLOBAL = "s2edaily@upi"
+UPI_NAME_GLOBAL = "S2E"
 async def set_upi_cmd(update, context):
-    global UPI_ID_GLOBAL
+    global UPI_ID_GLOBAL, UPI_NAME_GLOBAL
     try:
         if not context.args:
-            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL}")
+            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL} Usage: /set_upi upi@upi Name")
             return
         UPI_ID_GLOBAL = context.args[0]
-        await update.message.reply_text(f"UPI SET! {UPI_ID_GLOBAL}")
+        UPI_NAME_GLOBAL = " ".join(context.args[1:]) if len(context.args)>1 else "S2E"
+        import json
+        try:
+            with open("upi_config.json","w") as fw:
+                json.dump({"upi": UPI_ID_GLOBAL, "name": UPI_NAME_GLOBAL}, fw)
+        except:
+            pass
+        await update.message.reply_text(f"UPI SET V31 SUCCESS! UPI: {UPI_ID_GLOBAL} Name: {UPI_NAME_GLOBAL}")
     except Exception as e:
-        await update.message.reply_text(f"Error {e}")
+        try:
+            await update.message.reply_text(f"Error: {e}")
+        except:
+            pass
 
 def get_current_upi():
+    try:
+        import json, os
+        if os.path.exists("upi_config.json"):
+            with open("upi_config.json","r") as fr:
+                return json.load(fr).get("upi", UPI_ID_GLOBAL)
+    except:
+        pass
     return UPI_ID_GLOBAL
+
+def get_current_upi_name():
+    try:
+        import json, os
+        if os.path.exists("upi_config.json"):
+            with open("upi_config.json","r") as fr:
+                return json.load(fr).get("name", UPI_NAME_GLOBAL)
+    except:
+        pass
+    return UPI_NAME_GLOBAL
+
+DEFAULT_PLANS=[
+    {"id":1,"name":"Basic","price":199,"duration":30,"daily_limit":10,"max_earning":500,"features":["10 Tasks/Day","30 Days","Max Rs500"],"emoji":"⭐"},
+    {"id":2,"name":"Premium","price":499,"duration":60,"daily_limit":20,"max_earning":2000,"features":["20 Tasks/Day","60 Days","Max Rs2000","Family 2"],"emoji":"💎"},
+]
+
+def get_all_plans():
+    try:
+        if support_plans_db:
+            return support_plans_db
+        return DEFAULT_PLANS
+    except:
+        return DEFAULT_PLANS
 
 async def support_plans_cb(update, context):
     try:
@@ -2808,13 +2830,14 @@ async def support_plans_cb(update, context):
     except:
         pass
     try:
-        plans=support_plans_db if 'support_plans_db' in globals() and support_plans_db else [{"id":1,"name":"Basic","price":199,"max_earning":500}]
-        msg="SUPPORT PLANS\n"
+        plans=get_all_plans()
+        msg="SUPPORT PLANS V31\n"
         for p in plans:
             msg+=f"{p['name']} Rs{p['price']} Max Rs{p.get('max_earning',500)}\n"
         kb=[]
         for p in plans:
-            kb.append([InlineKeyboardButton(f"{p['name']} Rs{p['price']}", callback_data=f"buy_plan_{p['id']}")])
+            kb.append([InlineKeyboardButton(f"{p['name']} Rs{p['price']} Max Rs{p.get('max_earning',500)}", callback_data=f"buy_plan_{p['id']}")])
+        kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
     except:
         pass
@@ -2830,8 +2853,16 @@ async def buy_plan_dynamic_cb(update, context):
         pass
     try:
         pid=int(q.data.replace("buy_plan_","")) if "buy_plan_" in q.data else 1
+        plans=get_all_plans()
+        plan=None
+        for p in plans:
+            if p['id']==pid:
+                plan=p
+                break
+        if not plan:
+            plan={"id":pid,"name":"Plan","price":199,"duration":30,"daily_limit":10,"max_earning":500}
         upi=get_current_upi()
-        await q.message.reply_text(f"Plan {pid} UPI: {upi} Pay then upload screenshot!")
+        await q.message.reply_text(f"Plan {plan['name']} Rs{plan['price']} Max Rs{plan.get('max_earning',500)} UPI: {upi} Pay then upload screenshot!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload Payment Screenshot", callback_data=f"upload_pay_{plan['id']}")],[InlineKeyboardButton("Back", callback_data="support_plans")]]))
     except:
         pass
 
@@ -2841,7 +2872,8 @@ async def upload_payment_cb(update, context):
         await q.answer()
         pid=int(q.data.replace("upload_pay_",""))
         context.user_data['awaiting_payment_screenshot']=pid
-        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now!")
+        context.user_data['awaiting_task_screenshot']=None
+        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now! Send PHOTO here.")
     except:
         pass
 
@@ -2851,14 +2883,14 @@ async def handle_payment_screenshot(update, context):
         if not pid or not update.message.photo:
             return False
         uid=update.effective_user.id
-        pending_plans[uid]={'plan':{"id":pid},'screenshot_file_id':update.message.photo[-1].file_id,'user_id':uid}
+        pending_plans[uid]={'plan':{"id":pid,"name":"Plan","price":199},'screenshot_file_id':update.message.photo[-1].file_id,'user_id':uid,'username':update.effective_user.username}
         context.user_data['awaiting_payment_screenshot']=None
         await update.message.reply_text(f"Payment screenshot received for Plan {pid}! Admin verify.")
         for admin_id in ADMIN_ID_LIST:
             try:
                 await context.bot.send_photo(chat_id=admin_id, photo=update.message.photo[-1].file_id, caption=f"Payment Plan {pid} by {uid}")
                 kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_plan_{uid}")]]
-                await context.bot.send_message(chat_id=admin_id, text=f"Approve?", reply_markup=InlineKeyboardMarkup(kb))
+                await context.bot.send_message(chat_id=admin_id, text="Approve?", reply_markup=InlineKeyboardMarkup(kb))
             except:
                 pass
         return True
@@ -2868,10 +2900,26 @@ async def handle_payment_screenshot(update, context):
 async def handle_task_screenshot(update, context):
     try:
         task_id=context.user_data.get('awaiting_task_screenshot')
+        print(f"V31 handle_task task_id={task_id} photo={bool(update.message.photo)}")
         if not task_id or not update.message.photo:
             return False
+        uid=update.effective_user.id
         context.user_data['awaiting_task_screenshot']=None
-        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}!")
+        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}! Admin verify V31.")
+        try:
+            chan = SCREENSHOT_CHANNEL if 'SCREENSHOT_CHANNEL' in globals() else None
+            if chan:
+                try:
+                    await context.bot.send_photo(chat_id=chan, photo=update.message.photo[-1].file_id, caption=f"Task {task_id} by {uid}")
+                except Exception as e:
+                    print(f"Channel err {e}")
+            for admin_id in ADMIN_ID_LIST:
+                try:
+                    await context.bot.send_photo(chat_id=admin_id, photo=update.message.photo[-1].file_id, caption=f"Task {task_id} by {uid} V31")
+                except:
+                    pass
+        except:
+            pass
         return True
     except:
         return False
@@ -2910,7 +2958,10 @@ async def admin_approve_plan_cb(update, context):
         if uid in pending_plans:
             del pending_plans[uid]
             await update.callback_query.edit_message_text(f"Approved {uid}")
-            await context.bot.send_message(chat_id=uid, text="Plan approved!")
+            try:
+                await context.bot.send_message(chat_id=uid, text="Plan approved! V31")
+            except:
+                pass
     except:
         pass
 
@@ -2928,11 +2979,22 @@ async def admin_reject_plan_cb(update, context):
 def main():
     import time, os
     print("="*70)
-    print("S2E Bot FINAL V20 - V12 Working + 70 Sec + Manual + Plans - NO NameError")
+    print("S2E Bot FINAL V31 - 120 Sec + 5 Deletes + Set UPI + Screenshot Fix V31")
     print("="*70)
-    print("Waiting 120 sec for old instance to die...")
+    print("Waiting 120 sec for old instance to die... V31")
     time.sleep(120)
-    print("70 sec done! Deleting webhook 3 times...")
+    print("120 sec done! Deleting webhook 5 times V31")
+    try:
+        import requests
+        for i in range(5):
+            try:
+                requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                print(f"V31 delete {i+1}/5")
+                time.sleep(2)
+            except:
+                pass
+    except:
+        pass
     try:
         import httpx
         tok=os.getenv("BOT_TOKEN")
@@ -2958,7 +3020,7 @@ def main():
     max_retries = 100
     
     while retry_count < max_retries:
-        print(f"\nBuild attempt {retry_count+1}/{max_retries} - Waiting 120 sec logic active")
+        print(f"\nBuild attempt {retry_count+1}/{max_retries} - Waiting 70 sec logic active")
         app = None
         try:
             print(f"\n🔄 Build attempt {retry_count+1}/{max_retries}")
