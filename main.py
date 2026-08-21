@@ -1771,8 +1771,28 @@ def main():
             except Exception as e:
                 print(f"Notifier error: {e}")
 
+            # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                # Run delete webhook
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
+
             print("✅ Handlers registered, starting polling...")
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES, close_loop=False)
 
             print("✅ Polling ended cleanly")
             break
@@ -1782,6 +1802,9 @@ def main():
             print(f"❌ Polling error: {err_str[:1000]}")
             if "Conflict" in err_str or "terminated by other" in err_str:
                 retry_count += 1
+                print(f"Conflict detected, old instance still running! Waiting 30 sec for it to die... Retry {retry_count}/20")
+                import time
+                time.sleep(30)  # Wait for old instance to die
                 wait_time = 20 + (retry_count * 5)
                 print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
                 import time as t_sleep
