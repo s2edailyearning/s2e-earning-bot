@@ -32,25 +32,6 @@ if _env:
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
 bot_application = None
-async def plan_basic_activate_cb(update, context):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Basic Plan - Contact Admin @s2edayincome")
-    except:
-        pass
-
-async def plan_premium_activate_cb(update, context):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Premium Plan - Contact Admin @s2edayincome")
-    except:
-        pass
 
 def notification_thread_func():
     import asyncio
@@ -84,6 +65,125 @@ def notification_thread_func():
         except:
             import time as t2
             t2.sleep(10)
+
+
+
+async def plan_basic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    kb = [[InlineKeyboardButton("✅ Activate Basic (₹199)", callback_data="plan_basic_activate")],
+          [InlineKeyboardButton("📤 Upload Proof", callback_data="plan_basic_proof")]]
+    try:
+        await update.callback_query.edit_message_text("💎 Basic Plan - ₹199\n10 tasks/day, ₹200 cap", reply_markup=InlineKeyboardMarkup(kb))
+    except:
+        pass
+
+async def plan_premium_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    kb = [[InlineKeyboardButton("✅ Activate Premium (₹499)", callback_data="plan_premium_activate")],
+          [InlineKeyboardButton("📤 Upload Proof", callback_data="plan_premium_proof")]]
+    try:
+        await update.callback_query.edit_message_text("🔥 Premium Plan - ₹499\n20 tasks/day, ₹500 cap", reply_markup=InlineKeyboardMarkup(kb))
+    except:
+        pass
+
+async def plan_basic_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text(f"Basic Plan Activation\nPlease pay ₹199 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
+    except:
+        pass
+
+async def plan_premium_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text(f"Premium Plan Activation\nPlease pay ₹499 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
+    except:
+        pass
+
+async def plan_basic_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text("Please upload payment screenshot for Basic Plan. Use /admin to contact.")
+    except:
+        pass
+
+async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text("Please upload payment screenshot for Premium Plan. Use /admin to contact.")
+    except:
+        pass
+
+async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    kb = [[InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
+          [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")]]
+    try:
+        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
+    except:
+        pass
+
+async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text(f"Pending plans: {len(pending_plans)}")
+    except:
+        pass
+
+async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        uid = int(update.callback_query.data.replace("admin_approve_plan_",""))
+        if uid in pending_plans:
+            user_plans[uid] = pending_plans[uid]
+            del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Approved plan for {uid}")
+            try:
+                await context.bot.send_message(chat_id=uid, text="Your plan approved!")
+            except:
+                pass
+    except Exception as e:
+        print(e)
+
+async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        uid = int(update.callback_query.data.replace("admin_reject_plan_",""))
+        if uid in pending_plans:
+            del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Rejected plan for {uid}")
+    except Exception as e:
+        print(e)
 
 
 WITHDRAW_MIN = 200
@@ -1208,17 +1308,6 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id in warnings_db: warnings_db[target_id]['count']=0
     await update.message.reply_text(f"✅ Unbanned {target_id}")
 
-async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    await q.message.reply_text(f"💎 Support Plans:\n\nBasic Rs500: {DAILY_TASK_LIMIT_BASIC} tasks/day Rs{DAILY_EARNING_CAP_BASIC} cap + Bonus Rs50\nPremium Rs1000: {DAILY_TASK_LIMIT_PREMIUM} tasks/day Rs{DAILY_EARNING_CAP_PREMIUM} cap + Bonus Rs100\n\n10% referral commission on plans!\n\nContact {SUPPORT_USERNAME} for payment!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Basic Rs500", callback_data="plan_basic"), InlineKeyboardButton("Premium Rs1000", callback_data="plan_premium")]]))
-
-async def plan_basic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    await q.message.reply_text(f"Basic Plan Rs500:\n{DAILY_TASK_LIMIT_BASIC} tasks/day\nEarning cap Rs{DAILY_EARNING_CAP_BASIC}/day\nBonus Rs50\n\nPay to UPI: {ADMIN_UPI}\nLink: upi://pay?pa={ADMIN_UPI}&pn=S2E&am=500&cu=INR&tn=Basic\n\nAfter payment, click Verify!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Verify Payment", callback_data="verify_basic")]]))
-
-async def plan_premium_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    await q.message.reply_text(f"Premium Plan Rs1000:\n{DAILY_TASK_LIMIT_PREMIUM} tasks/day\nEarning cap Rs{DAILY_EARNING_CAP_PREMIUM}/day\nBonus Rs100\n\nPay to UPI: {ADMIN_UPI}\nLink: upi://pay?pa={ADMIN_UPI}&pn=S2E&am=1000&cu=INR&tn=Premium\n\nAfter payment, click Verify!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Verify Payment", callback_data="verify_premium")]]))
 
 async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1232,36 +1321,7 @@ async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=admin_id, text=f"💎 Plan Request\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nPlan: {plan_type}\nUPI: {users_db.get(uid,{}).get('upi')}\nMobile: {users_db.get(uid,{}).get('mobile')}", reply_markup=kb)
         except: pass
 
-async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    parts=q.data.split("_")
-    uid=int(parts[3]); plan_type=parts[4]
-    today=get_ist_today()
-    expiry=today+timedelta(days=30 if plan_type=='basic' else 90)
-    user_plans[uid]={'plan': plan_type, 'status': 'active', 'start': today, 'expiry': expiry}
-    pending_plans.pop(uid,None)
-    if plan_type=='premium': bonus_balance[uid]=bonus_balance.get(uid,0)+100
-    else: bonus_balance[uid]=bonus_balance.get(uid,0)+50
-    ref_id = referral_map.get(uid)
-    if ref_id:
-        plan_amount = 500 if plan_type=='basic' else 1000
-        commission = int(plan_amount * REFERRAL_PLAN_COMMISSION_PERCENT / 100)
-        referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+commission
-    await q.message.reply_text(f"✅ Approved {plan_type} for {uid} till {expiry}")
-    try:
-        await context.bot.send_message(chat_id=uid, text=f"✅ Your {plan_type.capitalize()} plan approved till {expiry}!\nBonus added!\nBalance: Rs{get_balance(uid)}", reply_markup=main_menu())
-    except: pass
 
-async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    uid=int(q.data.split("_")[-1])
-    if uid in pending_plans: del pending_plans[uid]
-    await q.message.reply_text(f"❌ Rejected plan for {uid}")
-    try:
-        await context.bot.send_message(chat_id=uid, text="❌ Plan verification rejected! Contact admin @s2edayincome", reply_markup=main_menu())
-    except: pass
 
 async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
