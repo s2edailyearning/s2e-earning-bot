@@ -1060,6 +1060,29 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Approve Rs{earning} for {views} views", callback_data=f"promo_approve_{uid}_{campaign_id}_{views}"), InlineKeyboardButton("❌ Reject", callback_data=f"promo_reject_{uid}_{campaign_id}")]])
             await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"🏪 NEW PROMO SUBMISSION!\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nCampaign {campaign_id}: {campaign['shop_name']} Views: {views} Earning: Rs{earning}", reply_markup=kb)
         except: pass
+
+        # === CHANNEL METHOD - Forward to Screenshot Channel ===
+        try:
+            screenshot_ch = get_screenshot_channel()
+            if screenshot_ch:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                # Create approve buttons for channel
+                kb = [
+                    [InlineKeyboardButton(f"✅ Approve {uid}", callback_data=f"approve_{uid}"), InlineKeyboardButton(f"❌ Reject {uid}", callback_data=f"reject_{uid}")],
+                    [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")]
+                ]
+                mk = InlineKeyboardMarkup(kb)
+                cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
+                try:
+                    if 'file_id' in locals() and file_id:
+                        await context.bot.send_photo(chat_id=screenshot_ch, photo=file_id, caption=cap, reply_markup=mk)
+                    else:
+                        await context.bot.send_message(chat_id=screenshot_ch, text=cap, reply_markup=mk)
+                except Exception as ce:
+                    print(f"Channel forward error {ce}")
+        except Exception as e:
+            print(f"Channel forward outer error {e}")
+
     context.user_data.pop('promo_upload_campaign_id', None)
     context.user_data.pop('promo_screenshot_file_id', None)
     context.user_data.pop('promo_screenshot_campaign_id', None)
@@ -1132,7 +1155,8 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: return
     if target_id in pending_daily:
         is_first=tasks_db.get(target_id,0)==0
-        reward=pending_daily[target_id].get('task',{}).get('reward',5)
+        base_reward=pending_daily[target_id].get('task',{}).get('reward',5)
+        reward=get_reward_for_user(target_id, base_reward)
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
         if target_id not in daily_task_count: daily_task_count[target_id]={}
@@ -1863,7 +1887,605 @@ async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_T
         print(f"support cb error {e}")
 
 
+
+async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    # If args provided as multiline text after command, use that, else ask
+    raw = " ".join(context.args) if context.args else ""
+    # Also check if message has newline separated tasks in reply
+    if not raw and update.message.text:
+        # Get text after /add_bulk_tasks
+        txt = update.message.text
+        if "\n" in txt or "\n" in txt:
+            raw = txt.split("\n", 1)[-1] if "\n" in txt else txt.split("\n", 1)[-1]
+        else:
+            # Try to get lines after command
+            parts = txt.split(" ", 1)
+            if len(parts) > 1:
+                raw = parts[1]
+    
+    if not raw or len(raw) < 10:
+        await update.message.reply_text(
+            "📋 BULK ADD 6-7 TASKS AT ONCE!\n\n"
+            "Usage:\n"
+            "/add_bulk_tasks\n"
+            "12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\n"
+            "2:00PM 15min 2:15PM Task 4 Shop Rating https://maps.app.goo.gl/yyy 5\n"
+            "3:00PM 15min 3:15PM Task 5 Follow Insta https://instagram.com/xxx 10\n\n"
+            "OR send as separate lines with /add_bulk_tasks command!\n\n"
+            "Format per line: open close next title link reward\n"
+            "Example: 12:45PM 15min 1:03PM Task 3 Google Review https://link 5\n\n"
+            "After bulk add, use /set_task_image <id> for each task poster!"
+        )
+        return
+    
+    # Split by newline
+    lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    # Also try split by newline char if \n not found
+    if len(lines) == 1 and "\n" in raw:
+        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    
+    added = 0
+    errors = []
+    for line in lines:
+        try:
+            # Parse line: open close next title link reward
+            # Format: 12:45PM 15min 1:03PM Task 3 Google Review https://link 5
+            # Last token is reward, second last is link, rest is title, first 3 tokens are open close next
+            parts = line.split()
+            if len(parts) < 6:
+                errors.append(f"Too short: {line}")
+                continue
+            open_time = parts[0]
+            close_dur = parts[1]
+            next_time = parts[2]
+            reward = parts[-1]
+            link = parts[-2]
+            title = " ".join(parts[3:-2])
+            
+            # Call add_task logic
+            # Simulate context.args
+            from datetime import datetime
+            # Validate times
+            try:
+                # Use existing add_task parsing
+                task_id = len(scheduled_tasks_db) + 1 if 'scheduled_tasks_db' in globals() else len(scheduled_tasks_data) + 1
+                # Create task dict similar to add_task
+                task = {
+                    'id': task_id,
+                    'open_time': open_time,
+                    'close_duration': close_dur,
+                    'next_time': next_time,
+                    'title': title,
+                    'link': link,
+                    'reward': int(reward) if reward.isdigit() else 5,
+                    'open_time_obj': None,
+                    'close_time_obj': None
+                }
+                # Try to parse times
+                try:
+                    from datetime import datetime as dt
+                    task['open_time_obj'] = dt.strptime(open_time, "%I:%M%p").time()
+                except:
+                    pass
+                
+                if 'scheduled_tasks_db' in globals():
+                    scheduled_tasks_db.append(task)
+                if 'scheduled_tasks_data' in globals():
+                    scheduled_tasks_data.append(task)
+                    
+                added += 1
+            except Exception as e:
+                errors.append(f"{line} -> {e}")
+        except Exception as e:
+            errors.append(f"{line} -> {e}")
+    
+    msg = f"✅ BULK ADD DONE!\n\nAdded: {added} tasks\n"
+    if errors:
+        msg += f"Errors: {len(errors)}\n" + "\n".join(errors[:5])
+    msg += f"\n\nTotal tasks today: {len(scheduled_tasks_db) if 'scheduled_tasks_db' in globals() else len(scheduled_tasks_data)}\n"
+    msg += "\nNow set images: /set_task_image <id> + send photo for each!"
+    await update.message.reply_text(msg)
+
+
+
+# === PERSISTENT STORAGE - FIX DATA LOSS ===
+import json, os
+DATA_FILE = "bot_data.json"
+
+def save_data():
+    try:
+        data = {}
+        # Save important dicts
+        try:
+            data['users_db'] = users_db
+            data['tasks_db'] = tasks_db
+            data['bonus_balance'] = bonus_balance
+            data['referral_earnings'] = referral_earnings
+            data['referrals_db'] = referrals_db
+            data['referral_map'] = referral_map
+            data['scheduled_tasks_db'] = scheduled_tasks_db
+            data['support_plans_db'] = support_plans_db
+            data['user_plans'] = user_plans
+        except:
+            pass
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, default=str)
+        print("Data saved OK")
+    except Exception as e:
+        print(f"Save error {e}")
+
+def load_data():
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                data = json.load(f)
+            global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
+            global scheduled_tasks_db, support_plans_db, user_plans
+            if 'users_db' in data:
+                # Convert keys to int where possible
+                loaded_users = data['users_db']
+                users_db.clear()
+                for k,v in loaded_users.items():
+                    try:
+                        users_db[int(k)] = v
+                    except:
+                        users_db[k] = v
+            if 'tasks_db' in data:
+                tasks_db.clear()
+                for k,v in data['tasks_db'].items():
+                    try:
+                        tasks_db[int(k)] = v
+                    except:
+                        tasks_db[k] = v
+            if 'bonus_balance' in data:
+                bonus_balance.clear()
+                for k,v in data['bonus_balance'].items():
+                    try:
+                        bonus_balance[int(k)] = v
+                    except:
+                        bonus_balance[k] = v
+            if 'scheduled_tasks_db' in data:
+                scheduled_tasks_db.clear()
+                scheduled_tasks_db.extend(data['scheduled_tasks_db'])
+            if 'support_plans_db' in data:
+                support_plans_db.clear()
+                support_plans_db.extend(data['support_plans_db'])
+            if 'user_plans' in data:
+                user_plans.clear()
+                user_plans.update(data['user_plans'])
+            print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
+    except Exception as e:
+        print(f"Load error {e}")
+        import traceback; traceback.print_exc()
+
+# User Plans - which user bought which plan
+if 'user_plans' not in globals():
+    user_plans = {}
+
+def get_reward_for_user(uid, base_reward=5):
+    try:
+        pid = user_plans.get(str(uid)) or user_plans.get(int(uid))
+        if not pid:
+            return base_reward
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        if not plan:
+            return base_reward
+        price = plan['price']
+        if price == 199:
+            return 10
+        elif price == 499:
+            return 15
+        elif price >= 999:
+            return 20
+        else:
+            return base_reward + (price // 100)
+    except:
+        return base_reward
+
+async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /assign_plan <user_id> <plan_id>\nExample: /assign_plan 123456789 2\n/list_support_plans")
+        return
+    try:
+        uid = int(context.args[0])
+        pid = int(context.args[1])
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        if not plan:
+            await update.message.reply_text(f"Plan ID {pid} not found!")
+            return
+        user_plans[str(uid)] = pid
+        save_data()
+        reward = get_reward_for_user(uid, 5)
+        await update.message.reply_text(f"Assigned! User {uid} -> {plan['name']} Rs{plan['price']} = Rs{reward}/task")
+        try:
+            await context.bot.send_message(chat_id=uid, text=f"Your Plan Activated! {plan['name']} Rs{plan['price']} Now Rs{reward}/task!")
+        except:
+            pass
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not user_plans:
+        await update.message.reply_text("No user plans yet!")
+        return
+    msg = f"USER PLANS - {len(user_plans)} Users:\n\n"
+    for uid, pid in list(user_plans.items())[:30]:
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        name = users_db.get(int(uid), {}).get('name', 'Unknown') if str(uid).isdigit() else 'Unknown'
+        msg += f"{uid} {name} -> Plan {pid} {plan['name'] if plan else ''} = Rs{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
+    await update.message.reply_text(msg)
+
+async def new_members_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = f"NEW MEMBERS - Last 20:\n\n"
+    # Get last 20 users by insertion order
+    user_list = list(users_db.items())[-20:]
+    for uid, data in user_list:
+        name = data.get('name', 'Unknown')
+        plan_id = user_plans.get(str(uid), 'No Plan')
+        reward = get_reward_for_user(uid)
+        msg += f"ID {uid} {name} Plan {plan_id} Rs{reward}/task\n"
+    await update.message.reply_text(msg)
+
+async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /user_info <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+        user = users_db.get(uid, {})
+        plan_id = user_plans.get(str(uid))
+        plan = next((p for p in support_plans_db if p['id'] == plan_id), None) if plan_id else None
+        reward = get_reward_for_user(uid)
+        msg = f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\nEarnings: {bonus_balance.get(uid,0)}\nPlan: {plan['name'] if plan else 'No Plan'} Rs{plan['price'] if plan else 0}\nReward: Rs{reward}/task"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+
+
+
+async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        data = update.callback_query.data
+        if data.startswith("bulk_approve_"):
+            task_num = data.replace("bulk_approve_", "")
+            if task_num == "all":
+                await approve_all_pending_cmd(update, context)
+            else:
+                # Simulate command
+                context.args = [task_num]
+                await approve_task_all_cmd(update, context)
+            try:
+                await update.callback_query.answer(f"Approved Task {task_num}")
+            except:
+                pass
+    except Exception as e:
+        print(f"Bulk callback error {e}")
+
+
+# === CHANNEL METHOD + BULK APPROVE V28 ===
+# Admin channels - set via command or env
+SCREENSHOT_CHANNEL_ID = None  # Set via /set_screenshot_channel
+WITHDRAW_CHANNEL_ID = None    # Set via /set_withdraw_channel
+
+def get_screenshot_channel():
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+                return cfg.get('screenshot_channel')
+    except:
+        pass
+    return SCREENSHOT_CHANNEL_ID
+
+def get_withdraw_channel():
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+                return cfg.get('withdraw_channel')
+    except:
+        pass
+    return WITHDRAW_CHANNEL_ID
+
+def save_channel_config(screenshot=None, withdraw=None):
+    try:
+        cfg = {}
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+        if screenshot is not None:
+            cfg['screenshot_channel'] = screenshot
+        if withdraw is not None:
+            cfg['withdraw_channel'] = withdraw
+        with open("channel_config.json", 'w') as f:
+            json.dump(cfg, f)
+    except Exception as e:
+        print(f"Channel config save error {e}")
+
+async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        current = get_screenshot_channel()
+        await update.message.reply_text(f"Current Screenshot Channel: {current}\n\nUsage: /set_screenshot_channel <channel_id or @username>\nExample: /set_screenshot_channel -1001234567890\nOR /set_screenshot_channel @s2e_screenshots_admin\n\nHow to get ID: Forward a message from channel to @userinfobot")
+        return
+    ch = context.args[0]
+    # Try to resolve @username to ID by sending test message
+    try:
+        # Save as is (can be @username or -100...)
+        save_channel_config(screenshot=ch, withdraw=None)
+        await update.message.reply_text(f"✅ Screenshot Channel Set: {ch}\n\nNow all task screenshots will go to this channel with Approve buttons!\nTest: Ask a user to submit a task")
+        # Test send
+        try:
+            await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Screenshots will come here!\n\nBulk Approve: Use /approve_task <task_number> in bot or click Approve All button")
+        except Exception as e:
+            await update.message.reply_text(f"Channel set but test send failed: {e}\nMake bot admin in channel with Post permission!")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        current = get_withdraw_channel()
+        await update.message.reply_text(f"Current Withdraw Channel: {current}\nUsage: /set_withdraw_channel <channel_id or @username>\nExample: /set_withdraw_channel -1001234567890")
+        return
+    ch = context.args[0]
+    save_channel_config(screenshot=None, withdraw=ch)
+    await update.message.reply_text(f"✅ Withdraw Channel Set: {ch}\nAll withdraw requests will go here!")
+    try:
+        await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Withdraw requests will come here!")
+    except Exception as e:
+        await update.message.reply_text(f"Set but test failed: {e} - Make bot admin!")
+
+async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "📋 BULK APPROVE PER TASK!\n\n"
+            "Usage: /approve_task <task_number>\n"
+            "Example: /approve_task 1 -> Approves ALL pending for Task 1\n"
+            "/approve_task 2 -> Approves ALL for Task 2\n"
+            "/approve_all_pending -> Approves ALL pending tasks!\n\n"
+            "This is the SINGLE BUTTON you asked for! One command = All members Task 1 approved!"
+        )
+        return
+    try:
+        task_num = context.args[0]
+        # If task_num is "all", approve all
+        if task_num.lower() == "all" or task_num == "all_pending":
+            return await approve_all_pending_cmd(update, context)
+        
+        # Approve all for this task number
+        approved = 0
+        to_approve = []
+        for uid, data in list(pending_daily.items()):
+            task = data.get('task', {})
+            t_num = str(task.get('task_number', ''))
+            t_title = task.get('title', '')
+            # Match task number or title contains
+            if t_num == str(task_num) or str(task_num) in str(t_title) or str(task_num).lower() in str(t_title).lower():
+                to_approve.append(uid)
+        
+        if not to_approve:
+            # Try matching by task id
+            for uid, data in list(pending_daily.items()):
+                task = data.get('task', {})
+                if str(task.get('id','')) == str(task_num):
+                    to_approve.append(uid)
+        
+        if not to_approve:
+            await update.message.reply_text(f"No pending found for Task {task_num}!\nUse /pending to see pending list")
+            return
+        
+        for uid in to_approve:
+            try:
+                if uid in pending_daily:
+                    base_reward = pending_daily[uid].get('task',{}).get('reward',5)
+                    reward = get_reward_for_user(uid, base_reward)
+                    tasks_db[uid] = tasks_db.get(uid,0) + 1
+                    bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward != 5 else bonus_balance.get(uid,0)
+                    del pending_daily[uid]
+                    approved += 1
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"✅ Task {task_num} Approved! Rs{reward} added! Keep doing tasks!")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Bulk approve error for {uid}: {e}")
+        
+        save_data()
+        try:
+            await forward_new_member_to_channel(uid, users_db[uid])
+        except:
+            pass
+        await update.message.reply_text(f"✅ BULK APPROVED Task {task_num}!\n\nApproved: {approved} members\nEach got Rs{get_reward_for_user(0,5)}-Rs15 based on plan!\n\nNext: /approve_task 2 for Task 2")
+        
+        # Also post to screenshot channel if set
+        ch = get_screenshot_channel()
+        if ch:
+            try:
+                await context.bot.send_message(chat_id=ch, text=f"✅ BULK APPROVED Task {task_num} - {approved} members approved by admin!")
+            except:
+                pass
+                
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+        import traceback; traceback.print_exc()
+
+async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not pending_daily:
+        await update.message.reply_text("No pending tasks!")
+        return
+    approved = 0
+    for uid in list(pending_daily.keys()):
+        try:
+            base_reward = pending_daily[uid].get('task',{}).get('reward',5)
+            reward = get_reward_for_user(uid, base_reward)
+            tasks_db[uid] = tasks_db.get(uid,0) + 1
+            if reward != 5:
+                bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5)
+            del pending_daily[uid]
+            approved += 1
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"✅ Your Task Approved! Rs{reward} added!")
+            except:
+                pass
+        except:
+            pass
+    save_data()
+    await update.message.reply_text(f"✅ APPROVED ALL! {approved} members approved!")
+
+# Enhanced pending view with bulk buttons
+async def pending_bulk_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not pending_daily:
+        await update.message.reply_text("No pending!")
+        return
+    # Group by task number
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    for uid, data in pending_daily.items():
+        task = data.get('task', {})
+        t_num = task.get('task_number', 'Unknown')
+        grouped[t_num].append(uid)
+    
+    msg = f"📋 PENDING BY TASK - {len(pending_daily)} Total:\n\n"
+    for t_num, uids in grouped.items():
+        msg += f"Task {t_num}: {len(uids)} members pending\n"
+    msg += "\nUse:\n/approve_task 1 -> Approve all Task 1\n/approve_task 2 -> Task 2\n/approve_all_pending -> Approve all!"
+    
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = []
+    for t_num in list(grouped.keys())[:5]:
+        kb.append([InlineKeyboardButton(f"✅ Approve All Task {t_num} ({len(grouped[t_num])})", callback_data=f"bulk_approve_{t_num}")])
+    kb.append([InlineKeyboardButton("✅ Approve ALL Pending", callback_data="bulk_approve_all")])
+    kb.append([InlineKeyboardButton("Back to Admin", callback_data="back_admin")])
+    mk = InlineKeyboardMarkup(kb)
+    await update.message.reply_text(msg, reply_markup=mk)
+
+
+
+# === MEMBERS JOIN CHANNEL V29 ===
+JOIN_CHANNEL_ID = None
+
+def get_join_channel():
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+                return cfg.get('join_channel')
+    except:
+        pass
+    return JOIN_CHANNEL_ID
+
+def save_join_channel_config(join_ch):
+    try:
+        cfg = {}
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+        cfg['join_channel'] = join_ch
+        with open("channel_config.json", 'w') as f:
+            json.dump(cfg, f)
+    except Exception as e:
+        print(f"Join channel config error {e}")
+
+async def set_join_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        current = get_join_channel()
+        await update.message.reply_text(f"Current Join Channel: {current}\nUsage: /set_join_channel <@username or ID>\nExample: /set_join_channel @s2e_members_log\nOR /set_join_channel -1001234567890")
+        return
+    ch = context.args[0]
+    save_join_channel_config(ch)
+    await update.message.reply_text(f"✅ Join Channel Set: {ch}\nNow all new members details will go to this channel!")
+    try:
+        await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! New members join details will come here!\n\nFormat:\nID, Name, Username, Joined Time, Plan, Total Users")
+    except Exception as e:
+        await update.message.reply_text(f"Set but test failed: {e} - Make bot admin in channel!")
+
+async def set_all_channels_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(
+        "📋 SET ALL 3 CHANNELS - Easy Setup!\n\n"
+        "1️⃣ Screenshots Channel:\n/set_screenshot_channel @s2e_screenshots_admin\n\n"
+        "2️⃣ Withdraw Channel:\n/set_withdraw_channel @s2e_withdraw_admin\n\n"
+        "3️⃣ Members Join Channel:\n/set_join_channel @s2e_members_log\n\n"
+        "Create 3 private channels, add bot as admin with Post permission, then set IDs!\n\n"
+        "After setup, check:\n/channels_status - See all channels"
+    )
+
+async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    sc = get_screenshot_channel()
+    wc = get_withdraw_channel()
+    jc = get_join_channel()
+    msg = f"📋 CHANNELS STATUS\n\n"
+    msg += f"📸 Screenshots: {sc if sc else '❌ Not Set - /set_screenshot_channel'}\n"
+    msg += f"💰 Withdraw: {wc if wc else '❌ Not Set - /set_withdraw_channel'}\n"
+    msg += f"👥 Members Join: {jc if jc else '❌ Not Set - /set_join_channel'}\n\n"
+    msg += f"Total Users: {len(users_db)}\nPending Tasks: {len(pending_daily)}\nSupport Plans: {len(support_plans_db)}\n"
+    msg += f"\nAdmin Panel: Only admin updates\nChannels: All user activities separate - Easy for single admin!"
+    await update.message.reply_text(msg)
+
+# Auto forward new member to join channel
+async def forward_new_member_to_channel(uid, user_data):
+    try:
+        ch = get_join_channel()
+        if not ch:
+            return
+        name = user_data.get('name', 'Unknown')
+        username = user_data.get('username', 'N/A')
+        joined = user_data.get('joined_at', get_ist_now() if 'get_ist_now' in globals() else 'Now')
+        total = len(users_db)
+        plan_id = user_plans.get(str(uid), 'No Plan')
+        plan = next((p for p in support_plans_db if p['id'] == plan_id), None) if plan_id != 'No Plan' else None
+        reward = get_reward_for_user(uid, 5)
+        
+        msg = f"🆕 NEW MEMBER JOINED!\n\n"
+        msg += f"👤 ID: {uid}\n"
+        msg += f"📛 Name: {name}\n"
+        msg += f"🔗 Username: @{username}\n"
+        msg += f"⏰ Joined: {joined}\n"
+        msg += f"💎 Plan: {plan['name'] if plan else 'No Plan'} - Rs{reward}/task\n"
+        msg += f"👥 Total Users: {total}\n\n"
+        msg += f"Commands:\n/user_info {uid} - Full info\n/assign_plan {uid} <plan_id> - Assign plan"
+        
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = [
+            [InlineKeyboardButton(f"👤 User Info {uid}", callback_data=f"user_info_{uid}"), InlineKeyboardButton(f"💎 Assign Plan", callback_data=f"assign_plan_{uid}")],
+            [InlineKeyboardButton(f"📊 Total: {total} Users", callback_data="admin_stats")]
+        ]
+        mk = InlineKeyboardMarkup(kb)
+        await application.bot.send_message(chat_id=ch, text=msg, reply_markup=mk)
+        print(f"New member forwarded to join channel: {uid}")
+    except Exception as e:
+        print(f"Join channel forward error {e}")
+
+
 def main():
+    load_data()
     threading.Thread(target=run_flask, daemon=True).start()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
@@ -1891,6 +2513,7 @@ def main():
                 app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
                 print('V25 All Fixed group -2')
+                app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
             except Exception as e:
                 print(f'V25 fix {e}')
             
