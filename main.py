@@ -660,6 +660,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
         [InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"), InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
+        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
         [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
     ])
     
@@ -773,7 +775,9 @@ async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = []
     for campaign in active_campaigns[:10]:
         kb.append([InlineKeyboardButton(f"🏪 {campaign['shop_name']} - {campaign['title'][:20]}", callback_data=f"promo_join_{campaign['id']}")])
-    kb.append([InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
+    kb.append([InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
+        [InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
 
 async def promo_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2463,6 +2467,30 @@ async def referral_stats_cmd(update, context):
         await update.message.reply_text(f"Error {e}")
 
 
+async def admin_backup_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        await backup_cmd(update.effective_message, context)
+    except: pass
+async def admin_add_admin_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        await update.effective_message.reply_text("Use /add_admin USER_ID")
+    except: pass
+async def admin_referral_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        await update.effective_message.reply_text("Referral L1 10%+2% L2 0.2%")
+    except: pass
+async def admin_missed_toggle_cb(update, context):
+    try:
+        await update.callback_query.answer()
+        global MISSED_ENABLED
+        MISSED_ENABLED=not MISSED_ENABLED
+        await update.effective_message.reply_text(f"Missed {'ON' if MISSED_ENABLED else 'OFF'}")
+    except: pass
+
+
 def main():
     load_data()
     threading.Thread(target=run_flask, daemon=True).start()
@@ -2598,6 +2626,10 @@ def main():
             app.add_handler(CommandHandler("add_admin", add_admin_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
 
+            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
+            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
+            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
+            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
             global bot_application
             bot_application = app
 
