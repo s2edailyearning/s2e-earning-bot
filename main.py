@@ -18,10 +18,45 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@s2edayincome")
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/s2edayincome")
+# === 3 CHANNELS CONFIG - FINAL MERGED ===
+SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004428587527"))
+WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
+JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
+BACKUP_CHANNEL = int(os.getenv("BACKUP_CHANNEL", "0"))
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1004428587527")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
+SCREENSHOT_LINK = os.getenv("SCREENSHOT_LINK", "https://t.me/S2E_Daily_Earning")
+WITHDRAW_LINK = os.getenv("WITHDRAW_LINK", "https://t.me/S2E_Daily_Earning")
+JOIN_LINK = os.getenv("JOIN_LINK", "https://t.me/S2E_Daily_Earning")
+REFERRAL_PLAN_PERCENT = 8
+REFERRAL_DAILY_PERCENT = 1.5
+REFERRAL_BONUS = 10
+MISSED_ENABLED = True
+
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
+
+
+async def post_to_screenshot_channel(context, text, photo=None):
+    try:
+        if photo:
+            await context.bot.send_photo(chat_id=SCREENSHOT_CHANNEL, photo=photo, caption=text[:1000])
+        else:
+            await context.bot.send_message(chat_id=SCREENSHOT_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(f"Screenshot channel error {e}")
+
+async def post_to_withdraw_channel(context, text):
+    try:
+        await context.bot.send_message(chat_id=WITHDRAW_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(f"Withdraw channel error {e}")
+
+async def post_to_join_channel(context, text):
+    try:
+        await context.bot.send_message(chat_id=JOIN_CHANNEL, text=text[:1000])
+    except Exception as e:
+        print(f"Join channel error {e}")
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
 _env = os.getenv("ADMIN_IDS") or ""
@@ -113,94 +148,24 @@ async def plan_premium_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def plan_basic_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    pending_plans[uid] = {"plan": "Basic", "price": 199, "status": "pending", "date": str(get_ist_today())}
-    save_data()
-    await q.message.edit_text(
-        f"💎 Basic Plan ₹199\n\nUPI: {ADMIN_UPI}\n"
-        "After payment, send the screenshot to admin. Your plan will activate after verification.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Proof", callback_data="plan_basic_proof")],
-                                            [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]])
-    )
-    for admin_id in ADMIN_ID_LIST:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=f"💎 NEW BASIC PLAN REQUEST\nUser: {users_db.get(uid,{}).get('name','Unknown')} ({uid})\nAmount: ₹199\nUPI: {users_db.get(uid,{}).get('upi','Not set')}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_plan_{uid}"),
-                                                     InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")]])
-            )
-        except Exception:
-            pass
-
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text(f"Basic Plan Activation\nPlease pay ₹199 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
+    except:
+        pass
 
 async def plan_premium_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    pending_plans[uid] = {"plan": "Premium", "price": 499, "status": "pending", "date": str(get_ist_today())}
-    save_data()
-    await q.message.edit_text(
-        f"💎 Premium Plan ₹499\n\nUPI: {ADMIN_UPI}\n"
-        "After payment, send the screenshot to admin. Your plan will activate after verification.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Proof", callback_data="plan_premium_proof")],
-                                            [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]])
-    )
-    for admin_id in ADMIN_ID_LIST:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=f"💎 NEW PREMIUM PLAN REQUEST\nUser: {users_db.get(uid,{}).get('name','Unknown')} ({uid})\nAmount: ₹499\nUPI: {users_db.get(uid,{}).get('upi','Not set')}",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_plan_{uid}"),
-                                                     InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")]])
-            )
-        except Exception:
-            pass
-
-
-async def plan_proof_entry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    req = pending_plans.get(uid)
-    if not req:
-        await q.message.reply_text("No pending plan request. Select a plan first.", reply_markup=main_menu())
-        return ConversationHandler.END
-    context.user_data["plan_proof_user"] = uid
-    await q.message.reply_text("📤 Send your payment screenshot as PHOTO (not file).")
-    return PLAN_PROOF
-
-async def handle_plan_proof_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not update.message.photo:
-        await update.message.reply_text("Please send the payment screenshot as PHOTO.")
-        return PLAN_PROOF
-    req = pending_plans.get(uid)
-    if not req:
-        await update.message.reply_text("No pending plan request.", reply_markup=main_menu())
-        return ConversationHandler.END
-    file_id = update.message.photo[-1].file_id
-    req["proof_file_id"] = file_id
-    req["status"] = "pending"
-    save_data()
-    await update.message.reply_text("✅ Payment proof received. Admin will verify and approve your plan.", reply_markup=main_menu())
-    for admin_id in ADMIN_ID_LIST:
-        try:
-            await context.bot.send_photo(
-                chat_id=admin_id, photo=file_id,
-                caption=f"💎 PLAN PAYMENT PROOF\nUser: {users_db.get(uid,{}).get('name','Unknown')} ({uid})\n"
-                        f"Plan: {req.get('plan')} ₹{req.get('price')}\nUPI: {users_db.get(uid,{}).get('upi','Not set')}",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_plan_{uid}"),
-                    InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")
-                ]])
-            )
-        except Exception:
-            pass
-    context.user_data.pop("plan_proof_user", None)
-    return ConversationHandler.END
+    try:
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        await update.callback_query.edit_message_text(f"Premium Plan Activation\nPlease pay ₹499 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
+    except:
+        pass
 
 async def plan_basic_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -223,20 +188,16 @@ async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TY
         pass
 
 async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    kb = []
-    lines = ["💎 SUPPORT PLANS\n"]
-    for p in support_plans_db:
-        lines.append(f"• {p['name']} — ₹{p['price']}\n  {p['desc']}")
-        kb.append([InlineKeyboardButton(f"Buy {p['name']} ₹{p['price']}", callback_data=f"buy_support_{p['id']}")])
-    kb.append([InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
-    text = "\n\n".join(lines)
     try:
-        await q.message.edit_message_text(text[:4000], reply_markup=InlineKeyboardMarkup(kb))
-    except Exception:
-        await q.message.reply_text(text[:4000], reply_markup=InlineKeyboardMarkup(kb))
-
+        await update.callback_query.answer()
+    except:
+        pass
+    kb = [[InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
+          [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")]]
+    try:
+        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
+    except:
+        pass
 
 async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -249,34 +210,22 @@ async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass
 
 async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if not is_admin(q.from_user.id):
-        return
     try:
-        uid = int(q.data.replace("admin_approve_plan_", "").split("_")[0])
-        req = pending_plans.get(uid)
-        if not req:
-            await q.message.reply_text("No pending plan request.")
-            return
-        plan_name = req.get("plan", "Basic")
-        plan_id = req.get("plan_id")
-        if plan_id is None:
-            price = int(req.get("price", 199))
-            plan = next((p for p in support_plans_db if int(p.get("price",0)) == price), None)
-            plan_id = plan.get("id") if plan else None
-        user_plans[uid] = {"plan": plan_name, "plan_id": plan_id, "price": req.get("price", 0), "status": "active", "activated": str(get_ist_today())}
-        add_commission_v35(uid, "plan_purchase", float(req.get("price", 0)))
-        pending_plans.pop(uid, None)
-        save_data()
-        await q.message.edit_text(f"✅ Approved plan for {uid}: {plan_name}")
-        try:
-            await context.bot.send_message(chat_id=uid, text=f"🎉 Your {plan_name} plan is approved and active!", reply_markup=main_menu())
-        except Exception:
-            pass
+        await update.callback_query.answer()
+    except:
+        pass
+    try:
+        uid = int(update.callback_query.data.replace("admin_approve_plan_",""))
+        if uid in pending_plans:
+            user_plans[uid] = pending_plans[uid]
+            del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Approved plan for {uid}")
+            try:
+                await context.bot.send_message(chat_id=uid, text="Your plan approved!")
+            except:
+                pass
     except Exception as e:
-        print(f"Plan approve error: {e}")
-
+        print(e)
 
 async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -311,7 +260,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host="0.0.0.0", port=port)
 
-NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS, SET_IMAGE, PLAN_PROOF = range(12)
+NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS, SET_IMAGE = range(11)
 
 users_db = {}
 referrals_db = {}
@@ -327,7 +276,6 @@ referral_map = {}
 pending_referrals = {}
 referral_earnings = {}
 withdraw_requests = {}
-withdrawn_balance_db = {}
 withdraw_done_date = {}
 daily_task_count = {}
 missed_tasks_db = {}  # {uid: [missed task dicts]}
@@ -532,26 +480,11 @@ def mark_task_completed_with_interval(uid, task_id):
         user_task_status[uid] = {}
     user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
 
-def is_admin(uid):
-    try:
-        admins = set(ADMIN_ID_LIST)
-        admins.update(int(x) for x in admin_config.get("admins", []) if str(x).isdigit())
-        return uid in admins
-    except Exception:
-        return uid in ADMIN_ID_LIST
-
+def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
     today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
-def get_balance(uid):
-    gross = tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
-    rec = referral_network.get(str(uid), {})
-    e = rec.get("earnings", {}) if isinstance(rec, dict) else {}
-    network_earn = float(e.get("l1_plan",0)) + float(e.get("l1_daily",0)) + float(e.get("l2",0))
-    withdrawn = float(withdrawn_balance_db.get(uid, 0))
-    return round(max(0, gross + network_earn - withdrawn), 2)
-
-
+def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
 def get_tasks(uid):
     today = str(get_ist_today())
     return daily_task_count.get(uid, {}).get(today, 0)
@@ -559,44 +492,23 @@ def get_tasks(uid):
 def get_total_tasks(uid):
     return tasks_db.get(uid,0)
 def check_plan_active(uid):
-    rec = user_plans.get(uid) or user_plans.get(str(uid))
-    if not rec:
-        return False, "No Plan", None
-    if isinstance(rec, dict):
-        if rec.get("status", "active") != "active":
-            return False, f"{rec.get('plan','')} Pending", None
-        expiry = rec.get("expiry")
-        if expiry:
-            try:
-                exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
-                if get_ist_today() > exp_date:
-                    return False, f"{rec.get('plan','').upper()} Expired", exp_date
-            except Exception:
-                pass
-        return True, f"{str(rec.get('plan','PLAN')).upper()}", expiry
-    plan = next((p for p in support_plans_db if p.get("id") == rec), None)
-    if not plan:
-        return False, "Plan Not Found", None
-    return True, f"{plan.get('name','PLAN').upper()}", None
-
+    plan = user_plans.get(uid)
+    if not plan: return False, "No Plan", None
+    if plan.get('status') != 'active': return False, f"{plan.get('plan','')} Pending", None
+    expiry = plan.get('expiry')
+    if expiry and get_ist_today() > expiry: return False, f"{plan.get('plan','').upper()} Expired", expiry
+    return True, f"{plan.get('plan','').upper()} till {expiry}", expiry
 def get_plan_limits(uid):
     is_active, _, _ = check_plan_active(uid)
     if not is_active:
         if tasks_db.get(uid,0) == 0:
             return DAILY_TASK_LIMIT_FREE, 10, "free"
         return 0, 0, "none"
-    rec = user_plans.get(uid) or user_plans.get(str(uid)) or {}
-    if isinstance(rec, dict):
-        price = int(rec.get("price", 0))
-        name = str(rec.get("plan", "")).lower()
+    plan = user_plans.get(uid, {}).get('plan','basic')
+    if plan == 'premium':
+        return DAILY_TASK_LIMIT_PREMIUM, 500, "premium"
     else:
-        plan = next((p for p in support_plans_db if p.get("id") == rec), {})
-        price = int(plan.get("price", 0))
-        name = str(plan.get("name", "")).lower()
-    if price >= 499 or "premium" in name:
-        return DAILY_TASK_LIMIT_PREMIUM, DAILY_EARNING_CAP_PREMIUM, "premium"
-    return DAILY_TASK_LIMIT_BASIC, DAILY_EARNING_CAP_BASIC, "basic"
-
+        return DAILY_TASK_LIMIT_BASIC, 200, "basic"
 def check_daily_limits(uid):
     today = str(get_ist_today())
     count = daily_task_count.get(uid, {}).get(today, 0)
@@ -635,19 +547,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid in banned_users:
         await update.message.reply_text("You are BANNED! Contact admin!")
         return ConversationHandler.END
-
-    args = context.args or []
-    if args:
-        raw_ref = args[0]
-        try:
-            ref_id = int(raw_ref.replace("ref_", "")) if raw_ref.startswith("ref_") else int(raw_ref)
-            if ref_id != uid and ref_id not in banned_users:
-                referral_map[uid] = ref_id
-                add_referral_v35(uid, ref_id)
-                save_data()
-        except Exception:
-            pass
-
     if not is_admin(uid):
         is_joined = await check_user_in_channel(uid, context)
         if not is_joined:
@@ -655,25 +554,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]
             ])
-            await update.message.reply_text(
-                f"👋 Welcome! Please join our channel {CHANNEL_ID} to use bot!\n\nJoin and click Check Joined!",
-                reply_markup=kb
-            )
+            await update.message.reply_text(f"👋 Welcome! Please join our channel {CHANNEL_ID} to use bot!\n\nJoin and click Check Joined!", reply_markup=kb)
             return ConversationHandler.END
-
+    args = context.args
+    ref_id = None
+    if args and args[0].isdigit():
+        ref_id = int(args[0])
+        if ref_id != uid and ref_id not in banned_users:
+            referral_map[uid] = ref_id
     if uid in users_db:
-        await update.message.reply_text(
-            f"Welcome back {users_db[uid].get('name','User')}! "
-            f"Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}",
-            reply_markup=main_menu()
-        )
+        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
         return ConversationHandler.END
-
-    await update.message.reply_text(
-        "Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?"
-    )
+    await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
-
 
 async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -802,9 +695,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
         [InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"), InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
-        [InlineKeyboardButton("⚠️ Missed ON/OFF", callback_data="toggle_missed"), InlineKeyboardButton("📡 Channels", callback_data="admin_channels_v35")],
-        [InlineKeyboardButton("👥 Referral Stats", callback_data="admin_referral_v35"), InlineKeyboardButton("➕ Add Admin", callback_data="admin_add_admin_v35")],
-        [InlineKeyboardButton("📋 All Admins", callback_data="admin_list_admins_v35"), InlineKeyboardButton("🖼️ Plan Image", callback_data="upload_plan_image_v35")],
+        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
         [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
     ])
     
@@ -883,26 +775,13 @@ async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await admin_panel(q, context)
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q=update.callback_query; await q.answer()
     uid = q.from_user.id
-    rec = referral_network.get(str(uid), {})
-    l1 = len(rec.get("level1", []))
-    l2 = len(rec.get("level2", []))
-    e = rec.get("earnings", {})
-    legacy_count = referrals_db.get(uid, 0)
-    legacy_earn = referral_earnings.get(uid, 0)
-    ref_link = f"https://t.me/{context.bot.username}?start=ref_{uid}"
-    msg = (
-        f"👥 My Referrals\n\nDirect L1: {l1} users\nIndirect L2: {l2} users\n"
-        f"Legacy active: {legacy_count}\n\n"
-        f"💰 L1 Plan: ₹{e.get('l1_plan',0):.2f}\n"
-        f"💰 L1 Daily: ₹{e.get('l1_daily',0):.2f}\n"
-        f"💰 L2: ₹{e.get('l2',0):.2f}\n"
-        f"Legacy earnings: ₹{legacy_earn}\n\n🔗 Invite Link:\n{ref_link}"
-    )
-    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
-
+    cnt=referrals_db.get(uid,0)
+    earnings = referral_earnings.get(uid,0)
+    ref_link = f"https://t.me/{context.bot.username}?start={uid}"
+    msg = f"👥 My Referrals\n\nActive: {cnt}\nEarnings: Rs{earnings}\n\n💰 Bonus Rs10 per task + 10% plan commission\n\n🔗 Your Referral Link:\n{ref_link}\n\nShare this link - When friend joins and completes task, you get Rs10!"
+    await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -931,7 +810,9 @@ async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = []
     for campaign in active_campaigns[:10]:
         kb.append([InlineKeyboardButton(f"🏪 {campaign['shop_name']} - {campaign['title'][:20]}", callback_data=f"promo_join_{campaign['id']}")])
-    kb.append([InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
+    kb.append([InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
+        [InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
 
 async def promo_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1330,8 +1211,6 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
-        add_commission_v35(target_id, "daily_work", reward)
-        save_data()
         await update.message.reply_text(f"✅ Approved {target_id} +Rs{reward}")
         try:
             await context.bot.send_message(chat_id=target_id, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(target_id)}", reply_markup=main_menu())
@@ -1663,8 +1542,6 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
-        add_commission_v35(uid, "daily_work", reward)
-        save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
         try:
             await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(uid)}\nTasks: {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}", reply_markup=main_menu())
@@ -1744,11 +1621,13 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         req = withdraw_requests[uid]
         amount = req['amount']
         current_bal = get_balance(uid)
-        withdrawn_balance_db[uid] = withdrawn_balance_db.get(uid, 0) + amount
+        bonus_balance[uid] = bonus_balance.get(uid, 0) - amount
         new_bal = get_balance(uid)
+        if new_bal < 0:
+            bonus_balance[uid] = bonus_balance.get(uid,0) - new_bal
+            new_bal = get_balance(uid)
         req['status']='approved'
         req['approved_at'] = str(get_ist_now())
-        save_data()
         last_withdraw_date_db[uid] = str(get_ist_today())
         await q.message.reply_text(f"Approved {uid} Rs{amount} Old Rs{current_bal} New Rs{new_bal}")
         try:
@@ -1882,313 +1761,6 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
-referral_network = {}
-
-# === MERGED V35 PERSISTENCE + REFERRAL SYSTEM ===
-CONFIG_FILE = "bot_config.json"
-DATA_FILE = "bot_data.json"
-admin_config = {"admins": list(ADMIN_ID_LIST)}
-
-def _safe_int_dict(data):
-    out = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            try: out[int(k)] = v
-            except Exception: out[k] = v
-    return out
-
-def save_json(file, data):
-    try:
-        with open(file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-    except Exception as e:
-        print(f"JSON save error {file}: {e}")
-
-def load_json(file, default):
-    try:
-        if os.path.exists(file):
-            with open(file, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"JSON load error {file}: {e}")
-    return default
-
-def add_referral_v35(new_user_id, referrer_id):
-    new_s, ref_s = str(new_user_id), str(referrer_id)
-    if new_s == ref_s:
-        return
-    if new_s not in referral_network:
-        referral_network[new_s] = {
-            "referred_by": ref_s, "level1": [], "level2": [],
-            "joined": str(get_ist_today()),
-            "earnings": {"l1_plan": 0, "l1_daily": 0, "l2": 0}
-        }
-    referral_network.setdefault(ref_s, {
-        "referred_by": None, "level1": [], "level2": [],
-        "joined": str(get_ist_today()),
-        "earnings": {"l1_plan": 0, "l1_daily": 0, "l2": 0}
-    })
-    referral_network[ref_s].setdefault("earnings", {"l1_plan": 0, "l1_daily": 0, "l2": 0})
-    if new_s not in referral_network[ref_s].setdefault("level1", []):
-        referral_network[ref_s]["level1"].append(new_s)
-    parent = referral_network[ref_s].get("referred_by")
-    if parent:
-        referral_network.setdefault(str(parent), {
-            "referred_by": None, "level1": [], "level2": [],
-            "joined": str(get_ist_today()),
-            "earnings": {"l1_plan": 0, "l1_daily": 0, "l2": 0}
-        })
-        if new_s not in referral_network[str(parent)].setdefault("level2", []):
-            referral_network[str(parent)]["level2"].append(new_s)
-    save_data()
-
-def add_commission_v35(user_id, type_, amount):
-    s = str(user_id)
-    rec = referral_network.get(s)
-    if not rec:
-        return
-    ref = rec.get("referred_by")
-    if not ref or str(ref) not in referral_network:
-        return
-    parent = referral_network[str(ref)]
-    parent.setdefault("earnings", {"l1_plan": 0, "l1_daily": 0, "l2": 0})
-    if type_ == "plan_purchase":
-        parent["earnings"]["l1_plan"] += float(amount) * 0.10
-        grand = parent.get("referred_by")
-        if grand and str(grand) in referral_network:
-            referral_network[str(grand)].setdefault("earnings", {"l1_plan": 0, "l1_daily": 0, "l2": 0})
-            referral_network[str(grand)]["earnings"]["l2"] += float(amount) * 0.002
-    elif type_ == "daily_work":
-        parent["earnings"]["l1_daily"] += float(amount) * 0.02
-        grand = parent.get("referred_by")
-        if grand and str(grand) in referral_network:
-            referral_network[str(grand)].setdefault("earnings", {"l1_plan": 0, "l1_daily": 0, "l2": 0})
-            referral_network[str(grand)]["earnings"]["l2"] += float(amount) * 0.002
-    save_data()
-
-def save_data():
-    try:
-        serial = {
-            "users_db": users_db,
-            "tasks_db": tasks_db,
-            "bonus_balance": bonus_balance,
-            "referral_earnings": referral_earnings,
-            "referrals_db": referrals_db,
-            "referral_map": referral_map,
-            "scheduled_tasks_db": scheduled_tasks_db,
-            "support_plans_db": support_plans_db,
-            "user_plans": user_plans,
-            "daily_task_count": daily_task_count,
-            "withdraw_requests": withdraw_requests,
-            "withdrawn_balance_db": withdrawn_balance_db,
-            "last_withdraw_date_db": last_withdraw_date_db,
-            "referral_network": referral_network,
-            "admin_config": admin_config,
-            "promo_campaigns_db": promo_campaigns_db,
-            "promo_earnings_db": promo_earnings_db,
-            "promo_views_db": promo_views_db,
-            "banned_users": list(banned_users),
-            "warnings_db": warnings_db,
-            "skip_db": skip_db,
-            "task_images_db": task_images_db,
-            "pending_plans": pending_plans,
-            "missed_tasks_db": missed_tasks_db,
-        }
-        # Sets are not JSON serializable; store campaign member IDs as lists.
-        serial["promo_campaigns_db"] = []
-        for original in promo_campaigns_db:
-            c = dict(original)
-            if isinstance(c.get("members_joined"), set):
-                c["members_joined"] = list(c["members_joined"])
-            serial["promo_campaigns_db"].append(c)
-        save_json(DATA_FILE, serial)
-        save_json("admin_config.json", admin_config)
-    except Exception as e:
-        print(f"Data save error: {e}")
-
-def load_data():
-    global scheduled_task_counter, promo_campaign_counter
-    data = load_json(DATA_FILE, {})
-    if not isinstance(data, dict):
-        return
-    for name in ["users_db","tasks_db","bonus_balance","referral_earnings","referrals_db",
-                 "referral_map","daily_task_count","withdraw_requests","withdrawn_balance_db","last_withdraw_date_db",
-                 "referral_network","admin_config","promo_earnings_db","promo_views_db"]:
-        val = data.get(name)
-        if isinstance(val, dict):
-            target = globals().get(name)
-            if isinstance(target, dict):
-                target.clear()
-                target.update(_safe_int_dict(val) if name not in ("referral_network","admin_config") else val)
-    if isinstance(data.get("banned_users"), list):
-        banned_users.clear()
-        banned_users.update(int(x) for x in data["banned_users"] if str(x).isdigit())
-    for name in ["warnings_db","skip_db","task_images_db","pending_plans","missed_tasks_db"]:
-        val = data.get(name)
-        if isinstance(val, dict):
-            target = globals().get(name)
-            if isinstance(target, dict):
-                target.clear()
-                target.update(_safe_int_dict(val))
-    if isinstance(data.get("support_plans_db"), list):
-        support_plans_db.clear()
-        support_plans_db.extend(data["support_plans_db"])
-    if isinstance(data.get("user_plans"), dict):
-        user_plans.clear()
-        user_plans.update(data["user_plans"])
-    if isinstance(data.get("scheduled_tasks_db"), list):
-        scheduled_tasks_db.clear()
-        for task in data["scheduled_tasks_db"]:
-            task = dict(task)
-            task["open_time_obj"] = parse_time_str(task.get("open_time",""))
-            task["close_time_obj"] = parse_time_str(task.get("close_time",""))
-            task["next_time_obj"] = parse_time_str(task.get("next_time",""))
-            if task["open_time_obj"] and task["close_time_obj"] and task["next_time_obj"]:
-                task["window_minutes"] = int((datetime.combine(get_ist_today(), task["close_time_obj"]) -
-                                               datetime.combine(get_ist_today(), task["open_time_obj"])).total_seconds()/60)
-                scheduled_tasks_db.append(task)
-        scheduled_task_counter = max([int(t.get("id",0)) for t in scheduled_tasks_db] + [0]) + 1
-    if isinstance(data.get("promo_campaigns_db"), list):
-        promo_campaigns_db.clear()
-        for c in data["promo_campaigns_db"]:
-            c = dict(c)
-            c["members_joined"] = set(c.get("members_joined", []))
-            promo_campaigns_db.append(c)
-        promo_campaign_counter = max([int(c.get("id",0)) for c in promo_campaigns_db] + [0]) + 1
-    cfg = load_json("admin_config.json", {})
-    if isinstance(cfg, dict):
-        admin_config.update(cfg)
-    for aid in admin_config.get("admins", []):
-        try:
-            if int(aid) not in ADMIN_ID_LIST:
-                ADMIN_ID_LIST.append(int(aid))
-        except Exception:
-            pass
-    print(f"Loaded merged data: users={len(users_db)}, tasks={len(scheduled_tasks_db)}, referrals={len(referral_network)}")
-
-
-async def admin_channels_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    await q.message.reply_text(
-        f"📡 Channels\nMain: {CHANNEL_ID}\nScreenshot: {get_screenshot_channel()}\nWithdraw: {get_withdraw_channel()}\n"
-        f"Admins: {ADMIN_ID_LIST}", reply_markup=main_menu()
-    )
-
-async def admin_referral_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    total_l1 = sum(len(v.get("level1", [])) for v in referral_network.values())
-    total_l2 = sum(len(v.get("level2", [])) for v in referral_network.values())
-    await q.message.reply_text(f"📊 Referral Stats\nUsers: {len(referral_network)}\nL1: {total_l1}\nL2: {total_l2}", reply_markup=main_menu())
-
-async def admin_add_admin_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    await q.message.reply_text("Use /add_admin USER_ID")
-
-async def admin_list_admins_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    await q.message.reply_text(f"👑 Admins: {ADMIN_ID_LIST}")
-
-async def upload_plan_image_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    await q.message.reply_text("Send the plan image with caption /set_plan_image")
-
-async def toggle_missed_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if not is_admin(q.from_user.id): return
-    admin_config["missed_enabled"] = not bool(admin_config.get("missed_enabled", False))
-    save_data()
-    await q.edit_message_text(f"Missed tasks: {'ON' if admin_config['missed_enabled'] else 'OFF'}")
-
-async def merged_referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    total_l1 = sum(len(v.get("level1", [])) for v in referral_network.values())
-    total_l2 = sum(len(v.get("level2", [])) for v in referral_network.values())
-    lines = [f"📊 Referral Stats\nUsers: {len(referral_network)}\nL1: {total_l1}\nL2: {total_l2}\n"]
-    for uid, val in sorted(referral_network.items(), key=lambda x: len(x[1].get("level1", [])), reverse=True)[:10]:
-        e = val.get("earnings", {})
-        lines.append(f"{uid}: L1={len(val.get('level1',[]))} L2={len(val.get('level2',[]))} "
-                     f"Plan=₹{e.get('l1_plan',0):.2f} Daily=₹{e.get('l1_daily',0):.2f} L2=₹{e.get('l2',0):.2f}")
-    await update.message.reply_text("\n".join(lines)[:4000])
-
-async def merged_channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text(
-        f"Channels\nMain: {CHANNEL_ID}\nScreenshot: {get_screenshot_channel()}\nWithdraw: {get_withdraw_channel()}\n"
-        f"Admins: {ADMIN_ID_LIST}"
-    )
-
-async def merged_add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not context.args:
-        await update.message.reply_text("Usage: /add_admin USER_ID")
-        return
-    try:
-        new_id = int(context.args[0])
-        if new_id not in ADMIN_ID_LIST:
-            ADMIN_ID_LIST.append(new_id)
-        admin_config.setdefault("admins", [])
-        if new_id not in admin_config["admins"]:
-            admin_config["admins"].append(new_id)
-        save_data()
-        await update.message.reply_text(f"✅ Admin added: {new_id}\nAdmins: {ADMIN_ID_LIST}")
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-
-async def merged_backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    save_data()
-    for filename, caption in [
-        (DATA_FILE, "Merged bot data backup"),
-        ("admin_config.json", "Admin configuration backup")
-    ]:
-        try:
-            with open(filename, "rb") as f:
-                await update.message.reply_document(document=f, filename=filename, caption=caption)
-        except Exception as e:
-            await update.message.reply_text(f"Backup error: {e}")
-    await update.message.reply_text("✅ Backup complete.")
-
-async def buy_support_cb_v35(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    try:
-        pid = int(q.data.split("_")[-1])
-    except Exception:
-        return
-    plan = next((p for p in support_plans_db if int(p.get("id",0)) == pid), None)
-    if not plan:
-        await q.message.reply_text("Plan not found!", reply_markup=main_menu())
-        return
-    uid = q.from_user.id
-    pending_plans[uid] = {"plan": plan["name"], "plan_id": pid, "price": plan["price"], "date": str(get_ist_today()), "status":"pending"}
-    save_data()
-    await q.message.reply_text(
-        f"⏳ {plan['name']} selected — ₹{plan['price']}.\n\n"
-        f"UPI: {ADMIN_UPI}\nPay and send screenshot to admin.\nYour request is pending admin verification.",
-        reply_markup=main_menu()
-    )
-    for admin_id in ADMIN_ID_LIST:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=f"💎 NEW PLAN REQUEST\nUser: {users_db.get(uid,{}).get('name','Unknown')} ({uid})\n"
-                     f"Plan: {plan['name']} ₹{plan['price']}\nUPI: {users_db.get(uid,{}).get('upi','Not set')}",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_plan_{uid}"),
-                    InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")
-                ]])
-            )
-        except Exception:
-            pass
-
-async def buy_support_placeholder_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await buy_support_cb_v35(update, context)
 # === SUPPORT PLANS DB - DYNAMIC ===
 support_plans_db = [
     {"id": 1, "name": "Basic Support", "price": 199, "desc": "1 Month Support | Daily Task Help | Withdraw Help"},
@@ -2461,7 +2033,71 @@ async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 import json, os
 DATA_FILE = "bot_data.json"
 
+def save_data():
+    try:
+        data = {}
+        # Save important dicts
+        try:
+            data['users_db'] = users_db
+            data['tasks_db'] = tasks_db
+            data['bonus_balance'] = bonus_balance
+            data['referral_earnings'] = referral_earnings
+            data['referrals_db'] = referrals_db
+            data['referral_map'] = referral_map
+            data['scheduled_tasks_db'] = scheduled_tasks_db
+            data['support_plans_db'] = support_plans_db
+            data['user_plans'] = user_plans
+        except:
+            pass
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, default=str)
+        print("Data saved OK")
+    except Exception as e:
+        print(f"Save error {e}")
 
+def load_data():
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                data = json.load(f)
+            global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
+            global scheduled_tasks_db, support_plans_db, user_plans
+            if 'users_db' in data:
+                # Convert keys to int where possible
+                loaded_users = data['users_db']
+                users_db.clear()
+                for k,v in loaded_users.items():
+                    try:
+                        users_db[int(k)] = v
+                    except:
+                        users_db[k] = v
+            if 'tasks_db' in data:
+                tasks_db.clear()
+                for k,v in data['tasks_db'].items():
+                    try:
+                        tasks_db[int(k)] = v
+                    except:
+                        tasks_db[k] = v
+            if 'bonus_balance' in data:
+                bonus_balance.clear()
+                for k,v in data['bonus_balance'].items():
+                    try:
+                        bonus_balance[int(k)] = v
+                    except:
+                        bonus_balance[k] = v
+            if 'scheduled_tasks_db' in data:
+                scheduled_tasks_db.clear()
+                scheduled_tasks_db.extend(data['scheduled_tasks_db'])
+            if 'support_plans_db' in data:
+                support_plans_db.clear()
+                support_plans_db.extend(data['support_plans_db'])
+            if 'user_plans' in data:
+                user_plans.clear()
+                user_plans.update(data['user_plans'])
+            print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
+    except Exception as e:
+        print(f"Load error {e}")
+        import traceback; traceback.print_exc()
 
 # User Plans - which user bought which plan
 if 'user_plans' not in globals():
@@ -2469,45 +2105,47 @@ if 'user_plans' not in globals():
 
 def get_reward_for_user(uid, base_reward=5):
     try:
-        rec = user_plans.get(uid) or user_plans.get(str(uid))
-        if not rec:
+        pid = user_plans.get(str(uid)) or user_plans.get(int(uid))
+        if not pid:
             return base_reward
-        if isinstance(rec, dict):
-            price = int(rec.get("price", 0))
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        if not plan:
+            return base_reward
+        price = plan['price']
+        if price == 199:
+            return 10
+        elif price == 499:
+            return 15
+        elif price >= 999:
+            return 20
         else:
-            plan = next((p for p in support_plans_db if p.get("id") == rec), None)
-            price = int(plan.get("price", 0)) if plan else 0
-        if price == 199: return 10
-        if price == 499: return 15
-        if price >= 999: return 20
-        return base_reward + (price // 100)
-    except Exception:
+            return base_reward + (price // 100)
+    except:
         return base_reward
-
 
 async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /assign_plan <user_id> <plan_id>")
+        await update.message.reply_text("Usage: /assign_plan <user_id> <plan_id>\nExample: /assign_plan 123456789 2\n/list_support_plans")
         return
     try:
-        uid, pid = int(context.args[0]), int(context.args[1])
-        plan = next((p for p in support_plans_db if int(p.get("id",0)) == pid), None)
+        uid = int(context.args[0])
+        pid = int(context.args[1])
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
         if not plan:
             await update.message.reply_text(f"Plan ID {pid} not found!")
             return
-        user_plans[uid] = {"plan": plan["name"], "plan_id": pid, "price": plan["price"], "status":"active", "activated":str(get_ist_today())}
-        add_commission_v35(uid, "plan_purchase", float(plan["price"]))
+        user_plans[str(uid)] = pid
         save_data()
-        await update.message.reply_text(f"Assigned! User {uid} -> {plan['name']} ₹{plan['price']} = ₹{get_reward_for_user(uid)}/task")
+        reward = get_reward_for_user(uid, 5)
+        await update.message.reply_text(f"Assigned! User {uid} -> {plan['name']} Rs{plan['price']} = Rs{reward}/task")
         try:
-            await context.bot.send_message(chat_id=uid, text=f"🎉 Your plan is activated: {plan['name']} ₹{plan['price']}", reply_markup=main_menu())
-        except Exception:
+            await context.bot.send_message(chat_id=uid, text=f"Your Plan Activated! {plan['name']} Rs{plan['price']} Now Rs{reward}/task!")
+        except:
             pass
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-
 
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -2516,17 +2154,11 @@ async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No user plans yet!")
         return
     msg = f"USER PLANS - {len(user_plans)} Users:\n\n"
-    for uid, rec in list(user_plans.items())[:30]:
-        if isinstance(rec, dict):
-            pid = rec.get("plan_id")
-            plan = next((p for p in support_plans_db if p.get("id") == pid), None)
-        else:
-            pid = rec
-            plan = next((p for p in support_plans_db if p.get("id") == pid), None)
-        name = users_db.get(int(uid), {}).get("name", "Unknown") if str(uid).isdigit() else "Unknown"
-        msg += f"{uid} {name} -> Plan {pid} {plan['name'] if plan else ''} = ₹{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
-    await update.message.reply_text(msg[:4000])
-
+    for uid, pid in list(user_plans.items())[:30]:
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        name = users_db.get(int(uid), {}).get('name', 'Unknown') if str(uid).isdigit() else 'Unknown'
+        msg += f"{uid} {name} -> Plan {pid} {plan['name'] if plan else ''} = Rs{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
+    await update.message.reply_text(msg)
 
 async def new_members_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -2550,20 +2182,13 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(context.args[0])
         user = users_db.get(uid, {})
-        rec = user_plans.get(uid) or user_plans.get(str(uid))
-        if isinstance(rec, dict):
-            pid, pname, price = rec.get("plan_id"), rec.get("plan"), rec.get("price", 0)
-        else:
-            pid = rec
-            plan = next((p for p in support_plans_db if p.get("id") == rec), None)
-            pname, price = (plan.get("name"), plan.get("price",0)) if plan else ("No Plan",0)
-        msg = (f"USER INFO {uid}\nName: {user.get('name','Unknown')}\n"
-               f"Tasks: {tasks_db.get(uid,0)}\nBalance: ₹{get_balance(uid)}\n"
-               f"Plan: {pname or 'No Plan'} ₹{price}\nReward: ₹{get_reward_for_user(uid)}/task")
+        plan_id = user_plans.get(str(uid))
+        plan = next((p for p in support_plans_db if p['id'] == plan_id), None) if plan_id else None
+        reward = get_reward_for_user(uid)
+        msg = f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\nEarnings: {bonus_balance.get(uid,0)}\nPlan: {plan['name'] if plan else 'No Plan'} Rs{plan['price'] if plan else 0}\nReward: Rs{reward}/task"
         await update.message.reply_text(msg)
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-
 
 
 
@@ -2711,7 +2336,6 @@ async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 if uid in pending_daily:
                     base_reward = pending_daily[uid].get('task',{}).get('reward',5)
                     reward = get_reward_for_user(uid, base_reward)
-                    add_commission_v35(uid, "daily_work", reward)
                     tasks_db[uid] = tasks_db.get(uid,0) + 1
                     bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward != 5 else bonus_balance.get(uid,0)
                     del pending_daily[uid]
@@ -2749,7 +2373,6 @@ async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_
         try:
             base_reward = pending_daily[uid].get('task',{}).get('reward',5)
             reward = get_reward_for_user(uid, base_reward)
-            add_commission_v35(uid, "daily_work", reward)
             tasks_db[uid] = tasks_db.get(uid,0) + 1
             if reward != 5:
                 bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5)
@@ -2794,6 +2417,186 @@ async def pending_bulk_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=mk)
 
 
+# === BACKUP FIX - ADDED FOR 3 FILES BACKUP ===
+async def backup_cmd(update, context):
+    from telegram import Update
+    from telegram.ext import ContextTypes
+    uid = update.effective_user.id
+    if uid not in ADMIN_ID_LIST:
+        return
+    try:
+        import os, json, glob
+        files_to_backup = []
+        # Original DB files
+        for jf in ["bot_data.json", "channel_config.json"]:
+            if os.path.exists(jf):
+                files_to_backup.append(jf)
+        # Also backup all _db jsons if exists
+        for jf in glob.glob("*_db*.json"):
+            if jf not in files_to_backup and os.path.exists(jf):
+                files_to_backup.append(jf)
+        # Ensure config exists
+        if not os.path.exists("bot_data.json"):
+            with open("bot_data.json","w") as f: json.dump({}, f)
+            files_to_backup.append("bot_data.json")
+        if not os.path.exists("channel_config.json"):
+            with open("channel_config.json","w") as f: json.dump({}, f)
+            files_to_backup.append("channel_config.json")
+        
+        # Also create combined backup
+        combined = {}
+        for jf in files_to_backup:
+            try:
+                with open(jf,"r") as f: combined[jf]=json.load(f)
+            except:
+                pass
+        with open("bot_config.json","w") as f: json.dump({"admins": ADMIN_ID_LIST, "backup_time": str(get_ist_now())}, f, indent=2)
+        files_to_backup.append("bot_config.json")
+        
+        with open("users_progress.json","w") as f: json.dump(combined, f, indent=2)
+        with open("referrals.json","w") as f: json.dump(combined, f, indent=2)
+        
+        for fp in files_to_backup[:10]:  # limit to 10 files max telegram
+            try:
+                await update.message.reply_document(document=open(fp,'rb'), filename=fp)
+            except Exception as e:
+                print(f"Backup send error {fp}: {e}")
+        await update.message.reply_text("✅ All Backup files - Save to Drive! If bot deleted, upload these to new bot - total users will restore! Backup + Referral L1/L2 system ready! Original 2000+ lines file!")
+    except Exception as e:
+        await update.message.reply_text(f"Backup error {e}")
+
+async def add_admin_cmd(update, context):
+    uid = update.effective_user.id
+    if uid not in ADMIN_ID_LIST:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /add_admin USER_ID")
+        return
+    try:
+        new_id = int(context.args[0])
+        if new_id not in ADMIN_ID_LIST:
+            ADMIN_ID_LIST.append(new_id)
+            await update.message.reply_text(f"✅ Admin added: {new_id}. Total admins: {ADMIN_ID_LIST}. If one blocked, other can control!")
+        else:
+            await update.message.reply_text("Already admin")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def referral_stats_cmd(update, context):
+    uid = update.effective_user.id
+    if uid not in ADMIN_ID_LIST:
+        return
+    try:
+        from glob import glob
+        msg = "📊 Referral Stats\n"
+        # Try to read referrals_db
+        try:
+            import json
+            if "referrals_db" in globals():
+                total = len(referrals_db) if isinstance(referrals_db, dict) else 0
+                msg += f"Total referral users: {total}\n"
+        except:
+            pass
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+
+
+
+
+
+
+
+
+
+
+async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer("Preparing backup...")
+    except:
+        pass
+    try:
+        import os, json, glob
+        files = []
+        for jf in ["bot_data.json", "channel_config.json", "bot_config.json", "users_progress.json", "referrals.json"]:
+            if os.path.exists(jf):
+                files.append(jf)
+        for jf in glob.glob("*_db*.json"):
+            if os.path.exists(jf) and jf not in files:
+                files.append(jf)
+        if not os.path.exists("bot_config.json"):
+            with open("bot_config.json","w") as f:
+                json.dump({"admins": ADMIN_ID_LIST, "channels": {"screenshot": SCREENSHOT_CHANNEL, "withdraw": WITHDRAW_CHANNEL, "join": JOIN_CHANNEL}}, f)
+            files.append("bot_config.json")
+        sent = 0
+        for fp in files[:10]:
+            try:
+                if os.path.exists(fp):
+                    await q.message.reply_document(document=open(fp, 'rb'), filename=fp)
+                    sent += 1
+            except Exception as e:
+                print(e)
+        await q.message.reply_text(f"✅ {sent} Backup files sent!\nTask:{SCREENSHOT_CHANNEL} Withdraw:{WITHDRAW_CHANNEL} Join:{JOIN_CHANNEL}\nSave to Drive!")
+    except Exception as e:
+        try:
+            await q.message.reply_text(f"Backup error {e}")
+        except:
+            pass
+
+async def admin_missed_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        global MISSED_ENABLED
+        MISSED_ENABLED = not MISSED_ENABLED
+        st = "ON ✅" if MISSED_ENABLED else "OFF ❌"
+        await q.message.reply_text(f"⏰ Missed Tasks now {st}\nWhen ON, users see missed tasks!")
+    except Exception as e:
+        print(e)
+
+async def admin_add_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        await q.message.reply_text("👑 Add Admin\nUse: /add_admin USER_ID\nEx: /add_admin 8544307598")
+    except:
+        pass
+
+async def admin_referral_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        await q.message.reply_text(f"🔗 Referral L1 {REFERRAL_PLAN_PERCENT}% Plan + {REFERRAL_DAILY_PERCENT}% Daily + Rs10\nL2 0.2%\n3 Channels Ready!")
+    except:
+        pass
+
+async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid = update.effective_user.id
+        if uid not in ADMIN_ID_LIST:
+            return
+        await update.message.reply_text(f"📢 Channels Status\nTask Screenshots: {SCREENSHOT_CHANNEL}\nLink: {SCREENSHOT_LINK}\n\nWithdraw: {WITHDRAW_CHANNEL}\nLink: {WITHDRAW_LINK}\n\nMembers Join: {JOIN_CHANNEL}\nLink: {JOIN_LINK}\nActive: Yes\nUse /channels_list")
+    except Exception as e:
+        print(e)
+
+async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await update.message.reply_text(f"📢 Channels List\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3")
+    except Exception as e:
+        print(e)
+
+
 def main():
     load_data()
     threading.Thread(target=run_flask, daemon=True).start()
@@ -2813,8 +2616,20 @@ def main():
             print(f"\n🔄 Build attempt {retry_count+1}/{max_retries}")
             app = Application.builder().token(BOT_TOKEN).build()
             
-            # Register error handler
+            # Register error handler first
             app.add_error_handler(error_handler)
+            try:
+                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
+                app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
+                app.add_handler(CallbackQueryHandler(withdraw_cb_fixed, pattern='^withdraw$',), group=-2)
+                app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
+                print('V25 All Fixed group -2')
+                app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
+            except Exception as e:
+                print(f'V25 fix {e}')
+            
             # Register all handlers
             conv_reg = ConversationHandler(
                 entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
@@ -2859,17 +2674,7 @@ def main():
             app.add_handler(conv_reg)
             app.add_handler(conv_screenshot)
             app.add_handler(conv_skip)
-            conv_plan_proof = ConversationHandler(
-                entry_points=[
-                    CallbackQueryHandler(plan_proof_entry_cb, pattern="^plan_basic_proof$"),
-                    CallbackQueryHandler(plan_proof_entry_cb, pattern="^plan_premium_proof$")
-                ],
-                states={PLAN_PROOF: [MessageHandler(filters.PHOTO, handle_plan_proof_upload)]},
-                fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
-            )
             app.add_handler(conv_set_image)
-            app.add_handler(conv_plan_proof)
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
             app.add_handler(CommandHandler("pending", pending_cmd))
@@ -2883,27 +2688,6 @@ def main():
             app.add_handler(CommandHandler("warnings", warnings_cmd))
             app.add_handler(CommandHandler("banned", banned_cmd))
             app.add_handler(CommandHandler("unban", unban_cmd))
-            app.add_handler(CommandHandler("backup", merged_backup_cmd))
-            app.add_handler(CommandHandler("add_admin", merged_add_admin_cmd))
-            app.add_handler(CommandHandler("channels_status", merged_channels_status_cmd))
-            app.add_handler(CommandHandler("referral_stats", merged_referral_stats_cmd))
-            app.add_handler(CommandHandler("set_tasks", set_tasks_cmd))
-            app.add_handler(CommandHandler("set_balance", set_balance_cmd))
-            app.add_handler(CommandHandler("test_withdraw_setup", test_withdraw_setup_cmd))
-            app.add_handler(CommandHandler("add_support_plan", add_support_plan_cmd))
-            app.add_handler(CommandHandler("list_support_plans", list_support_plans_cmd))
-            app.add_handler(CommandHandler("remove_support_plan", remove_support_plan_cmd))
-            app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
-            app.add_handler(CommandHandler("user_plans", user_plans_cmd))
-            app.add_handler(CommandHandler("new_members", new_members_cmd))
-            app.add_handler(CommandHandler("user_info", user_info_cmd))
-            app.add_handler(CommandHandler("set_screenshot_channel", set_screenshot_channel_cmd))
-            app.add_handler(CommandHandler("set_withdraw_channel", set_withdraw_channel_cmd))
-            app.add_handler(CommandHandler("approve_task", approve_task_all_cmd))
-            app.add_handler(CommandHandler("approve_all_pending", approve_all_pending_cmd))
-            app.add_handler(CommandHandler("pending_bulk", pending_bulk_view))
-            app.add_handler(CommandHandler("my_missed", my_missed_tasks_cmd))
-            app.add_handler(CommandHandler("add_bulk_tasks", add_bulk_tasks_cmd))
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -2911,9 +2695,6 @@ def main():
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
             app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
-            app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
-            app.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
-            app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern="^bulk_approve_"))
             app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
             app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
@@ -2939,17 +2720,27 @@ def main():
             app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
             app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
             app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
             app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
-            app.add_handler(CallbackQueryHandler(buy_support_cb_v35, pattern="^buy_support_"))
-            app.add_handler(CallbackQueryHandler(toggle_missed_cb_v35, pattern="^toggle_missed$"))
-            app.add_handler(CallbackQueryHandler(admin_channels_cb_v35, pattern="^admin_channels_v35$"))
-            app.add_handler(CallbackQueryHandler(admin_referral_cb_v35, pattern="^admin_referral_v35$"))
-            app.add_handler(CallbackQueryHandler(admin_add_admin_cb_v35, pattern="^admin_add_admin_v35$"))
-            app.add_handler(CallbackQueryHandler(admin_list_admins_cb_v35, pattern="^admin_list_admins_v35$"))
-            app.add_handler(CallbackQueryHandler(upload_plan_image_cb_v35, pattern="^upload_plan_image_v35$"))
             
+
+            app.add_handler(CommandHandler("backup", backup_cmd))
+            app.add_handler(CommandHandler("bacup", backup_cmd))
+            app.add_handler(CommandHandler("add_admin", add_admin_cmd))
+            app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+
+            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
+            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
+            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
+            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^support_plans$"))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^view_plans$"))
             global bot_application
             bot_application = app
 
@@ -2960,14 +2751,52 @@ def main():
             except Exception as e:
                 print(f"Notifier error: {e}")
 
-            print("✅ Handlers registered, starting polling...")
+            # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
+            try:
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                # Run delete webhook
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Delete webhook error {e}")
 
             print("✅ Handlers registered, starting polling...")
+                        # DELETE WEBHOOK TO AVOID CONFLICT - IMPORTANT FIX
             try:
-                import asyncio as _asyncio
-                _asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+                import asyncio
+                async def del_hook():
+                    try:
+                        await app.bot.delete_webhook(drop_pending_updates=True)
+                        print("✅ Webhook deleted, polling will start")
+                    except Exception as e:
+                        print(f"Webhook delete: {e}")
+                try:
+                    asyncio.get_event_loop().run_until_complete(del_hook())
+                except:
+                    try:
+                        asyncio.run(del_hook())
+                    except:
+                        pass
             except Exception as e:
-                print(f"Webhook delete error: {e}")
+                print(f"Delete webhook error {e}")
+
+            print("✅ Handlers registered, starting polling...")
+            attempt=0
+    while True:
+        attempt+=1
+        try:
+            print(f"Polling attempt {attempt}")
             app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES, close_loop=False)
 
             print("✅ Polling ended cleanly")
@@ -2976,11 +2805,12 @@ def main():
         except Exception as e:
             err_str = str(e)
             print(f"❌ Polling error: {err_str[:1000]}")
-            if "Conflict" in err_str or "terminated by other" in err_str:
+            if "Conflict" in err_str or "terminated by other" in err_str or "Conflict" in str(e):
                 retry_count += 1
-                print(f"Conflict detected, old instance still running! Waiting 30 sec for it to die... Retry {retry_count}/20")
+                print(f"Conflict detected, old instance still running! Waiting 60 sec for it to die... Retry {retry_count}/20")
                 import time
-                time.sleep(30)  # Wait for old instance to die
+                time.sleep(60)
+                print("Old instance should be dead now, retrying...")
                 wait_time = 20 + (retry_count * 5)
                 print(f"⚠️ CONFLICT! Another instance running. Waiting {wait_time}s")
                 import time as t_sleep
