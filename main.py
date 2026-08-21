@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='telegram')
+warnings.filterwarnings('ignore', message='.*per_message.*')
 import os, re, threading, json, asyncio
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
