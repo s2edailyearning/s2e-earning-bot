@@ -1697,6 +1697,172 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(msg, reply_markup=main_menu())
 
 
+
+# === SUPPORT PLANS DB - DYNAMIC ===
+support_plans_db = [
+    {"id": 1, "name": "Basic Support", "price": 199, "desc": "1 Month Support | Daily Task Help | Withdraw Help"},
+    {"id": 2, "name": "Premium Support", "price": 499, "desc": "3 Months Support | Daily + Promo Help | Instant Withdraw | Priority"}
+]
+
+async def add_support_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 3:
+        await update.message.reply_text("Usage: /add_support_plan <Name> <Price> <Description>\nExample: /add_support_plan Gold 999 Full Support 6 Months\n/list_support_plans")
+        return
+    try:
+        name = context.args[0]
+        price = int(context.args[1])
+        desc = " ".join(context.args[2:])
+        new_id = max([p['id'] for p in support_plans_db], default=0) + 1
+        support_plans_db.append({"id": new_id, "name": name, "price": price, "desc": desc})
+        await update.message.reply_text(f"Added Plan ID {new_id}: {name} Rs{price}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+async def list_support_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    msg = f"SUPPORT PLANS - {len(support_plans_db)} Plans:\n\n"
+    for p in support_plans_db:
+        msg += f"ID {p['id']}: {p['name']} Rs{p['price']}\n{p['desc']}\n\n"
+    await update.message.reply_text(msg)
+
+async def remove_support_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /remove_support_plan <id>")
+        return
+    try:
+        pid = int(context.args[0])
+        global support_plans_db
+        support_plans_db = [p for p in support_plans_db if p['id'] != pid]
+        await update.message.reply_text(f"Removed ID {pid}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
+
+# === FIXED BACK HANDLERS V24 ===
+async def back_admin_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("BACK ADMIN FIXED")
+    try:
+        q = update.callback_query
+        if q:
+            try:
+                await q.answer("Opening Admin...")
+            except:
+                pass
+        uid = update.effective_user.id
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        txt = "ADMIN PANEL\n\n/add_task open close next title link reward"
+        kb = [
+            [InlineKeyboardButton("Pending Daily", callback_data="admin_view_pending"), InlineKeyboardButton("Withdraw", callback_data="admin_view_withdraw")],
+            [InlineKeyboardButton("Todays Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("Promo", callback_data="admin_view_promos")],
+            [InlineKeyboardButton("Stats", callback_data="admin_stats"), InlineKeyboardButton("Banned", callback_data="admin_banned")],
+            [InlineKeyboardButton("Menu", callback_data="back_menu")]
+        ]
+        mk = InlineKeyboardMarkup(kb)
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+    except Exception as e:
+        print(f"BACK ADMIN ERROR {e}")
+
+async def back_menu_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("BACK MENU FIXED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
+        await menu(update, context)
+    except Exception as e:
+        print(f"back_menu error {e}")
+
+# === USER MENU FIXED HANDLERS V25 ===
+async def withdraw_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("WITHDRAW FIXED CLICKED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
+        uid = update.effective_user.id
+        total = tasks_db.get(uid, 0) * 5 + bonus_balance.get(uid, 0) + referral_earnings.get(uid, 0)
+        txt = f"WITHDRAW\n\nEarnings: Rs{total}\nMin: Rs{WITHDRAW_OPTIONS[0]}\nUse: /withdraw <amount>"
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        mk = InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="back_menu")]])
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+    except Exception as e:
+        print(f"withdraw cb error {e}")
+
+async def promo_tasks_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("PROMO TASKS FIXED CLICKED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
+        uid = update.effective_user.id
+        # English version - no Telugu
+        txt = """PROMO TASKS - Earn by Sharing!
+
+Shop owners need customers!
+Our members (YOU) share shop poster on WhatsApp Status
+Your status seen by 200 people = Views!
+You earn Rs10 per 100 views! 200 views = Rs20!
+
+Example: Kavali Fashions Diwali Sale 50% Off poster - You share - 250 friends see - You upload screenshot - Rs25 wallet!
+
+No active campaigns now - Admin will add!
+Shop owners contact @s2edayincome"""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        mk = InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="back_menu")]])
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+    except Exception as e:
+        print(f"promo cb error {e}")
+
+async def scheduled_tasks_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("SCHEDULED TASKS FIXED CLICKED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
+        uid = update.effective_user.id
+        txt = "SCHEDULED TASKS\n\nNo tasks today! Admin will add. Check Daily Task for current tasks!"
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        mk = InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="back_menu")]])
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+    except Exception as e:
+        print(f"scheduled cb error {e}")
+
+async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("SUPPORT PLANS FIXED CLICKED")
+    try:
+        if update.callback_query:
+            try:
+                await update.callback_query.answer()
+            except:
+                pass
+        uid = update.effective_user.id
+        txt = "SUPPORT PLANS\n\n"
+        for p in support_plans_db:
+            txt += f"{p['name']} - Rs{p['price']}\n{p['desc']}\n\n"
+        txt += "Contact @s2edayincome to buy!"
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        kb = []
+        for p in support_plans_db:
+            kb.append([InlineKeyboardButton(f"Buy {p['name']} Rs{p['price']}", callback_data=f"buy_support_{p['id']}")])
+        kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
+        mk = InlineKeyboardMarkup(kb)
+        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+    except Exception as e:
+        print(f"support cb error {e}")
+
+
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     try:
@@ -1718,11 +1884,15 @@ def main():
             # Register error handler first
             app.add_error_handler(error_handler)
             try:
-                app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"), group=-1)
-                app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"), group=-1)
-                print("✅ Global Back buttons registered - Back to Admin fixed")
+                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
+                app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
+                app.add_handler(CallbackQueryHandler(withdraw_cb_fixed, pattern='^withdraw$',), group=-2)
+                app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
+                print('V25 All Fixed group -2')
             except Exception as e:
-                print(f"Global back fix: {e}")
+                print(f'V25 fix {e}')
             
             # Register all handlers
             conv_reg = ConversationHandler(
