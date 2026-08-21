@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings('ignore')
 import os, re, threading, json, asyncio
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
@@ -32,6 +34,24 @@ if _env:
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
 bot_application = None
+
+def keep_alive_pinger():
+    import time
+    url = "https://s2e-earning-bot.onrender.com/"
+    while True:
+        try:
+            time.sleep(240)
+            try:
+                import httpx
+                httpx.get(url, timeout=10)
+                print("Keep-alive ping OK")
+            except:
+                import urllib.request
+                urllib.request.urlopen(url, timeout=10)
+                print("Keep-alive ping OK")
+        except Exception as e:
+            print(f"Keep-alive {e}")
+            time.sleep(60)
 
 def notification_thread_func():
     import asyncio
@@ -1679,6 +1699,11 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
+    try:
+        threading.Thread(target=keep_alive_pinger, daemon=True).start()
+        print('Keep-alive started')
+    except:
+        pass
     print("🚀 Starting bot with Conflict protection...")
     
     retry_count = 0
