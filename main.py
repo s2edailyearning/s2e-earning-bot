@@ -315,22 +315,23 @@ async def referral_stats_cmd(update:Update, context:ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text(f"Total referral users {len(referrals)}")
 
 def main():
+    if not BOT_TOKEN:
+        print("TOKEN missing")
+        return
     print("Waiting 15 sec for old instance to shutdown...")
-    time.sleep(15)  # Old instance off avvadam kosam wait
-    # tarvata polling start
-  if not BOT_TOKEN: print("TOKEN missing"); return
-  threading.Thread(target=run_flask,daemon=True).start()
-  app=ApplicationBuilder().token(BOT_TOKEN).build()
-  app.add_handler(CommandHandler("start",start))
-  app.add_handler(CommandHandler("backup",backup_cmd))
-  app.add_handler(CommandHandler("add_admin",add_admin_cmd))
-  app.add_handler(CommandHandler("set_plan_image",set_plan_image_cmd))
-  app.add_handler(CommandHandler("channels_status",channels_status))
-  app.add_handler(CommandHandler("referral_stats",referral_stats_cmd))
-  app.add_handler(CommandHandler("enable_missed", lambda u,c: (config.__setitem__("missed_enabled",True), save_json(CONFIG_FILE,config), c.bot.send_message(u.effective_chat.id,"ON"))[-1]))
-  app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-  app.add_handler(CallbackQueryHandler(button_handler))
-  print("V34 Starting")
-  app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    time.sleep(15)
+    threading.Thread(target=run_flask, daemon=True).start()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("add_admin", add_admin_cmd))
+    app.add_handler(CommandHandler("set_plan_image", set_plan_image_cmd))
+    app.add_handler(CommandHandler("channels_status", channels_status))
+    app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    print("V34 Starting")
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
-if __name__=="__main__": main()
+if __name__ == "__main__":
+    main()
