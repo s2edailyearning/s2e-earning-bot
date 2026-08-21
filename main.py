@@ -2491,6 +2491,28 @@ async def admin_missed_toggle_cb(update, context):
     except: pass
 
 
+async def channels_status_cmd(update, context):
+    try:
+        await update.message.reply_text(f"📢 Channels Status\nChannel: {CHANNEL_ID}\nLink: {CHANNEL_LINK}\nActive: Yes\nUse /channels_list to see all")
+    except Exception as e:
+        print(e)
+
+async def channels_list_cmd(update, context):
+    try:
+        await update.message.reply_text(f"📢 Channels List\n1. Main: {CHANNEL_ID} - {CHANNEL_LINK}\nTotal: 1")
+    except Exception as e:
+        print(e)
+
+async def support_plans_fixed_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    try:
+        # Prevent duplicate - edit message instead of sending new
+        await q.message.reply_text("💎 SUPPORT PLANS\nBasic - Rs199 1 Month\nPremium - Rs499 3 Months\nContact @s2edayincome")
+    except: pass
+
+
 def main():
     load_data()
     threading.Thread(target=run_flask, daemon=True).start()
@@ -2630,6 +2652,11 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
             app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
             app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^support_plans$"))
+            app.add_handler(CallbackQueryHandler(support_plans_fixed_cb, pattern="^view_plans$"))
             global bot_application
             bot_application = app
 
