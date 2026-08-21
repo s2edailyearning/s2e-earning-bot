@@ -2809,20 +2809,23 @@ async def set_upi_cmd(update, context):
     global UPI_ID, UPI_NAME
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
+            await update.message.reply_text("Not admin")
             return
         if not context.args:
-            await update.message.reply_text(f"UPI: {UPI_ID} Usage: /set_upi upi@upi name")
+            await update.message.reply_text(f"Current UPI: {UPI_ID} Usage: /set_upi upi@upi Name")
             return
-        UPI_ID=context.args[0]
-        if len(context.args)>1:
-            UPI_NAME=" ".join(context.args[1:])
+        UPI_ID = context.args[0]
+        if len(context.args) > 1:
+            UPI_NAME = " ".join(context.args[1:])
+        else:
+            UPI_NAME = "S2E"
         try:
             import json
             with open("upi_config.json","w") as fw:
                 json.dump({"upi":UPI_ID,"name":UPI_NAME}, fw)
         except:
             pass
-        await update.message.reply_text(f"UPI Set {UPI_ID}")
+        await update.message.reply_text(f"UPI Set! UPI ID: {UPI_ID} Name: {UPI_NAME}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
