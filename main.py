@@ -223,6 +223,7 @@ referral_earnings = {}
 withdraw_requests = {}
 withdraw_done_date = {}
 daily_task_count = {}
+missed_tasks_db = {}  # {uid: [missed task dicts]}
 last_withdraw_date_db = {}
 screenshot_hashes = set()
 task_open_time = {}
@@ -803,6 +804,8 @@ async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
+    # Track missed tasks when user opens daily task
+    track_missed_tasks_for_user(uid)
     if uid in banned_users:
         await q.message.reply_text("🚫 You are BANNED! Contact admin!")
         return
@@ -1137,7 +1140,8 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         reward = 5
         if numbers:
             last_num = int(numbers[-1])
-            if last_num <= 100:
+            # FIX: Allow up to 10000, so 200 works!
+            if last_num <= 10000:
                 reward = last_num
         time_pattern = r'(\d{1,2}:\d{2}\s*(?:AM|PM)?|\d{1,2}\s*(?:AM|PM)|\d+\s*min)'
         times = re.findall(time_pattern, text, re.IGNORECASE)
@@ -1154,6 +1158,8 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
             remaining = remaining.replace(t, '', 1)
         remaining = remaining.replace(link, '').strip()
         remaining = re.sub(r'\b' + str(reward) + r'\b\s*$', '', remaining).strip()
+        # Extra cleanup: remove trailing number if it looks like reward left in title
+        remaining = re.sub(r'\s+\d+\s*$', '', remaining).strip()
         title = remaining if remaining else f"Task at {open_str}"
         success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
@@ -1591,6 +1597,58 @@ async def test_withdraw_setup_cmd(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(f"TEST User {target} 15/15 Balance Rs{get_balance(target)}")
 
 
+
+def track_missed_tasks_for_user(uid):
+    # Check which tasks user missed today (time passed without completing)
+    today = str(get_ist_today())
+    now = get_ist_time()
+    today_tasks = [t for t in scheduled_tasks_db if t['date'] == today]
+    missed = []
+    user_status = user_task_status.get(uid, {})
+    skip_status = skip_db.get(uid, {})
+    for task in today_tasks:
+        if now > task['close_time_obj']:
+            tid = task['id']
+            # If not completed and not skipped, it's missed
+            status = user_status.get(tid, {}).get('status') if isinstance(user_status.get(tid, {}), dict) else user_status.get(tid)
+            skip = skip_status.get(tid, {}).get('status') if isinstance(skip_status.get(tid, {}), dict) else skip_status.get(tid)
+            if status != 'completed' and skip != 'skipped':
+                missed.append(task)
+    if uid not in missed_tasks_db:
+        missed_tasks_db[uid] = []
+    # Merge without duplicates
+    existing_ids = {t['id'] for t in missed_tasks_db[uid]}
+    for t in missed:
+        if t['id'] not in existing_ids:
+            missed_tasks_db[uid].append(t)
+    return missed_tasks_db[uid]
+
+async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    missed = track_missed_tasks_for_user(uid)
+    # Also check newly missed
+    if not missed:
+        await q.message.reply_text("✅ No missed tasks today! Good job! All tasks completed or skipped properly.", reply_markup=main_menu())
+        return
+    msg = f"❌ Missed Tasks Today - Total {len(missed)}:\n\n"
+    for t in missed:
+        msg += f"Task {t['task_number']}: {t['title']}\nTime: {t['open_time']}→{t['close_time']} Reward: Rs{t['reward']}\nLink: {t['link']}\n\n"
+    msg += "\nTasks time over! You cannot complete now. Next tasks will come tomorrow!"
+    await q.message.reply_text(msg, reply_markup=main_menu())
+
+async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid=update.effective_user.id
+    missed = track_missed_tasks_for_user(uid)
+    if not missed:
+        await update.message.reply_text("✅ No missed tasks!", reply_markup=main_menu())
+        return
+    msg = f"Missed {len(missed)} tasks:\n"
+    for t in missed:
+        msg+=f"{t['task_number']}: {t['title']} {t['open_time']}-{t['close_time']}\n"
+    await update.message.reply_text(msg, reply_markup=main_menu())
+
+
 def main():
     threading.Thread(target=run_flask, daemon=True).start()
     print("🚀 Starting bot with Conflict protection...")
@@ -1679,6 +1737,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
             app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
             app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
+            app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
+            app.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
             app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
