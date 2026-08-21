@@ -608,7 +608,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_view_pending_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     if not pending_daily:
         await q.message.reply_text("✅ No pending daily tasks!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
@@ -621,7 +623,9 @@ async def admin_view_pending_cb(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_view_withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     pending_wd = {uid: data for uid, data in withdraw_requests.items() if data.get('status')=='processing'}
     if not pending_wd:
         await q.message.reply_text("✅ No pending withdraw requests!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
@@ -634,7 +638,9 @@ async def admin_view_withdraw_cb(update: Update, context: ContextTypes.DEFAULT_T
 
 async def admin_view_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     today_tasks = get_tasks_for_today()
     if not today_tasks:
         await q.message.reply_text("📋 No scheduled tasks for today!\n\nAdd via:\n/add_task 12:45PM 15min 1:03PM Title https://link 5\nThen /set_task_image <id> to add poster!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
@@ -647,7 +653,9 @@ async def admin_view_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def admin_view_promos_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     if not promo_campaigns_db:
         await q.message.reply_text("🏪 No promo campaigns!\n\nAdd via:\n/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
@@ -658,13 +666,17 @@ async def admin_view_promos_cb(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def admin_view_stats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     msg = f"📊 Detailed Stats\n\nUsers: {len(users_db)}\nTasks Completed: {sum(tasks_db.values())}\nReferrals: {len(referrals_db)}\nBonus Distributed: Rs{sum(bonus_balance.values())}\nReferral Earnings: Rs{sum(referral_earnings.values())}\nPromo Earnings: Rs{sum(promo_earnings_db.values())}\nPending Daily: {len(pending_daily)}\nPromo Pending: {len(promo_pending)}\nBanned: {len(banned_users)}\nWarnings: {len(warnings_db)}\nPosters: {len(task_images_db)}"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     if not banned_users:
         await q.message.reply_text("✅ No banned users!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
         return
@@ -1096,8 +1108,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
     uid = update.effective_user.id
     print(f"📥 /add_task from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Auto-added! Try again!")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Your ID: {uid}")
         return
     try:
         text = update.message.text.replace('/add_task','').strip()
@@ -1142,8 +1153,7 @@ async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT
     uid = update.effective_user.id
     print(f"📥 /list_scheduled_tasks_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     today_tasks = get_tasks_for_today()
     if not today_tasks:
@@ -1159,8 +1169,7 @@ async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_T
     uid = update.effective_user.id
     print(f"📥 /add_promo_campaign_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     text = update.message.text.replace('/add_promo','').strip()
     if not text:
@@ -1184,8 +1193,7 @@ async def list_promo_campaigns_cmd(update: Update, context: ContextTypes.DEFAULT
     uid = update.effective_user.id
     print(f"📥 /list_promo_campaigns_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     if not promo_campaigns_db:
         await update.message.reply_text("No promo campaigns! Add via /add_promo")
@@ -1199,8 +1207,7 @@ async def promo_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     print(f"📥 /promo_pending_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     if not promo_pending:
         await update.message.reply_text("No pending promo submissions!")
@@ -1214,8 +1221,7 @@ async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     print(f"📥 /skipped_tasks_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     if not context.args:
         await update.message.reply_text("Usage: /skipped user_id or /skipped all")
@@ -1249,8 +1255,7 @@ async def warnings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     print(f"📥 /warnings_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     if not warnings_db:
         await update.message.reply_text("No warnings!")
@@ -1265,8 +1270,7 @@ async def banned_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     print(f"📥 /banned_cmd from {uid}: {update.message.text[:100]}")
     if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
+        await update.message.reply_text(f"❌ Not admin! Only admin can use this command. Your ID: {uid}")
         return
     if not banned_users:
         await update.message.reply_text("No banned users!")
@@ -1322,9 +1326,14 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bal < WITHDRAW_MIN:
         await q.message.reply_text(f"❌ Min withdraw Rs{WITHDRAW_MIN}! Balance Rs{bal}\n\nEarn more via referrals and tasks!", reply_markup=main_menu())
         return
-    kb = [[InlineKeyboardButton(f"Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in WITHDRAW_OPTIONS if opt <= bal]
+    available = [opt for opt in WITHDRAW_OPTIONS if opt <= bal]
+    if not available:
+        await q.message.reply_text(f"💰 Wallet Balance: Rs{bal}\nMin Withdraw: Rs{WITHDRAW_MIN}\n\nYour balance {bal} is less than min options! Earn more!", reply_markup=main_menu())
+        return
+    kb = [[InlineKeyboardButton(f"Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in available]
     kb.append([InlineKeyboardButton("📋 Menu", callback_data="back_menu")])
-    await q.message.reply_text(f"💸 Select withdraw amount\nBalance: Rs{bal}\nMin: Rs{WITHDRAW_MIN}", reply_markup=InlineKeyboardMarkup(kb))
+    msg = f"💰 Withdraw - Wallet Balance: Rs{bal}\n\nAvailable for withdraw (based on your balance {bal}):\n" + ", ".join([f"Rs{o}" for o in available]) + f"\n\nSelect one:\nMin: Rs{WITHDRAW_MIN}"
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
 
 async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1333,17 +1342,35 @@ async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fee=int(amount*PLATFORM_FEE_PERCENT/100)
     net=amount-fee
     upi = users_db.get(uid,{}).get('upi','Not set')
-    await q.message.reply_text(f"💸 Withdraw Confirmation\n\nAmount: Rs{amount}\nFee {PLATFORM_FEE_PERCENT}%: Rs{fee}\nNet You Get: Rs{net}\nUPI: {upi}\n\nConfirm?", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Confirm", callback_data=f"wd_confirm_{amount}"), InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]]))
+    context.user_data['withdraw_amount'] = amount
+    # Show UPI correct/wrong confirmation as you requested
+    msg = f"💸 Withdraw Details\n\nSelected: Rs{amount}\nFee {PLATFORM_FEE_PERCENT}%: Rs{fee}\nYou Get: Rs{net}\nBalance: Rs{get_balance(uid)}\n\n💳 Your UPI: {upi}\n\nIs this UPI correct?\nIf wrong, you can edit!"
+    kb = [
+        [InlineKeyboardButton(f"✅ UPI Correct - Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")],
+        [InlineKeyboardButton("✏️ Edit UPI", callback_data="wd_edit_upi")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]
+    ]
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+
+async def wd_edit_upi_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    await q.message.reply_text("✏️ Send your new UPI ID:\nExample: 9876543210@ybl or name@oksbi\n\nType new UPI now:")
+    context.user_data['awaiting_upi_edit'] = True
+    return
 
 async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     amount=int(q.data.split("_")[-1])
+    # Check if edited UPI in user_data
+    if context.user_data.get('edited_upi'):
+        upi = context.user_data.get('edited_upi')
+        users_db[uid]['upi'] = upi
     fee=int(amount*PLATFORM_FEE_PERCENT/100)
     net=amount-fee
     upi = users_db.get(uid,{}).get('upi')
-    if not upi:
-        await q.message.reply_text("❌ UPI not set! Please set UPI via /start registration again!", reply_markup=main_menu())
+    if not upi or upi == 'Not set':
+        await q.message.reply_text("❌ UPI not set! Send UPI first!", reply_markup=main_menu())
         return
     withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
     withdraw_done_date[uid]=str(get_ist_today())
@@ -1356,7 +1383,9 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     if uid in pending_daily:
         is_first=tasks_db.get(uid,0)==0
@@ -1383,7 +1412,9 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
 
 async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     if uid in pending_daily:
         del pending_daily[uid]
@@ -1399,7 +1430,9 @@ async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def admin_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     banned_users.add(uid)
     if uid in pending_daily: del pending_daily[uid]
@@ -1410,7 +1443,9 @@ async def admin_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     banned_users.discard(uid)
     if uid in warnings_db: warnings_db[uid]['count']=0
@@ -1418,7 +1453,9 @@ async def admin_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def promo_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     parts=q.data.split("_")
     uid=int(parts[2]); campaign_id=int(parts[3]); views=int(parts[4])
     campaign = get_promo_campaign(campaign_id)
@@ -1435,7 +1472,9 @@ async def promo_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def promo_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     parts=q.data.split("_")
     uid=int(parts[2]); campaign_id=int(parts[3])
     if uid in promo_pending:
@@ -1447,7 +1486,9 @@ async def promo_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     if uid in withdraw_requests:
         withdraw_requests[uid]['status']='approved'
@@ -1458,7 +1499,9 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
     uid=int(q.data.split("_")[-1])
     if uid in withdraw_requests:
         withdraw_requests[uid]['status']='rejected'
@@ -1471,6 +1514,23 @@ async def error_handler(update, context):
     import traceback
     traceback.print_exc()
     
+
+
+
+async def handle_upi_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('awaiting_upi_edit'):
+        return
+    uid = update.effective_user.id
+    new_upi = update.message.text.strip()
+    if '@' not in new_upi or len(new_upi) < 6:
+        await update.message.reply_text("❌ Invalid UPI! Must contain @ Example: 9876543210@ybl")
+        return
+    context.user_data['edited_upi'] = new_upi
+    context.user_data['awaiting_upi_edit'] = False
+    amount = context.user_data.get('withdraw_amount', 200)
+    fee=int(amount*PLATFORM_FEE_PERCENT/100)
+    net=amount-fee
+    await update.message.reply_text(f"✅ UPI Updated: {new_upi}\n\nNow confirm withdraw:\nAmount: Rs{amount} Net: Rs{net} UPI: {new_upi}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")]]))
 
 
 def main():
@@ -1523,6 +1583,7 @@ def main():
     application.add_handler(conv_screenshot)
     application.add_handler(conv_skip)
     application.add_handler(conv_set_image)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_upi_edit))
     application.add_handler(CommandHandler("menu", menu))
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(CommandHandler("pending", pending_cmd))
@@ -1559,6 +1620,7 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
     application.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
     application.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
+    application.add_handler(CallbackQueryHandler(wd_edit_upi_cb, pattern="^wd_edit_upi$"))
     application.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
     application.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
     application.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
