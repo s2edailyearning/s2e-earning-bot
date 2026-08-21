@@ -1683,12 +1683,12 @@ def run_flask():
 def main():
     print("🚀 Starting bot in WEBHOOK mode for Render - NO CONFLICT!")
     
-    # Delete any existing webhook first
-    import requests
+    # Delete any existing webhook first - using httpx (already installed)
     try:
+        import httpx
         token = BOT_TOKEN
         # Delete old polling/webhook
-        requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true", timeout=10)
+        httpx.get(f"https://api.telegram.org/bot{token}/deleteWebhook?drop_pending_updates=true", timeout=10)
         print("✅ Old webhook deleted")
         import time
         time.sleep(2)
@@ -1815,8 +1815,9 @@ def main():
     import time
     time.sleep(3)
     try:
+        import httpx
         webhook_url = f"https://s2e-earning-bot.onrender.com/webhook"
-        resp = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={webhook_url}&drop_pending_updates=true", timeout=15)
+        resp = httpx.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={webhook_url}&drop_pending_updates=true", timeout=15)
         print(f"✅ Webhook set to {webhook_url}: {resp.text[:200]}")
     except Exception as e:
         print(f"Set webhook error: {e}")
