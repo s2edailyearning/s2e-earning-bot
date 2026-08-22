@@ -1116,8 +1116,15 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             print(f"V56 screenshot channel err3 {e3}")
         except Exception as e:
             print(f"V56 screenshot outer err {e}")
-        # IMPORTANT: Daily task screenshots are routed ONLY to the dedicated
-        # screenshot channel. Do not forward them to admin/bot chats.
+        for admin_id in ADMIN_ID_LIST:
+            try:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
+            except:
+                try:
+                    await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                except Exception as e:
+                    print(f"V56 admin forward err {e}")
         return ConversationHandler.END
     except Exception as e:
         print(f"V56 handle_screenshot_upload outer exception {e}")
@@ -3532,8 +3539,15 @@ def main():
                                 await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
                             except Exception as e3:
                                 print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
-                    # Daily task screenshots go ONLY to the dedicated screenshot channel.
-                    # No duplicate forwarding to admin/bot chats.
+                    for admin_id in ADMIN_ID_LIST:
+                        try:
+                            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
+                        except:
+                            try:
+                                await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                            except Exception as e:
+                                print(f"V56 admin forward err {e}")
                 except Exception as e:
                     print(f"V56 v56_screenshot_simple_handler err {e}")
                     import traceback
@@ -3546,8 +3560,6 @@ def main():
             # V56 Add simple handlers with high priority - No ConversationHandler!
             app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_task_image_simple_handler), group=1)
-            # SINGLE daily-screenshot handler: group=2.
-            # Group-0 fallback intentionally does NOT process member screenshots.
             app.add_handler(MessageHandler(filters.PHOTO, v56_screenshot_simple_handler), group=2)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_screenshot_simple_handler), group=2)
             print("V56 Simple handlers added - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!")
@@ -3568,11 +3580,12 @@ def main():
                         print(f"V56 fallback_photo_handler: Admin {uid} photo with caption /set_task_image - Handling as task image!")
                         await set_task_image_cmd(update, context)
                         return
-                    # Member screenshots are handled ONLY by v56_screenshot_simple_handler
-                    # in group=2. Do not process them here, otherwise the same screenshot
-                    # can be sent twice (bot/admin + screenshot channel).
+                    # If member and has active task, handle as screenshot
+                    # Check if user is in UPLOAD_SCREENSHOT state or has recently requested upload
+                    # For fallback, always try to handle as screenshot if not admin
                     if not is_admin(uid):
-                        print(f"V56 fallback_photo_handler: Member photo ignored here; group=2 screenshot handler will process it once.")
+                        print(f"V56 fallback_photo_handler: Member {uid} photo - Handling as screenshot fallback! FINAL!")
+                        await handle_screenshot_upload(update, context)
                         return
                 except Exception as e:
                     print(f"V56 fallback_photo_handler err {e}")
@@ -3623,7 +3636,9 @@ def main():
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
             app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
             app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
-            app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
+            # REMOVED: legacy Basic/Premium support_plans handler.
+            # The single active handler is support_plans_cb_fixed (group=-2),
+            # which shows only the manually configured OTT plans.
             app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
             app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
             app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
@@ -3662,7 +3677,7 @@ def main():
             app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
             app.add_handler(CommandHandler("list_support_plans", list_support_plans_cmd))
             app.add_handler(CommandHandler("add_support_plan", add_support_plan_cmd))
-            app.add_handler(CommandHandler("remove_support_plan", remove_support_plan_cmd_v2))
+            app.add_handler(CommandHandler("remove_support_plan", remove_support_plan_cmd))
             app.add_handler(CommandHandler("bacup", backup_cmd))
             app.add_handler(CommandHandler("add_admin", add_admin_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
