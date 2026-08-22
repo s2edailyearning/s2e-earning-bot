@@ -3292,6 +3292,12 @@ async def list_support_plans_cmd(update, context):
 async def remove_plan_cmd(update, context):
     return await remove_support_plan_cmd_v2(update, context)
 
+# Compatibility alias: the handler registration uses /remove_support_plan.
+# The previous build registered this name without defining it, causing a
+# NameError during startup and making the Telegram bot unresponsive.
+async def remove_support_plan_cmd(update, context):
+    return await remove_support_plan_cmd_v2(update, context)
+
 async def set_plan_image_cmd(update, context):
     return await set_plan_image_cmd_v2(update, context)
 
@@ -3636,15 +3642,10 @@ def main():
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
             app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
             app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
-            # REMOVED: legacy Basic/Premium support_plans handler.
-            # The single active handler is support_plans_cb_fixed (group=-2),
-            # which shows only the manually configured OTT plans.
-            app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
-            app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
-            app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
-            app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
-            app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
-            app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
+            # Legacy Basic/Premium callback handlers are intentionally NOT
+            # registered. The only Support Plans entry is the dynamic OTT
+            # handler above (support_plans_cb_fixed), which reads the manual
+            # support_plans_db configuration and shows all configured plans.
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
             app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
