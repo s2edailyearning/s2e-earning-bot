@@ -913,10 +913,19 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
 
 async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
     current, next_task = get_current_scheduled_task_with_interval()
+    # Mark that this user explicitly requested the screenshot upload flow.
+    context.user_data['awaiting_daily_screenshot'] = True
+    context.user_data['daily_screenshot_task_id'] = current.get('id') if current else None
     if current:
-        await q.message.reply_text(f"📤 Send screenshot for Task {current['task_number']}!\n\nOpen {current['open_time']} Close {current['close_time']} ({current['window_minutes']} mins)\n\nSend as PHOTO, not file!")
+        await q.message.reply_text(
+            f"📤 Send screenshot for Task {current['task_number']}!\n\n"
+            f"Open {current['open_time']} Close {current['close_time']} ({current['window_minutes']} mins)\n\n"
+            "Send as PHOTO, not file!"
+        )
     else:
         await q.message.reply_text("📤 Send screenshot as PHOTO!\n\nMake sure it's for today's task!")
     return UPLOAD_SCREENSHOT
@@ -1069,15 +1078,6 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             print(f"V56 screenshot channel err3 {e3}")
         except Exception as e:
             print(f"V56 screenshot outer err {e}")
-        for admin_id in ADMIN_ID_LIST:
-            try:
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-            except:
-                try:
-                    await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                except Exception as e:
-                    print(f"V56 admin forward err {e}")
         return ConversationHandler.END
     except Exception as e:
         print(f"V56 handle_screenshot_upload outer exception {e}")
@@ -3394,8 +3394,11 @@ def main():
                         return
                     if not update.message.photo and not update.message.document:
                         return
-                    # Check if user has active task or recently clicked Upload Screenshot
-                    # Always handle as screenshot for non-admin - Important channel ki vachedi!
+                    # V58: Only treat member photos as task screenshots after the user
+                    # explicitly pressed Upload Screenshot. This prevents unrelated photos
+                    # from being captured by the bot.
+                    if not context.user_data.get('awaiting_daily_screenshot'):
+                        return
                     file_id = None
                     file_unique_id = None
                     if update.message.photo:
@@ -3431,7 +3434,9 @@ def main():
                         chan = get_screenshot_channel()
                         kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
                         await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
-                        print(f"V56 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Important channel ki vachedi!")
+                        print(f"V58 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY!")
+                        context.user_data.pop('awaiting_daily_screenshot', None)
+                        context.user_data.pop('daily_screenshot_task_id', None)
                     except Exception as e:
                         print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan}")
                         try:
@@ -3441,15 +3446,6 @@ def main():
                                 await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
                             except Exception as e3:
                                 print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
-                    for admin_id in ADMIN_ID_LIST:
-                        try:
-                            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-                        except:
-                            try:
-                                await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                            except Exception as e:
-                                print(f"V56 admin forward err {e}")
                 except Exception as e:
                     print(f"V56 v56_screenshot_simple_handler err {e}")
                     import traceback
@@ -3511,6 +3507,8 @@ def main():
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            # V58 FIX: Upload Screenshot button had no registered callback handler.
+            app.add_handler(CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), group=-1)
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
