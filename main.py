@@ -223,6 +223,7 @@ async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYP
 WITHDRAW_MIN = 200
 PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 1
+DEFAULT_DAILY_TASK_ID = -1
 REFERRAL_BONUS_PER_TASK = 10
 REFERRAL_PLAN_COMMISSION_PERCENT = 10
 DAILY_TASK_LIMIT_BASIC = 10
@@ -497,7 +498,20 @@ def get_today_task_for_user(uid):
     current, next_task = get_current_scheduled_task_with_interval()
     if current:
         return current
-    return {"title": "Join Channel @s2edayincome", "link": get_join_channel_link(), "reward": 5}
+    # Do not create an untracked task that can repeat after approval.
+    # If no scheduled task is active, this fallback has one stable ID so
+    # completion/pending status can be checked and the same task is not shown again.
+    return {
+        "id": DEFAULT_DAILY_TASK_ID,
+        "task_number": 1,
+        "title": "Join Channel @s2edayincome",
+        "link": get_join_channel_link(),
+        "reward": 5,
+        "open_time": "00:00",
+        "close_time": "23:59",
+        "next_time": "00:00",
+        "window_minutes": 1440,
+    }
 
 def main_menu():
     return InlineKeyboardMarkup([
@@ -870,7 +884,14 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today=str(get_ist_today())
     count, limit, cap = check_daily_limits(uid)
     if count >= limit and limit > 0:
-        await q.message.reply_text(f"⏰ Daily limit {limit} reached! You did {count} tasks today!\n\nUpgrade to Premium for {DAILY_TASK_LIMIT_PREMIUM} tasks/day!", reply_markup=main_menu())
+        is_active, plan_name, _ = check_plan_active(uid)
+        if is_active and plan_name.lower().startswith("basic"):
+            limit_msg = f"⏰ Basic plan daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nUpgrade to Premium for {DAILY_TASK_LIMIT_PREMIUM} tasks/day if you want more tasks."
+        elif is_active and plan_name.lower().startswith("premium"):
+            limit_msg = f"⏰ Premium daily limit {limit} reached! You completed {count}/{limit} tasks today."
+        else:
+            limit_msg = f"⏰ Daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nChoose a Support Plan for more daily tasks."
+        await q.message.reply_text(limit_msg, reply_markup=main_menu())
         return
     current, next_task = get_current_scheduled_task_with_interval()
     missed, newly_missed = check_missed_tasks_with_interval(uid)
@@ -885,7 +906,38 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         else:
             task = get_today_task_for_user(uid)
-            await q.message.reply_text(f"📅 Today's Task:\n\nTitle: {task['title']}\nReward: Rs{task['reward']}\nLink: {task['link']}\n\nClick Upload Screenshot after completing!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"), InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task.get('id',0)}")]]))
+            task_id = task.get('id', DEFAULT_DAILY_TASK_ID)
+            status_data = user_task_status.get(uid, {}).get(task_id, {})
+            status = status_data.get('status') if isinstance(status_data, dict) else status_data
+            if status == 'completed':
+                await q.message.reply_text(
+                    f"✅ Today's task is already completed!\n\n"
+                    f"Tasks today: {count}/{limit}\n"
+                    f"No new task is available right now. Admin can add/update the next task.",
+                    reply_markup=main_menu()
+                )
+                return
+            if status == 'pending_verification':
+                await q.message.reply_text(
+                    f"⏳ Today's task screenshot is already pending admin verification.\n\n"
+                    f"Tasks today: {count}/{limit}",
+                    reply_markup=main_menu()
+                )
+                return
+            if status == 'skipped':
+                await q.message.reply_text(
+                    f"⏭️ Today's task was skipped.\n\nTasks today: {count}/{limit}",
+                    reply_markup=main_menu()
+                )
+                return
+            await q.message.reply_text(
+                f"📅 Today's Task:\n\nTitle: {task['title']}\nReward: Rs{task['reward']}\nLink: {task['link']}\n\n"
+                f"Tasks today: {count}/{limit}\n\nClick Upload Screenshot after completing!",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"),
+                    InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task_id}")
+                ]])
+            )
             return
     task_id = current['id']
     status_data = user_task_status.get(uid, {}).get(task_id, {})
@@ -1041,6 +1093,25 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                 default_task = {'id': 0, 'title': 'Daily Task', 'reward': 5, 'task_number': 1, 'open_time': '00:00', 'close_time': '23:59'}
             task_to_use = default_task
             print(f"V56 handle_screenshot_upload: No current task, using default {task_to_use.get('id')} for user {uid}")
+        task_id_for_status = task_to_use.get('id', DEFAULT_DAILY_TASK_ID) if task_to_use else DEFAULT_DAILY_TASK_ID
+        existing_status_data = user_task_status.get(uid, {}).get(task_id_for_status, {})
+        existing_status = existing_status_data.get('status') if isinstance(existing_status_data, dict) else existing_status_data
+        if existing_status == 'completed':
+            await update.message.reply_text(
+                f"✅ Task {task_to_use.get('task_number', 1)} is already completed.\n\n"
+                "Please wait for the next task instead of sending the same screenshot again.",
+                reply_markup=main_menu()
+            )
+            context.user_data.pop('awaiting_daily_screenshot', None)
+            context.user_data.pop('daily_screenshot_task_id', None)
+            return ConversationHandler.END
+        if existing_status == 'pending_verification' or uid in pending_daily:
+            await update.message.reply_text(
+                "⏳ This task screenshot is already pending admin verification.\n\n"
+                "Please wait for Approve/Reject; don't submit the same task again.",
+                reply_markup=main_menu()
+            )
+            return ConversationHandler.END
         if file_unique_id and file_unique_id in screenshot_hashes:
             if uid not in warnings_db:
                 warnings_db[uid] = {'count': 0}
@@ -1054,9 +1125,10 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         if file_unique_id:
             screenshot_hashes.add(file_unique_id)
         pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
+        context.user_data.pop('awaiting_daily_screenshot', None)
+        context.user_data.pop('daily_screenshot_task_id', None)
         if uid not in user_task_status:
             user_task_status[uid] = {}
-        task_id_for_status = task_to_use.get('id', 0) if task_to_use else 0
         user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
         await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Upload screenshot button fix!", reply_markup=main_menu())
         try:
@@ -1331,7 +1403,16 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
         await update.message.reply_text(f"✅ Approved {target_id} +Rs{reward}")
         try:
-            await context.bot.send_message(chat_id=target_id, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(target_id)}", reply_markup=main_menu())
+            _, daily_limit, _ = check_daily_limits(target_id)
+            daily_count = get_tasks(target_id)
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(f"✅ Task Approved! +Rs{reward}\n"
+                      f"Balance: Rs{get_balance(target_id)}\n"
+                      f"Tasks today: {daily_count}/{daily_limit}\n"
+                      f"Total completed tasks: {tasks_db.get(target_id, 0)}"),
+                reply_markup=main_menu()
+            )
         except: pass
 
 # Duplicate update protection for Render double instance
@@ -1830,9 +1911,19 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
+        save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
         try:
-            await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(uid)}\nTasks: {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}", reply_markup=main_menu())
+            _, daily_limit, _ = check_daily_limits(uid)
+            daily_count = get_tasks(uid)
+            await context.bot.send_message(
+                chat_id=uid,
+                text=(f"✅ Task Approved! +Rs{reward}\n"
+                      f"Balance: Rs{get_balance(uid)}\n"
+                      f"Tasks today: {daily_count}/{daily_limit}\n"
+                      f"Total completed tasks: {tasks_db.get(uid, 0)}"),
+                reply_markup=main_menu()
+            )
         except: pass
 
 async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
