@@ -1978,6 +1978,119 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Withdraw channel send error: {e}")
 
+async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Approve every still-pending screenshot for one task number.
+
+    Admin workflow: reject bad submissions individually first, then press
+    "Approve ALL Task N" to approve the remaining pending submissions.
+    Already approved/rejected submissions are skipped because they are removed
+    from pending_daily.
+    """
+    q = update.callback_query
+    try:
+        await q.answer("Processing bulk approval…")
+    except Exception:
+        pass
+    if not is_admin(q.from_user.id):
+        return
+
+    try:
+        task_number = int(q.data.split("_", 2)[2])
+    except Exception:
+        try:
+            task_number = int(q.data.rsplit("_", 1)[-1])
+        except Exception:
+            await q.message.reply_text("❌ Invalid bulk approval task number.")
+            return
+
+    # Snapshot first because approved entries are deleted from pending_daily.
+    targets = []
+    for uid, data in list(pending_daily.items()):
+        try:
+            task = data.get('task', {}) if isinstance(data, dict) else {}
+            if int(task.get('task_number', -1)) == task_number:
+                targets.append((uid, data))
+        except Exception:
+            continue
+
+    if not targets:
+        await q.message.reply_text(
+            f"ℹ️ No pending submissions left for Task {task_number}.\n"
+            "Rejected/already approved submissions are skipped."
+        )
+        return
+
+    approved = 0
+    total_reward = 0.0
+    referral_total_l1 = 0.0
+    referral_total_l2 = 0.0
+    today = str(get_ist_today())
+
+    for uid, data in targets:
+        # Re-check in case another admin action handled this user while the
+        # bulk operation was running.
+        if uid not in pending_daily:
+            continue
+        try:
+            task = data.get('task', {}) if isinstance(data, dict) else {}
+            reward = float(task.get('reward', 5) or 5)
+            is_first = tasks_db.get(uid, 0) == 0
+            task_date = str(data.get('date', today))
+
+            tasks_db[uid] = tasks_db.get(uid, 0) + 1
+            daily_task_count.setdefault(uid, {})
+            daily_task_count[uid][task_date] = daily_task_count[uid].get(task_date, 0) + 1
+
+            if reward != 5:
+                bonus_balance[uid] = bonus_balance.get(uid, 0) + (reward - 5)
+
+            del pending_daily[uid]
+            task_open_time.pop(uid, None)
+
+            # Mark the submitted task completed.
+            for tid, status_data in list(user_task_status.get(uid, {}).items()):
+                if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
+                    mark_task_completed_with_interval(uid, tid)
+                    break
+
+            ref_id = referral_map.get(uid)
+            if ref_id is None:
+                ref_id = referral_map.get(str(uid))
+            if ref_id and is_first:
+                referrals_db[ref_id] = referrals_db.get(ref_id, 0) + 1
+
+            l1_comm, l2_comm = credit_referral_task_commission(uid, reward)
+            referral_total_l1 += l1_comm
+            referral_total_l2 += l2_comm
+            total_reward += reward
+            approved += 1
+
+            try:
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=(
+                        f"✅ Task Approved! +Rs{reward:g}\n"
+                        f"Balance: Rs{get_balance(uid):g}\n"
+                        f"Tasks: {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}"
+                    ),
+                    reply_markup=main_menu(),
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"Bulk approve error for {uid}: {e}")
+
+    save_data()
+    await q.message.reply_text(
+        f"✅ BULK APPROVED Task {task_number}\n\n"
+        f"Approved: {approved}\n"
+        f"Total reward: Rs{total_reward:g}\n"
+        f"Referral L1 credited: Rs{referral_total_l1:.2f}\n"
+        f"Referral L2 credited: Rs{referral_total_l2:.2f}\n\n"
+        "Only submissions that were still pending were approved."
+    )
+
+
 async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
@@ -3283,10 +3396,16 @@ def main():
                 print("ERROR: screenshot channel is empty")
                 return
 
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"),
-                InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}"),
-            ]])
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"),
+                    InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}"),
+                ],
+                [InlineKeyboardButton(
+                    f"✅ Approve ALL Task {task_to_use.get('task_number', 1)}",
+                    callback_data=f"bulk_approve_{task_to_use.get('task_number', 1)}"
+                )],
+            ])
             caption = (
                 f"NEW TASK V56\n"
                 f"User: {uid}\n"
