@@ -21,9 +21,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # V56 FINAL HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
 CHANNEL_ID = "-1004352241439"
 CHANNEL_LINK = "https://t.me/S2E_Daily_Earning"
-SCREENSHOT_CHANNEL = -1004295034675
-WITHDRAW_CHANNEL = -1004319888475
-JOIN_CHANNEL = -1004352241439
+SCREENSHOT_CHANNEL = os.getenv("TASK_SCREENSHOT_CHANNEL", "")
+WITHDRAW_CHANNEL = os.getenv("TASK_WITHDRAW_CHANNEL", "-1004319888475")
+JOIN_CHANNEL = os.getenv("MEMBER_JOIN_CHANNEL", "-1004352241439")
+CHANNEL_LINK = os.getenv("MEMBER_JOIN_LINK", "https://t.me/S2E_Daily_Earning")
 print(f"V56 CHANNELS HARDCODED SEPARATE: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 print(f"V56 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs - SEPARATE!")
 print(f"V56 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
@@ -497,7 +498,7 @@ def get_today_task_for_user(uid):
     current, next_task = get_current_scheduled_task_with_interval()
     if current:
         return current
-    return {"title": "Join Channel @s2edayincome", "link": CHANNEL_LINK, "reward": 5}
+    return {"title": "Join Channel", "link": get_join_channel_link(), "reward": 5}
 
 def main_menu():
     return InlineKeyboardMarkup([
@@ -535,7 +536,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
                 [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]
             ])
-            await update.message.reply_text(f"👋 Welcome! Please join our channel {CHANNEL_ID} to use bot!\n\nJoin and click Check Joined!", reply_markup=kb)
+            await update.message.reply_text(f"👋 Welcome! Please join our channel {get_join_channel()} to use bot!\n\nJoin and click Check Joined!", reply_markup=kb)
             return ConversationHandler.END
     args = context.args
     ref_id = None
@@ -864,8 +865,8 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         is_joined = await check_user_in_channel(uid, context)
         if not is_joined:
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)], [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]])
-            await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=get_join_channel_link())], [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]])
+            await q.message.reply_text(f"Please join channel {get_join_channel()} to do tasks!", reply_markup=kb)
             return
     today=str(get_ist_today())
     count, limit, cap = check_daily_limits(uid)
@@ -1051,7 +1052,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
         await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Upload screenshot button fix!", reply_markup=main_menu())
         try:
-            chan = SCREENSHOT_CHANNEL
+            chan = get_screenshot_channel()
             if chan:
                 try:
                     kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
@@ -1069,15 +1070,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             print(f"V56 screenshot channel err3 {e3}")
         except Exception as e:
             print(f"V56 screenshot outer err {e}")
-        for admin_id in ADMIN_ID_LIST:
-            try:
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-            except:
-                try:
-                    await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                except Exception as e:
-                    print(f"V56 admin forward err {e}")
+        # Do NOT DM task screenshots to admins. They are sent only to the configured Task Screenshot channel.
         return ConversationHandler.END
     except Exception as e:
         print(f"V56 handle_screenshot_upload outer exception {e}")
@@ -1088,8 +1081,8 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             if update.message.photo or update.message.document:
                 file_id = (update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id)
                 try:
-                    chan = SCREENSHOT_CHANNEL
-                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {update.effective_user.id} Fallback")
+                    chan = get_screenshot_channel()
+                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"📸 TASK SCREENSHOT | User {update.effective_user.id} | Fallback")
                 except:
                     try:
                         await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {update.effective_user.id} Fallback")
@@ -1597,7 +1590,7 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_joined = True
     if is_joined == False:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Join Channel", url=CHANNEL_LINK)], [InlineKeyboardButton("Check Joined", callback_data="check_joined")]])
-        await q.message.reply_text(f"You left channel {CHANNEL_ID}! Re-join! Link: {CHANNEL_LINK}", reply_markup=kb)
+        await q.message.reply_text(f"You left channel {get_join_channel()}! Re-join! Link: {get_join_channel_link()}", reply_markup=kb)
         return
     if last_withdraw_date_db.get(uid) == today:
         await q.message.reply_text(f"Already withdrew today! 1 per day only! Last: {today}", reply_markup=main_menu())
@@ -2415,7 +2408,27 @@ def get_withdraw_channel():
         pass
     return WITHDRAW_CHANNEL_ID
 
-def save_channel_config(screenshot=None, withdraw=None):
+def get_join_channel():
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+            return cfg.get('join_channel') or JOIN_CHANNEL
+    except Exception:
+        pass
+    return JOIN_CHANNEL
+
+def get_join_channel_link():
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+            return cfg.get('join_link') or CHANNEL_LINK
+    except Exception:
+        pass
+    return CHANNEL_LINK
+
+def save_channel_config(screenshot=None, withdraw=None, join=None, join_link=None):
     try:
         cfg = {}
         if os.path.exists("channel_config.json"):
@@ -2425,6 +2438,10 @@ def save_channel_config(screenshot=None, withdraw=None):
             cfg['screenshot_channel'] = screenshot
         if withdraw is not None:
             cfg['withdraw_channel'] = withdraw
+        if join is not None:
+            cfg['join_channel'] = join
+        if join_link is not None:
+            cfg['join_link'] = join_link
         with open("channel_config.json", 'w') as f:
             json.dump(cfg, f)
     except Exception as e:
@@ -2465,6 +2482,19 @@ async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT
         await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Withdraw requests will come here!")
     except Exception as e:
         await update.message.reply_text(f"Set but test failed: {e} - Make bot admin!")
+
+async def set_join_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            f"Current Join Channel: {get_join_channel()}\nLink: {get_join_channel_link()}\n\nUsage: /set_join_channel <channel_id> <public_link>\nExample: /set_join_channel -1001234567890 https://t.me/your_channel"
+        )
+        return
+    ch = context.args[0]
+    link = context.args[1] if len(context.args) > 1 else get_join_channel_link()
+    save_channel_config(join=ch, join_link=link)
+    await update.message.reply_text(f"✅ Member Join Channel Set: {ch}\nJoin Link: {link}")
 
 async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -2731,13 +2761,13 @@ async def admin_missed_toggle_cb(update, context):
 
 async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels Status\nTask: {SCREENSHOT_CHANNEL}\nWithdraw: {WITHDRAW_CHANNEL}\nJoin: {JOIN_CHANNEL}\nActive: Yes Total:3")
+        await update.message.reply_text(f"📢 Channels Status\nTask: {get_screenshot_channel()}\nWithdraw: {get_withdraw_channel()}\nJoin: {get_join_channel()}\nActive: Yes Total:3")
     except Exception as e:
         print(e)
 
 async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels List - 3 Channels\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3\nLink: https://t.me/S2E_Daily_Earning")
+        await update.message.reply_text(f"📢 Channels List - 3 Channels\n1. Task: {get_screenshot_channel()}\n2. Withdraw: {get_withdraw_channel()}\n3. Join: {get_join_channel()}\nTotal: 3\nLink: https://t.me/S2E_Daily_Earning")
     except Exception as e:
         print(e)
 
@@ -3233,15 +3263,7 @@ def main():
                                 print(f"Screenshot channel document fallback failed for {chan}: {e2}")
                     else:
                         print("Screenshot channel is not configured. Use /set_screenshot_channel <channel_id>")
-                    for admin_id in ADMIN_ID_LIST:
-                        try:
-                            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-                        except:
-                            try:
-                                await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                            except Exception as e:
-                                print(f"V56 admin forward err {e}")
+                    # Task screenshots are sent ONLY to the configured Task Screenshot channel.
                 except Exception as e:
                     print(f"V56 v56_screenshot_simple_handler err {e}")
                     import traceback
@@ -3368,6 +3390,7 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
             app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
             app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("set_join_channel", set_join_channel_cmd))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
 
