@@ -1,10 +1,10 @@
 import warnings
 warnings.filterwarnings('ignore')
-import os, re, threading, json, asyncio, hashlib
+import os, re, threading, json, asyncio
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
-from flask import Flask, request
+from flask import Flask
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -3416,31 +3416,56 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
-    """Start the Render health server and Telegram webhook exactly once.
+    """Start Flask and Telegram polling exactly once.
 
-    Render deployments can briefly overlap old/new processes. Telegram polling
-    (getUpdates) allows only one consumer for a bot token, which caused the
-    recurring "Conflict: terminated by other getUpdates request" error.
-
-    This version uses Telegram WEBHOOK delivery instead of polling. That removes
-    the getUpdates single-consumer conflict and keeps the existing handlers.
+    IMPORTANT: python-telegram-bot's run_polling() owns the asyncio event loop.
+    The previous retry loop called run_polling() again after it had closed the
+    loop, which caused: RuntimeError: Event loop is closed.
     """
     global bot_application
 
     print("=" * 72)
-    print("S2E Bot CLEAN FINAL - WEBHOOK MODE - no Telegram polling conflict")
+    print("S2E Bot CLEAN FINAL - single polling loop + dedicated screenshot channel")
     print(f"TASK SCREENSHOTS : {get_screenshot_channel()}")
     print(f"WITHDRAW         : {get_withdraw_channel()}")
     print(f"JOIN             : {get_join_channel()}")
     print(f"JOIN LINK        : {get_join_channel_link()}")
     print("=" * 72)
 
+    # Load persistent bot data before handlers start.
     load_data()
+
+    # Flask health endpoint for Render.
+    try:
+        from flask import Flask
+        flask_app = Flask(__name__)
+
+        @flask_app.route('/')
+        def home():
+            return "S2E Bot is running"
+
+        flask_port = int(os.environ.get("PORT", 10000))
+
+        def run_flask():
+            try:
+                flask_app.run(
+                    host="0.0.0.0",
+                    port=flask_port,
+                    debug=False,
+                    use_reloader=False,
+                )
+            except Exception as e:
+                print(f"Flask error: {e}")
+
+        threading.Thread(target=run_flask, daemon=True).start()
+        print(f"Flask health server started on port {flask_port}")
+    except Exception as e:
+        print(f"Flask setup error: {e}")
 
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN environment variable is missing")
 
-    # Build the application once.
+    # Build the application once. Do NOT wrap run_polling() in a retry loop.
     app = Application.builder().token(BOT_TOKEN).build()
     bot_application = app
     app.add_error_handler(error_handler)
@@ -3498,7 +3523,7 @@ def main():
     app.add_handler(conv_reg)
     app.add_handler(conv_skip)
 
-    # Admin task-image upload handler.
+    # Admin task-image upload handler. This is intentionally separate from member screenshots.
     async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             uid = update.effective_user.id
@@ -3531,14 +3556,15 @@ def main():
                 task['has_image'] = True
             save_data()
             await update.message.reply_text(
-                f"✅ Image Poster Set for Task {task_id}! {task['title'] if task else ''}",
+                f"✅ Image Poster Set for Task {task_id}! "
+                f"{task['title'] if task else ''}",
                 reply_markup=main_menu(),
             )
             context.user_data.pop('set_image_task_id', None)
         except Exception as e:
             print(f"Task image handler error: {e}")
 
-    # ONE screenshot handler for members.
+    # ONE screenshot handler for members. No generic fallback is registered.
     async def v56_screenshot_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             uid = update.effective_user.id
@@ -3547,12 +3573,16 @@ def main():
             if not update.message.photo and not update.message.document:
                 return
 
-            media = update.message.photo[-1] if update.message.photo else update.message.document
+            if update.message.photo:
+                media = update.message.photo[-1]
+            else:
+                media = update.message.document
             file_id = media.file_id
             file_unique_id = getattr(media, 'file_unique_id', None)
             if not file_id:
                 return
 
+            # Promo upload has its own flow.
             campaign_id = context.user_data.get('promo_upload_campaign_id')
             if campaign_id:
                 context.user_data['promo_screenshot_file_id'] = file_id
@@ -3563,13 +3593,19 @@ def main():
                 return
 
             current, _ = get_current_scheduled_task_with_interval()
-            task_to_use = current or get_today_task_for_user(uid)
+            task_to_use = current
+            if not task_to_use:
+                task_to_use = get_today_task_for_user(uid)
             if not task_to_use and scheduled_tasks_db:
                 task_to_use = scheduled_tasks_db[-1]
             if not task_to_use:
                 task_to_use = {
-                    'id': 0, 'title': 'Daily Task', 'reward': 5,
-                    'task_number': 1, 'open_time': '00:00', 'close_time': '23:59',
+                    'id': 0,
+                    'title': 'Daily Task',
+                    'reward': 5,
+                    'task_number': 1,
+                    'open_time': '00:00',
+                    'close_time': '23:59',
                 }
 
             if file_unique_id and file_unique_id in screenshot_hashes:
@@ -3592,18 +3628,19 @@ def main():
             }
 
             await update.message.reply_text(
-                f"✅ Screenshot Received for Task {task_to_use.get('task_number', 1)}! Pending Admin Verification!",
+                f"✅ Screenshot Received for Task {task_to_use.get('task_number', 1)}! "
+                "Pending Admin Verification!",
                 reply_markup=main_menu(),
             )
 
+            # CRITICAL: send task screenshots ONLY to the configured TASK Screenshots channel.
             screenshot_channel = get_screenshot_channel()
             if not screenshot_channel:
                 print("ERROR: screenshot channel is empty")
                 return
 
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"),
-                 InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")],
+                [InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")],
                 [InlineKeyboardButton("✅ Approve ALL Pending", callback_data="bulk_approve_all")]
             ])
             caption = (
@@ -3616,29 +3653,38 @@ def main():
 
             try:
                 await context.bot.send_photo(
-                    chat_id=screenshot_channel, photo=file_id,
-                    caption=caption, reply_markup=kb,
+                    chat_id=screenshot_channel,
+                    photo=file_id,
+                    caption=caption,
+                    reply_markup=kb,
                 )
                 print(f"SCREENSHOT OK -> {screenshot_channel} (task only)")
             except Exception as e:
                 print(f"SCREENSHOT CHANNEL ERROR -> {screenshot_channel}: {e}")
+                # If the channel cannot accept a photo, try the same target as a document.
                 try:
                     await context.bot.send_document(
-                        chat_id=screenshot_channel, document=file_id,
-                        caption=caption, reply_markup=kb,
+                        chat_id=screenshot_channel,
+                        document=file_id,
+                        caption=caption,
+                        reply_markup=kb,
                     )
                     print(f"SCREENSHOT DOCUMENT OK -> {screenshot_channel}")
                 except Exception as e2:
                     print(f"SCREENSHOT DOCUMENT ERROR -> {screenshot_channel}: {e2}")
 
+            # Admin private notifications are kept as an additional notification only.
             for admin_id in ADMIN_ID_LIST:
                 try:
                     await context.bot.send_photo(
-                        chat_id=admin_id, photo=file_id,
-                        caption=caption, reply_markup=kb,
+                        chat_id=admin_id,
+                        photo=file_id,
+                        caption=caption,
+                        reply_markup=kb,
                     )
                 except Exception as e:
                     print(f"Admin screenshot notification error {admin_id}: {e}")
+
         except Exception as e:
             print(f"Screenshot handler error: {e}")
             import traceback
@@ -3647,6 +3693,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, v56_task_image_simple_handler), group=1)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, v56_screenshot_simple_handler), group=2)
 
+    # Normal commands.
     command_handlers = [
         ("menu", menu), ("admin", admin_panel), ("pending", pending_cmd),
         ("approve", approve_cmd), ("add_task", add_scheduled_task_with_interval_cmd),
@@ -3659,19 +3706,19 @@ def main():
         ("remove_balance", remove_balance_cmd), ("deduct_balance", remove_balance_cmd),
         ("set_tasks", set_task_count_cmd), ("set_screenshot_channel", set_screenshot_channel_cmd),
         ("set_withdraw_channel", set_withdraw_channel_cmd), ("set_join_channel", set_join_channel_cmd),
-        ("approve_all", approve_all_pending_cmd), ("approve_all_pending", approve_all_pending_cmd),
-        ("list_pending", list_pending_cmd), ("activate_task", activate_task_cmd),
-        ("activate_all_tasks", activate_all_tasks_cmd), ("add_week", add_week_cmd),
-        ("add_date", add_date_cmd), ("bulk_tasks", bulk_tasks_help_cmd),
-        ("add_plan", add_support_plan_cmd), ("list_plans", list_plans_cmd),
-        ("remove_plan", remove_plan_cmd), ("set_plan_image", set_plan_image_cmd),
-        ("bacup", backup_cmd), ("add_admin", add_admin_cmd),
-        ("referral_stats", referral_stats_cmd), ("channels_status", channels_status_cmd),
-        ("channels_list", channels_list_cmd),
+        ("approve_all", approve_all_pending_cmd), ("approve_all_pending", approve_all_pending_cmd), ("list_pending", list_pending_cmd),
+        ("activate_task", activate_task_cmd), ("activate_all_tasks", activate_all_tasks_cmd),
+        ("add_week", add_week_cmd), ("add_date", add_date_cmd),
+        ("bulk_tasks", bulk_tasks_help_cmd), ("add_plan", add_support_plan_cmd),
+        ("list_plans", list_plans_cmd), ("remove_plan", remove_plan_cmd),
+        ("set_plan_image", set_plan_image_cmd), ("bacup", backup_cmd),
+        ("add_admin", add_admin_cmd), ("referral_stats", referral_stats_cmd),
+        ("channels_status", channels_status_cmd), ("channels_list", channels_list_cmd),
     ]
     for name, callback in command_handlers:
         app.add_handler(CommandHandler(name, callback))
 
+    # Callback handlers.
     callback_handlers = [
         (my_ref_cb, r"^my_ref$"), (wallet_cb, r"^wallet$"), (daily_cb, r"^daily$"),
         (pending_tasks_cb, r"^pending_tasks$"),
@@ -3701,107 +3748,15 @@ def main():
     for callback, pattern in callback_handlers:
         app.add_handler(CallbackQueryHandler(callback, pattern=pattern))
 
+    # Text handler used by withdraw UPI editing.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
 
-    # ---------------- WEBHOOK MODE ----------------
-    # No getUpdates / run_polling is used anymore. This is specifically to
-    # eliminate Telegram's "terminated by other getUpdates request" conflict.
-    public_url = (os.environ.get("RENDER_EXTERNAL_URL") or "https://s2e-earning-bot.onrender.com").rstrip("/")
-    webhook_path = "/telegram/webhook"
-    webhook_url = public_url + webhook_path
-    webhook_secret = os.environ.get("WEBHOOK_SECRET") or hashlib.sha256(BOT_TOKEN.encode()).hexdigest()[:32]
-    webhook_secret_header = webhook_secret
+    print("S2E Bot CLEAN FINAL: handlers registered")
+    print(f"Task screenshots will go ONLY to: {get_screenshot_channel()}")
+    print("Starting Telegram polling once - no retry loop, no closed event loop")
 
-    # This loop is the single asyncio loop used by python-telegram-bot.
-    bot_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(bot_loop)
-
-    # Flask receives Telegram POSTs and places them on PTB's update queue.
-    from flask import Flask, request
-    flask_app = Flask(__name__)
-
-    @flask_app.route('/', methods=['GET', 'HEAD'])
-    def health():
-        return "S2E Bot is running - webhook mode", 200
-
-    @flask_app.route(webhook_path, methods=['POST'])
-    def telegram_webhook():
-        supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if supplied_secret != webhook_secret_header:
-            return "Forbidden", 403
-        if bot_application is None:
-            return "Bot not ready", 503
-        try:
-            payload = request.get_json(silent=True)
-            if not payload:
-                return "Bad Request", 400
-            update = Update.de_json(payload, bot_application.bot)
-            if update is None:
-                return "Bad Update", 400
-            asyncio.run_coroutine_threadsafe(
-                bot_application.update_queue.put(update), bot_loop
-            )
-            return "OK", 200
-        except Exception as e:
-            print(f"Webhook update error: {e}")
-            return "OK", 200
-
-    flask_port = int(os.environ.get("PORT", 10000))
-
-    def run_flask():
-        try:
-            flask_app.run(
-                host="0.0.0.0",
-                port=flask_port,
-                debug=False,
-                use_reloader=False,
-            )
-        except Exception as e:
-            print(f"Flask error: {e}")
-
-    threading.Thread(target=run_flask, daemon=True, name="render-health-webhook").start()
-    print(f"Flask health/webhook server started on port {flask_port}")
-    print(f"Telegram webhook URL: {webhook_url}")
-
-    async def start_webhook_mode():
-        await app.initialize()
-        await app.start()
-        await app.bot.set_webhook(
-            url=webhook_url,
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            secret_token=webhook_secret,
-        )
-        print("=" * 72)
-        print("S2E Bot CLEAN FINAL: handlers registered")
-        print(f"Task screenshots will go ONLY to: {get_screenshot_channel()}")
-        print("Telegram WEBHOOK ACTIVE - polling/getUpdates disabled")
-        print("This removes the duplicate getUpdates conflict on Render.")
-        print("=" * 72)
-
-    try:
-        bot_loop.run_until_complete(start_webhook_mode())
-        bot_loop.run_forever()
-    except KeyboardInterrupt:
-        print("Shutdown requested")
-    except Exception as e:
-        print(f"Webhook runtime error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        try:
-            bot_loop.run_until_complete(app.stop())
-        except Exception:
-            pass
-        try:
-            bot_loop.run_until_complete(app.shutdown())
-        except Exception:
-            pass
-        try:
-            bot_loop.close()
-        except Exception:
-            pass
-
+    # run_polling creates/manages the asyncio loop and blocks until shutdown.
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
