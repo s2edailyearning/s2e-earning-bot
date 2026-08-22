@@ -3409,7 +3409,7 @@ def main():
             )
             app.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
             app.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
-            app.add_handler(MessageHandler(filters.PHOTO, handle_plan_proof_upload, group=-3))
+            app.add_handler(MessageHandler(filters.PHOTO, handle_plan_proof_upload), group=-3)
             # V56 FINAL FIX: No ConversationHandler for screenshot - Simple handlers - Important channel ki vachedi!
             conv_screenshot = None  # Disabled - Using simple MessageHandler instead!
             print("V56 conv_screenshot disabled - Using simple handlers! FINAL!")
