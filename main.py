@@ -261,35 +261,114 @@ async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass
 
 async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try: await update.callback_query.answer()
-    except Exception: pass
+    q = update.callback_query
     try:
-        raw=update.callback_query.data.replace("admin_approve_plan_", "", 1); parts=raw.split("_"); uid=int(parts[0]); selector=parts[1] if len(parts)>1 else "1"
-        normalize_support_plans(); plan=None
-        if selector.isdigit(): plan=next((p for p in support_plans_db if int(p.get("id",-1))==int(selector)),None)
-        if not plan:
-            legacy=selector.lower(); plan=next((p for p in support_plans_db if str(p.get("name","")).lower()==legacy),None)
-        if not plan: return
-        duration=int(plan.get("duration",30)); daily=int(plan.get("daily_limit",10)); price=int(plan.get("price",0)); name=str(plan.get("name","Plan"))
-        user_plans[str(uid)]={"plan":name.lower(),"plan_id":int(plan.get("id",0)),"status":"active","price":price,"daily_limit":daily,"date":str(get_ist_today()),"expiry":str(get_ist_today()+timedelta(days=duration))}
-        pending_plans.pop(uid,None); save_data()
-        await update.callback_query.edit_message_text(f"✅ Approved {name} plan for {uid}")
-        try: await context.bot.send_message(chat_id=uid,text=f"🎉 Plan Activated!\n{name} ₹{price}\nValid till: {get_ist_today()+timedelta(days=duration)}\nDaily tasks: {daily}",reply_markup=main_menu())
-        except Exception: pass
-    except Exception as e: print(e)
-
-async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
+        await q.answer("Processing approval…")
+    except Exception:
         pass
     try:
-        uid = int(update.callback_query.data.replace("admin_reject_plan_",""))
-        if uid in pending_plans:
-            del pending_plans[uid]
-            await update.callback_query.edit_message_text(f"Rejected plan for {uid}")
+        if not is_admin(q.from_user.id):
+            await q.answer("Admin only", show_alert=True)
+            return
+        raw = str(q.data).replace("admin_approve_plan_", "", 1)
+        parts = raw.split("_")
+        uid = int(parts[0])
+        selector = parts[1] if len(parts) > 1 else ""
+
+        normalize_support_plans()
+        req = pending_plans.get(uid) or pending_plans.get(str(uid)) or {}
+        plan = None
+        if selector.isdigit():
+            plan = next((p for p in support_plans_db if int(p.get("id", -1)) == int(selector)), None)
+        if not plan and req.get("plan_id") is not None:
+            try:
+                plan = next((p for p in support_plans_db if int(p.get("id", -1)) == int(req.get("plan_id"))), None)
+            except Exception:
+                pass
+        if not plan and req.get("plan"):
+            wanted = str(req.get("plan")).lower()
+            plan = next((p for p in support_plans_db if str(p.get("name", "")).lower() == wanted), None)
+        if not plan and selector:
+            wanted = selector.lower()
+            plan = next((p for p in support_plans_db if str(p.get("name", "")).lower() == wanted), None)
+
+        if not plan:
+            await q.message.reply_text(f"❌ Plan not found for user {uid}. Open the latest payment proof and try again.")
+            return
+
+        duration = int(plan.get("duration", 30))
+        daily = int(plan.get("daily_limit", 10))
+        price = int(plan.get("price", 0))
+        name = str(plan.get("name", "Plan"))
+        expiry = get_ist_today() + timedelta(days=duration)
+
+        user_plans[str(uid)] = {
+            "plan": name.lower(),
+            "plan_id": int(plan.get("id", 0)),
+            "status": "active",
+            "price": price,
+            "daily_limit": daily,
+            "date": str(get_ist_today()),
+            "expiry": str(expiry),
+        }
+        pending_plans.pop(uid, None)
+        pending_plans.pop(str(uid), None)
+        save_data()
+
+        try:
+            await q.message.edit_caption(caption=f"✅ APPROVED\nUser: {uid}\nPlan: {name} ₹{price}\nDaily tasks: {daily}\nValid till: {expiry}")
+        except Exception:
+            try:
+                await q.message.edit_text(f"✅ APPROVED\nUser: {uid}\nPlan: {name} ₹{price}\nDaily tasks: {daily}\nValid till: {expiry}")
+            except Exception:
+                await q.message.reply_text(f"✅ Approved {name} plan for {uid}")
+
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=f"🎉 Plan Activated!\n{name} ₹{price}\nValid till: {expiry}\nDaily tasks: {daily}",
+                reply_markup=main_menu(),
+            )
+        except Exception as e:
+            print(f"plan approval user notification error: {e}")
     except Exception as e:
-        print(e)
+        print(f"admin approve plan error: {e}")
+        try:
+            await q.message.reply_text(f"❌ Approval error: {e}")
+        except Exception:
+            pass
+
+async def admin_reject_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer("Processing rejection…")
+    except Exception:
+        pass
+    try:
+        if not is_admin(q.from_user.id):
+            await q.answer("Admin only", show_alert=True)
+            return
+        uid = int(str(q.data).replace("admin_reject_plan_", "", 1))
+        pending_plans.pop(uid, None)
+        pending_plans.pop(str(uid), None)
+        save_data()
+        try:
+            await q.message.edit_caption(caption=f"❌ REJECTED\nUser: {uid}\nPayment proof rejected by admin.")
+        except Exception:
+            try:
+                await q.message.edit_text(f"❌ REJECTED\nUser: {uid}\nPayment proof rejected by admin.")
+            except Exception:
+                await q.message.reply_text(f"❌ Rejected payment proof for {uid}")
+        try:
+            await context.bot.send_message(chat_id=uid, text="❌ Your plan payment proof was rejected. Please contact admin and submit a valid proof.", reply_markup=main_menu())
+        except Exception as e:
+            print(f"plan rejection user notification error: {e}")
+    except Exception as e:
+        print(f"admin reject plan error: {e}")
+        try:
+            await q.message.reply_text(f"❌ Rejection error: {e}")
+        except Exception:
+            pass
 
 
 WITHDRAW_MIN = 200
@@ -3594,6 +3673,9 @@ def main():
                 app.add_handler(CallbackQueryHandler(support_plans_cb, pattern='^support_plans$',), group=-2)
                 print('V56 All Fixed group -2 - NameError Fixed!')
                 app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
+                # V63 FIX: payment-proof Approve/Reject must run before other callback handlers.
+                app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern=r'^admin_approve_plan_'), group=-2)
+                app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern=r'^admin_reject_plan_'), group=-2)
             except Exception as e:
                 print(f'V56 fix {e}')
 
@@ -3619,11 +3701,26 @@ def main():
                     plan_type = context.user_data.get("awaiting_plan_payment_proof")
                     if not plan_type or not update.message.photo:
                         return
-                    pending = pending_plans.get(uid) or {}
-                    price = 199 if plan_type == "basic" else 499
+                    pending = pending_plans.get(uid) or pending_plans.get(str(uid)) or {}
+                    plan_obj = None
+                    try:
+                        if str(plan_type).isdigit():
+                            normalize_support_plans()
+                            plan_obj = next((p for p in support_plans_db if int(p.get("id", -1)) == int(plan_type)), None)
+                    except Exception:
+                        plan_obj = None
+                    if plan_obj:
+                        price = int(plan_obj.get("price", pending.get("price", 0)))
+                        plan_name = str(plan_obj.get("name", "Plan")).lower()
+                        plan_id = int(plan_obj.get("id", 0))
+                    else:
+                        price = 199 if str(plan_type).lower() == "basic" else 499
+                        plan_name = str(plan_type).lower()
+                        plan_id = pending.get("plan_id")
                     file_id = update.message.photo[-1].file_id
                     pending_plans[uid] = {
-                        "plan": plan_type,
+                        "plan_id": plan_id,
+                        "plan": plan_name,
                         "date": str(get_ist_today()),
                         "price": price,
                         "proof_file_id": file_id,
@@ -3886,8 +3983,6 @@ def main():
             app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
             app.add_handler(CallbackQueryHandler(plan_proof_cb, pattern="^plan_proof_(basic|premium)$"))
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
-            app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
-            app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
             app.add_handler(CommandHandler("backup", backup_cmd))
             app.add_handler(CommandHandler("add_task_manual", add_task_manual_cmd))
             app.add_handler(CommandHandler("remove_task", remove_task_cmd))
