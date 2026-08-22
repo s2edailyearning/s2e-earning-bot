@@ -1155,13 +1155,15 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
 
 # === NEW IMAGE POSTER COMMANDS ===
 async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # V50 FINAL FIX: Not update photo code correct gane peduthunanu - Fix photo with caption handling!
-    # Screenshot 09:40: User sent TASK 1 image with caption /set_task_image 1 - No update! Fix!
+    # V50 FINAL FIX: Not update photo code correct gane peduthunanu - Fix!
+    # Screenshot 09:40: User sent TASK 1 image as PHOTO + with caption /set_task_image 1 - No update!
+    # Reason: CommandHandler matches caption but photo not handled - Fix: Handle photo directly!
     if not is_admin(update.effective_user.id):
-        return
-    # V50 FIX: If message has photo, handle it directly! Photo with caption /set_task_image 1
+        await update.message.reply_text("Only admin!")
+        return ConversationHandler.END
+    # V50 FIX: If photo exists in this message (photo with caption), handle immediately!
     if update.message.photo:
-        print(f"V50 set_task_image_cmd: Photo with caption detected! Handling image directly! FINAL!")
+        print(f"V50 set_task_image_cmd: Photo with caption detected! Handling image directly! Task image upload fix! FINAL!")
         task_id = None
         if context.args:
             try:
@@ -1170,9 +1172,17 @@ async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 pass
         if not task_id and update.message.caption:
             import re
-            mm = re.search(r'/set_task_image\s+(\d+)', update.message.caption)
-            if mm:
-                task_id = int(mm.group(1))
+            m = re.search(r'/set_task_image\s+(\d+)', update.message.caption or "")
+            if m:
+                task_id = int(m.group(1))
+            else:
+                # Try just number in caption
+                m2 = re.search(r'(\d+)', update.message.caption or "")
+                if m2:
+                    try:
+                        task_id = int(m2.group(1))
+                    except:
+                        pass
         if not task_id:
             if scheduled_tasks_db:
                 task_id = scheduled_tasks_db[-1]['id']
@@ -1185,32 +1195,33 @@ async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if task:
             task['image_file_id'] = file_id
             task['has_image'] = True
-        print(f"V50 Image Poster Set for Task {task_id} via set_task_image_cmd with photo!")
-        await update.message.reply_text(f"V50 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK 1 image! Check /menu -> Daily Task! FINAL!", reply_markup=main_menu())
+            print(f"V50 Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:30]}")
+            await update.message.reply_text(f"✅ V50 Image Poster Set for Task {task_id}! {task['title']} Members will see YOUR TASK 1 image! Check /menu -> Daily Task! FINAL!", reply_markup=main_menu())
+        else:
+            await update.message.reply_text(f"✅ V50 Image Poster Set for Task {task_id}! Members will see image! V50", reply_markup=main_menu())
         try:
-            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"V50 Confirmation - Task {task_id} Image Set via caption! FINAL!")
+            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V50 Confirmation - Task {task_id} Image Set! Members will see this! FINAL!")
         except Exception as e:
             print(f"V50 confirmation err {e}")
         return ConversationHandler.END
 
     if not context.args:
-        await update.message.reply_text("Usage: /set_task_image <task_id> Then send photo with caption /set_task_image <id> OR reply to this message with photo Example: /add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5 Then set image: /set_task_image 1 Then send your TASK 3 poster image as PHOTO! V50 FINAL")
-        return
+        await update.message.reply_text("Usage: /set_task_image <task_id>\nThen send photo with caption /set_task_image <id> OR reply with photo\nExample: /set_task_image 1 then send TASK 1 poster as PHOTO! V50 FINAL")
+        return ConversationHandler.END
     try:
         task_id = int(context.args[0])
     except:
-        await update.message.reply_text("Task ID must be number! Use /list_tasks to see IDs V50")
-        return
+        await update.message.reply_text("Task ID must be number! Use /list_tasks V50")
+        return ConversationHandler.END
     task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
     if not task:
         await update.message.reply_text(f"Task ID {task_id} not found! Use /list_tasks V50")
-        return
+        return ConversationHandler.END
     context.user_data['set_image_task_id'] = task_id
-    await update.message.reply_text(f"V50 Now send the poster/image for Task {task_id}: {task['title']} Send as PHOTO! (Not file) You can send your TASK 1 / TASK 3 / TASK 4 images - Members will see this image when they open Daily Task! Waiting for photo... V50 FINAL", reply_markup=main_menu())
+    await update.message.reply_text(f"📸 V50 Now send poster/image for Task {task_id}: {task['title']}\nSend as PHOTO! (Not file) Members will see this image when they open Daily Task! Waiting for photo... V50 FINAL", reply_markup=main_menu())
     return SET_IMAGE
 
 async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     # V50 FINAL FIX: Task image adding - Live while adding task image akada yemibchupinchatam ledhu - Fix!
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Only admin can set task images!")
@@ -2930,7 +2941,7 @@ async def bulk_task_image_handler(update, context):
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V50 - Task Image Caption Fix V50 FINAL - Check Joined ALWAYS True + Task Image Fix V50 FINAL - Check Joined Bypass + Withdraw Buttons Fix V50 FINAL - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V50 FINAL - NameError Fixed!")
+    print("S2E Bot FINAL V50 - Task Image Caption + Join ALWAYS True Fix V50 FINAL - Check Joined ALWAYS True + Task Image Fix V50 FINAL - Check Joined Bypass + Withdraw Buttons Fix V50 FINAL - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V50 FINAL - NameError Fixed!")
     print("============================================================")
     # V50 FIX: Flask IMMEDIATE start - No sleep! Fix Live but not responding! NameError Fixed!
     try:
