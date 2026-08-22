@@ -18,16 +18,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+# V46 FINAL HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
 CHANNEL_ID = "-1004352241439"
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
-SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004295034675"))
-WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
-JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
-print(f"V45 CHANNELS: VERIFY CHANNEL_ID={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
-print(f"V45 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs")
-print(f"V45 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475")
-print(f"V45 Join Channel {JOIN_CHANNEL} = -1004352241439")
-print(f"V45 Main Link {CHANNEL_LINK} - Task->Task channel ONLY, Withdraw->Withdraw channel ONLY!")
+CHANNEL_LINK = "https://t.me/S2E_Daily_Earning"
+SCREENSHOT_CHANNEL = -1004295034675
+WITHDRAW_CHANNEL = -1004319888475
+JOIN_CHANNEL = -1004352241439
+print(f"V46 CHANNELS HARDCODED SEPARATE: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
+print(f"V46 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs - SEPARATE!")
+print(f"V46 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
+print(f"V46 Join Channel {JOIN_CHANNEL} = -1004352241439 - SEPARATE!")
+print(f"V46 Main Link {CHANNEL_LINK} - Task->TASK ONLY, Withdraw->Withdraw ONLY!")
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
 WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
 JOIN_LINK = "https://t.me/S2E_Daily_Earning"
@@ -1031,22 +1032,22 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][0] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
-        await update.message.reply_text("Screenshot Received for default task! Pending Admin Verification! V45", reply_markup=main_menu())
+        await update.message.reply_text("Screenshot Received! Pending Admin Verification! V46 FINAL", reply_markup=main_menu())
         try:
             chan = SCREENSHOT_CHANNEL
             if chan:
                 try:
                     kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK SUBMISSION V45 DEFAULT User {uid} Reward {default_task.get('reward',5)}", reply_markup=kb_chan)
-                    print(f"V45 forwarded to SCREENSHOT_CHANNEL {chan}")
+                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V46 DEFAULT User {uid} Reward {default_task.get('reward',5)}", reply_markup=kb_chan)
+                    print(f"V46 forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY!")
                 except Exception as e:
-                    print(f"V45 channel err {e}")
+                    print(f"V46 screenshot channel err {e}")
         except:
             pass
         for admin_id in ADMIN_ID_LIST:
             try:
                 kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V45 DEFAULT User {uid}", reply_markup=kb)
+                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V46 DEFAULT User {uid}", reply_markup=kb)
             except:
                 pass
         return ConversationHandler.END
@@ -1077,22 +1078,21 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         user_task_status[uid] = {}
     user_task_status[uid][current['id']] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
     next_time_str = next_task['open_time'] if next_task else 'tomorrow'
-    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! Reward Rs{task.get('reward',5)} V45", reply_markup=main_menu())
+    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! V46 FINAL", reply_markup=main_menu())
     try:
         chan = SCREENSHOT_CHANNEL
         if chan:
             try:
                 kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V45 Task {current['task_number']} User {uid}", reply_markup=kb_chan)
-                print(f"V45 forwarded to SCREENSHOT_CHANNEL {chan}")
-            except Exception as e:
-                print(f"V45 channel err {e}")
+                await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V46 Task {current['task_number']} User {uid}", reply_markup=kb_chan)
+            except:
+                pass
     except:
         pass
     for admin_id in ADMIN_ID_LIST:
         try:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V45 Task {current['task_number']} User {uid}", reply_markup=kb)
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V46 Task {current['task_number']} User {uid}", reply_markup=kb)
         except:
             pass
     return ConversationHandler.END
@@ -1539,22 +1539,22 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
     withdraw_done_date[uid]=str(get_ist_today())
-    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V45", reply_markup=main_menu())
+    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V46 FINAL", reply_markup=main_menu())
     try:
         w_chan = WITHDRAW_CHANNEL
         if w_chan:
             try:
                 kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V45 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
-                print(f"V45 forwarded withdraw to WITHDRAW_CHANNEL {w_chan}")
+                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V46 FINAL User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
+                print(f"V46 forwarded withdraw to WITHDRAW_CHANNEL {w_chan} - Withdraw ONLY!")
             except Exception as e:
-                print(f"V45 withdraw channel err {e}")
+                print(f"V46 withdraw channel err {e}")
     except:
         pass
     for admin_id in ADMIN_ID_LIST:
         try:
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V45 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
+            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V46 FINAL User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
         except:
             pass
 
@@ -2864,308 +2864,84 @@ async def bulk_task_image_handler(update, context):
 
 
 
-UPI_ID_GLOBAL = "s2edaily@upi"
-UPI_NAME_GLOBAL = "S2E"
-
-async def set_upi_cmd(update, context):
-    global UPI_ID_GLOBAL, UPI_NAME_GLOBAL
-    try:
-        if not context.args:
-            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL}\nUsage: /set_upi 9700000000@upi S2E")
-            return
-        UPI_ID_GLOBAL = context.args[0]
-        UPI_NAME_GLOBAL = " ".join(context.args[1:]) if len(context.args)>1 else "S2E"
-        try:
-            import json
-            with open("upi_config.json","w") as fw:
-                json.dump({"upi": UPI_ID_GLOBAL, "name": UPI_NAME_GLOBAL}, fw)
-        except:
-            pass
-        await update.message.reply_text(f"UPI SET V37 SUCCESS! UPI: {UPI_ID_GLOBAL} Name: {UPI_NAME_GLOBAL} - Working!")
-    except Exception as e:
-        try:
-            await update.message.reply_text(f"Error: {e}")
-        except:
-            pass
-
-def get_current_upi():
-    try:
-        import json, os
-        if os.path.exists("upi_config.json"):
-            with open("upi_config.json","r") as fr:
-                return json.load(fr).get("upi", UPI_ID_GLOBAL)
-    except:
-        pass
-    return UPI_ID_GLOBAL
-
-def get_current_upi_name():
-    try:
-        import json, os
-        if os.path.exists("upi_config.json"):
-            with open("upi_config.json","r") as fr:
-                return json.load(fr).get("name", UPI_NAME_GLOBAL)
-    except:
-        pass
-    return UPI_NAME_GLOBAL
-
-DEFAULT_PLANS=[
-    {"id":1,"name":"Basic","price":199,"duration":30,"daily_limit":10,"max_earning":500,"emoji":"⭐"},
-    {"id":2,"name":"Premium","price":499,"duration":60,"daily_limit":20,"max_earning":2000,"emoji":"💎"},
-]
-
-def get_all_plans():
-    try:
-        if support_plans_db:
-            return support_plans_db
-        return DEFAULT_PLANS
-    except:
-        return DEFAULT_PLANS
-
-async def buy_plan_dynamic_cb(update, context):
-    q=update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
-    try:
-        pid=int(q.data.replace("buy_plan_","")) if "buy_plan_" in q.data else 1
-        plans=get_all_plans()
-        plan=None
-        for p in plans:
-            if p['id']==pid:
-                plan=p
-                break
-        if not plan:
-            plan={"id":pid,"name":"Plan","price":199,"duration":30,"daily_limit":10,"max_earning":500}
-        upi=get_current_upi()
-        upi_name=get_current_upi_name()
-        msg=f"{plan.get('emoji','💎')} {plan['name']} DETAILS\nPrice Rs{plan['price']}\nValidity {plan['duration']}D\nDaily {plan['daily_limit']}/Day\nMax Rs{plan.get('max_earning',500)}\n\nUPI: {upi}\nName: {upi_name}\nAmount Rs{plan['price']}\nPay via GPay/PhonePe then upload screenshot! V37"
-        kb=[[InlineKeyboardButton("Upload Payment Screenshot", callback_data=f"upload_pay_{plan['id']}")],[InlineKeyboardButton("Back", callback_data="support_plans")]]
-        await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(f"V37 buy_plan err {e}")
-
-async def upload_payment_cb(update, context):
-    q=update.callback_query
-    try:
-        await q.answer()
-        pid=int(q.data.replace("upload_pay_",""))
-        context.user_data['awaiting_payment_screenshot']=pid
-        context.user_data['awaiting_task_screenshot']=None
-        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now! V37 Send PHOTO here.")
-    except:
-        pass
-
-async def handle_payment_screenshot(update, context):
-    try:
-        pid=context.user_data.get('awaiting_payment_screenshot')
-        if not pid or not update.message.photo:
-            return False
-        photo=update.message.photo[-1]
-        uid=update.effective_user.id
-        pending_plans[uid]={'plan':{"id":pid,"name":"Plan","price":199},'screenshot_file_id':photo.file_id,'user_id':uid,'username':update.effective_user.username,'time':str(get_ist_now())}
-        try:
-            save_data()
-        except:
-            pass
-        context.user_data['awaiting_payment_screenshot']=None
-        await update.message.reply_text(f"Payment screenshot received for Plan {pid}! Admin will verify V37.")
-        for admin_id in ADMIN_ID_LIST:
-            try:
-                await context.bot.send_photo(chat_id=admin_id, photo=photo.file_id, caption=f"Payment Plan {pid} by {uid} V37")
-                kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_new_plan_{uid}")],[InlineKeyboardButton(f"Reject {uid}", callback_data=f"admin_reject_new_plan_{uid}")]]
-                await context.bot.send_message(chat_id=admin_id, text=f"Approve payment for {uid}? V37", reply_markup=InlineKeyboardMarkup(kb))
-            except:
-                pass
-        return True
-    except:
-        return False
-
-async def handle_task_screenshot(update, context):
-    try:
-        task_id=context.user_data.get('awaiting_task_screenshot')
-        if not task_id or not update.message.photo:
-            return False
-        photo=update.message.photo[-1]
-        uid=update.effective_user.id
-        context.user_data['awaiting_task_screenshot']=None
-        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}! Admin will verify V37.")
-        try:
-            chan = SCREENSHOT_CHANNEL if 'SCREENSHOT_CHANNEL' in globals() else None
-            if chan:
-                try:
-                    await context.bot.send_photo(chat_id=chan, photo=photo.file_id, caption=f"Task {task_id} by {uid} V37")
-                except:
-                    pass
-            for admin_id in ADMIN_ID_LIST:
-                try:
-                    await context.bot.send_photo(chat_id=admin_id, photo=photo.file_id, caption=f"Task Screenshot Task {task_id} by {uid} V37")
-                except:
-                    pass
-        except:
-            pass
-        return True
-    except:
-        return False
-
-async def add_plan_cmd(update, context):
-    try:
-        if update.effective_user.id not in ADMIN_ID_LIST:
-            await update.message.reply_text("Not admin")
-            return
-        args=context.args
-        if len(args)<4:
-            await update.message.reply_text("Usage: /add_plan <name> <price> <duration> <daily_limit> [max_earning]\nEx: /add_plan Basic 199 30 10 500")
-            return
-        name=args[0]
-        price=int(args[1])
-        duration=int(args[2])
-        daily_limit=int(args[3])
-        max_earning=int(args[4]) if len(args)>=5 and args[4].isdigit() else 500
-        global support_plans_db, support_plan_counter
-        try:
-            support_plans_db
-        except NameError:
-            support_plans_db=[]
-        try:
-            support_plan_counter
-        except NameError:
-            support_plan_counter=1
-        plan={'id':support_plan_counter,'name':name,'price':price,'duration':duration,'daily_limit':daily_limit,'max_earning':max_earning,'description':f"{name} {duration} days",'features':[f"{daily_limit} Tasks/Day",f"{duration} Days",f"Max Rs{max_earning}"],'emoji':"⭐" if price<=200 else "💎" if price<=500 else "👑"}
-        support_plans_db.append(plan)
-        support_plan_counter+=1
-        try:
-            save_data()
-        except:
-            pass
-        await update.message.reply_text(f"Plan Added ID:{plan['id']} {name} Rs{price} {duration}D {daily_limit}/Day Max Rs{max_earning} V37")
-    except Exception as e:
-        await update.message.reply_text(f"Error {e}")
-
-async def admin_approve_new_plan_cb(update, context):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        uid=int(update.callback_query.data.replace("admin_approve_new_plan_",""))
-        if uid in pending_plans:
-            pdata=pending_plans[uid]
-            plan=pdata['plan']
-            from datetime import datetime, timedelta
-            today=get_ist_today()
-            if isinstance(today, str):
-                today=datetime.strptime(today, "%Y-%m-%d").date()
-            duration=plan.get('duration',30)
-            end_date=today+timedelta(days=duration)
-            user_plans[uid]={'plan_id':plan['id'],'plan':plan,'start_date':str(today),'end_date':str(end_date),'duration':duration,'daily_limit':plan.get('daily_limit',10),'max_earning':plan.get('max_earning',500)}
-            del pending_plans[uid]
-            try:
-                save_data()
-            except:
-                pass
-            await update.callback_query.edit_message_text(f"Approved {plan['name']} for {uid} Max Rs{plan.get('max_earning',500)} V37")
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"Your {plan['name']} approved! {duration} days Max Rs{plan.get('max_earning',500)} V37")
-            except:
-                pass
-    except Exception as e:
-        print(f"V37 approve err {e}")
-
-async def admin_reject_new_plan_cb(update, context):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        uid=int(update.callback_query.data.replace("admin_reject_new_plan_",""))
-        if uid in pending_plans:
-            del pending_plans[uid]
-            await update.callback_query.edit_message_text(f"Rejected {uid} V37")
-    except:
-        pass
-
-
-
-
-
-
-
-
-
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V45 - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V45 - Separate Channels Fix V45 - Flask PORT Fix + app_flask Fix + Conflict Fix V45")
+    print("S2E Bot FINAL V46 - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V46 FINAL")
     print("============================================================")
-    # V45 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
     try:
         from flask import Flask
         flask_app = Flask(__name__)
         @flask_app.route('/')
         def home():
-            return "S2E Bot V45 Running - Flask Immediate Fix - No Ports Error"
+            return "S2E Bot V46 FINAL Running - Immediate Polling - No Sleep"
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V45 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
+        print(f"V46 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')}")
         def run_flask():
             try:
-                print(f"V45 Flask thread running on 0.0.0.0:{flask_port}")
                 flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V45 Flask immediate err {e}")
-                try:
-                    # Fallback to app_flask if exists
-                    app_flask.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
-                except Exception as e2:
-                    print(f"V45 Flask fallback err {e2}")
+                print(f"V46 Flask err {e}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V45 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
-        time.sleep(3)
+        print(f"V46 Flask thread started IMMEDIATELY on port {flask_port} - No 120 sec sleep! FINAL!")
+        time.sleep(2)
     except Exception as e:
-        print(f"V45 Flask immediate setup err {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"V46 Flask setup err {e}")
 
-    # V45 FIX: Delete webhook BEFORE sleep
-    print("V45 Deleting webhook BEFORE sleep - to kill old instance")
+    print("V46 NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding!")
+    print("V46 Quick webhook delete 2 times - No long sleep!")
     try:
         import urllib.request
-        for i in range(3):
+        for i in range(2):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V45 Pre-sleep Webhook delete {i+1}/3")
+                print(f"V46 Quick Webhook delete {i+1}/2")
                 time.sleep(1)
             except Exception as e:
-                print(f"V45 Pre-sleep delete {i+1} err {e}")
+                print(f"V46 Quick delete {i+1} err {e}")
     except Exception as e:
-        print(f"V45 Pre-sleep webhook outer err {e}")
+        print(f"V46 Quick webhook outer err {e}")
 
-    print("Waiting 120 sec for old instance to die... V45 Flask already started")
-    time.sleep(120)
-    print("120 sec done! Deleting webhook 5 times V45 after sleep")
-    try:
-        import urllib.request
-        for i in range(5):
-            try:
-                urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V45 Post-sleep Webhook delete {i+1}/5 via urllib")
-                time.sleep(2)
-            except Exception as e:
-                print(f"V45 Post-sleep delete {i+1} err {e}")
-    except Exception as e:
-        print(f"V45 Post-sleep webhook outer err {e}")
-
-    print("Keep-alive started V45 - Flask already running")
-    print("Starting bot V45 with correct handlers - No Conflict expected")
-
+    print("V46 Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL!")
     for attempt in range(1, 101):
         try:
-            print(f"V38 Build attempt {attempt}/100 - Flask Immediate + Admin Forward Fix")
-            from telegram.ext import ConversationHandler
+            print(f"V46 Build attempt {attempt}/100 - Polling NOW! No Sleep! FINAL!")
+            from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
+            from telegram import Update
             application = Application.builder().token(BOT_TOKEN).build()
-            
-            # ConversationHandlers from V20 original - CRITICAL for Upload Screenshot to work
+
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("menu", menu_cmd))
+            application.add_handler(CommandHandler("add_task", add_task_cmd))
+            application.add_handler(CommandHandler("list_tasks", list_tasks_cmd))
+            application.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
+            application.add_handler(CommandHandler("pending", pending_cmd))
+            application.add_handler(CommandHandler("approve", approve_cmd))
+            application.add_handler(CommandHandler("reject", reject_cmd))
+            application.add_handler(CommandHandler("add_balance", add_balance_cmd))
+            application.add_handler(CommandHandler("set_upi", set_upi_cmd))
+            application.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            application.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            application.add_handler(CommandHandler("backup", backup_cmd))
+
+            application.add_handler(CallbackQueryHandler(main_menu_cb, pattern="^back_menu$"))
+            application.add_handler(CallbackQueryHandler(daily_task_cb, pattern="^daily_task$"))
+            application.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            application.add_handler(CallbackQueryHandler(withdraw_cb, pattern="^withdraw$"))
+            application.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
+            application.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
+            application.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
+            application.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
+            application.add_handler(CallbackQueryHandler(admin_approve_wd_cb, pattern="^wd_admin_approve_"))
+            application.add_handler(CallbackQueryHandler(admin_reject_wd_cb, pattern="^wd_admin_reject_"))
+            application.add_handler(CallbackQueryHandler(scheduled_tasks_cb, pattern="^scheduled_tasks$"))
+            application.add_handler(CallbackQueryHandler(my_referrals_cb, pattern="^my_referrals$"))
+            application.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
+            application.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
+            application.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
+            application.add_handler(CallbackQueryHandler(check_joined_cb, pattern="^check_joined$"))
+
             conv_reg = ConversationHandler(
                 entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
                 states={
@@ -3174,152 +2950,58 @@ def main():
                     DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
                     MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
                     UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
-                    PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
-                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
                 },
-                fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
+                fallbacks=[CommandHandler("cancel", cancel_cmd)],
+                per_message=False,
             )
+            application.add_handler(conv_reg)
+
             conv_screenshot = ConversationHandler(
-                entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"), CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
+                entry_points=[CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$")],
                 states={
                     UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
-                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
-                    PROMO_DETAILS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_promo_views_count)],
                 },
-                fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
+                fallbacks=[CommandHandler("cancel", cancel_cmd)],
+                per_message=False,
             )
-            conv_skip = ConversationHandler(
-                entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
-                states={
-                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
-                },
-                fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
-            )
+            application.add_handler(conv_screenshot)
+
             conv_set_image = ConversationHandler(
                 entry_points=[CommandHandler("set_task_image", set_task_image_cmd)],
                 states={
                     SET_IMAGE:[MessageHandler(filters.PHOTO, handle_task_image_upload)],
                 },
-                fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
+                fallbacks=[CommandHandler("cancel", cancel_cmd)],
+                per_message=False,
             )
-            
-            application.add_handler(conv_reg)
-            application.add_handler(conv_screenshot)
-            application.add_handler(conv_skip)
             application.add_handler(conv_set_image)
-            
-            # Original handlers from V20
-            application.add_handler(CommandHandler("menu", menu))
-            application.add_handler(CommandHandler("admin", admin_panel))
-            application.add_handler(CommandHandler("pending", pending_cmd))
-            application.add_handler(CommandHandler("approve", approve_cmd))
-            application.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
-            application.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
-            application.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
-            application.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
-            application.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
-            application.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
-            application.add_handler(CommandHandler("warnings", warnings_cmd))
-            application.add_handler(CommandHandler("banned", banned_cmd))
-            application.add_handler(CommandHandler("unban", unban_cmd))
-            application.add_handler(CommandHandler("backup", backup_cmd))
-            application.add_handler(CommandHandler("add_admin", add_admin_cmd))
-            application.add_handler(CommandHandler("channels_status", channels_status_cmd))
-            application.add_handler(CommandHandler("channels_list", channels_list_cmd))
-            application.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
-            application.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
-            application.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
-            application.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
-            application.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
-            application.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
-            application.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
-            application.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
-            application.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
-            application.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
-            application.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
-            application.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
-            application.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
-            application.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
-            application.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
-            application.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
-            application.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
-            application.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
-            application.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
-            application.add_handler(CallbackQueryHandler(promo_reject_cb, pattern="^promo_reject_"))
-            application.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
-            application.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
-            application.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
-            application.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
-            application.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
-            application.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
-            application.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
-            application.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
-            application.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
-            application.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
-            application.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
-            application.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
-            application.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
-            application.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
-            application.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
-            application.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
-            application.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
-            application.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
-            
-            # V38 NEW HANDLERS - Set UPI + Manual Max + Screenshots - Added AFTER original to avoid conflict
-            try:
-                application.add_handler(CommandHandler("set_upi", set_upi_cmd))
-                print("V38 added set_upi handler")
-            except Exception as e:
-                print(f"V38 set_upi handler err {e}")
-            try:
-                application.add_handler(CommandHandler("add_plan", add_plan_cmd))
-                print("V38 added add_plan handler")
-            except Exception as e:
-                print(f"V38 add_plan handler err {e}")
-            try:
-                application.add_handler(CallbackQueryHandler(buy_plan_dynamic_cb, pattern="^buy_plan_"))
-                application.add_handler(CallbackQueryHandler(upload_payment_cb, pattern="^upload_pay_"))
-                application.add_handler(CallbackQueryHandler(admin_approve_new_plan_cb, pattern="^admin_approve_new_plan_"))
-                application.add_handler(CallbackQueryHandler(admin_reject_new_plan_cb, pattern="^admin_reject_new_plan_"))
-                print("V38 added plan callbacks")
-            except Exception as e:
-                print(f"V38 plan callbacks err {e}")
-            try:
-                application.add_handler(MessageHandler(filters.PHOTO, handle_payment_screenshot))
-                application.add_handler(MessageHandler(filters.PHOTO, handle_task_screenshot))
-                print("V38 added photo handlers")
-            except Exception as e:
-                print(f"V38 photo handlers err {e}")
-            
-            # V45 FIX: Add error handlers to suppress Conflict spam
+
+            conv_promo = ConversationHandler(
+                entry_points=[CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_")],
+                states={
+                    PROMO_DETAILS:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_promo_views_count)],
+                    UPLOAD_SCREENSHOT:[MessageHandler(filters.PHOTO, handle_screenshot_upload)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel_cmd)],
+                per_message=False,
+            )
+            application.add_handler(conv_promo)
+
             try:
                 application.add_error_handler(error_handler)
-                print("V45 Added error_handler to suppress Conflict")
-            except Exception as e:
-                print(f"V45 error_handler add err {e}")
-            
-            print(f"V45 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
+                print("V46 Added error_handler - No Conflict!")
+            except:
+                pass
+
+            print("V46 Bot handlers registered - Polling NOW! FINAL - No 120 sec sleep!")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-            break
+
         except Exception as e:
-            print(f"V38 attempt {attempt} failed: {e}")
+            print(f"V46 Polling attempt {attempt} failed: {e}")
             import traceback
             traceback.print_exc()
-            if "Conflict" in str(e):
-                time.sleep(10)
-                try:
-                    import urllib.request
-                    urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                except:
-                    pass
-            else:
-                time.sleep(5)
-            if attempt == 100:
-                break
+            time.sleep(5)
+            continue
 
 if __name__ == "__main__":
     main()
