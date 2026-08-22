@@ -4041,10 +4041,32 @@ def main():
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
 
             print("V56 Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
-            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            # EVENT LOOP FIX: Render/asyncio can leave the previous loop closed after
+            # a polling attempt. Always create and install a fresh loop per attempt,
+            # and let python-telegram-bot keep it open while run_polling is active.
+            polling_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(polling_loop)
+            try:
+                app.run_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=Update.ALL_TYPES,
+                    close_loop=False,
+                )
+            finally:
+                try:
+                    if not polling_loop.is_closed():
+                        polling_loop.close()
+                except Exception as loop_close_error:
+                    print(f"Event loop cleanup: {loop_close_error}")
+                try:
+                    asyncio.set_event_loop(None)
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"V56 Polling attempt {retry_count+1} failed: {e}")
+            if isinstance(e, RuntimeError) and "Event loop is closed" in str(e):
+                print("V56 EVENT LOOP RECOVERY: fresh asyncio loop will be created on the next attempt")
             import traceback
             traceback.print_exc()
             retry_count += 1
