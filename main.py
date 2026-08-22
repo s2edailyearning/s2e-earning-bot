@@ -3390,6 +3390,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
             app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
             app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("set_screenshot_channel", set_screenshot_channel_cmd))
+            app.add_handler(CommandHandler("set_withdraw_channel", set_withdraw_channel_cmd))
             app.add_handler(CommandHandler("set_join_channel", set_join_channel_cmd))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
