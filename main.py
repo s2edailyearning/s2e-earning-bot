@@ -2574,15 +2574,15 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 # === CHANNEL METHOD + BULK APPROVE V28 ===
 # Admin channels - set via command or env
-SCREENSHOT_CHANNEL_ID = SCREENSHOT_CHANNEL  # Runtime override; default is the dedicated TASK Screenshots channel
-WITHDRAW_CHANNEL_ID = WITHDRAW_CHANNEL      # Runtime override; default is the dedicated Withdraw channel
-JOIN_CHANNEL_ID = JOIN_CHANNEL              # Runtime override; default is the dedicated Join channel
+SCREENSHOT_CHANNEL_ID = SCREENSHOT_CHANNEL
+WITHDRAW_CHANNEL_ID = WITHDRAW_CHANNEL
+JOIN_CHANNEL_ID = JOIN_CHANNEL
 JOIN_CHANNEL_LINK = CHANNEL_LINK
 
 def _load_channel_config():
     try:
-        if os.path.exists("channel_config_v2.json"):
-            with open("channel_config_v2.json", 'r') as f:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", 'r') as f:
                 data = json.load(f)
                 return data if isinstance(data, dict) else {}
     except Exception as e:
@@ -2590,16 +2590,13 @@ def _load_channel_config():
     return {}
 
 def get_screenshot_channel():
-    cfg = _load_channel_config()
-    return cfg.get('screenshot_channel') or SCREENSHOT_CHANNEL_ID
+    return _load_channel_config().get('screenshot_channel') or SCREENSHOT_CHANNEL_ID or SCREENSHOT_CHANNEL
 
 def get_withdraw_channel():
-    cfg = _load_channel_config()
-    return cfg.get('withdraw_channel') or WITHDRAW_CHANNEL_ID
+    return _load_channel_config().get('withdraw_channel') or WITHDRAW_CHANNEL_ID or WITHDRAW_CHANNEL
 
 def get_join_channel():
-    cfg = _load_channel_config()
-    return cfg.get('join_channel') or JOIN_CHANNEL_ID
+    return _load_channel_config().get('join_channel') or JOIN_CHANNEL_ID or JOIN_CHANNEL
 
 def get_join_channel_link():
     return _load_channel_config().get('join_link') or JOIN_CHANNEL_LINK or CHANNEL_LINK
@@ -2615,7 +2612,7 @@ def save_channel_config(screenshot=None, withdraw=None, join=None, join_link=Non
             cfg['join_channel'] = join
         if join_link is not None:
             cfg['join_link'] = join_link
-        with open("channel_config_v2.json", 'w') as f:
+        with open("channel_config.json", 'w') as f:
             json.dump(cfg, f, indent=2)
         print(f"Channel config saved: {cfg}")
     except Exception as e:
@@ -2629,10 +2626,9 @@ async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(f"Current Screenshot Channel: {current}\n\nUsage: /set_screenshot_channel <channel_id or @username>\nExample: /set_screenshot_channel -1001234567890\nOR /set_screenshot_channel @s2e_screenshots_admin\n\nHow to get ID: Forward a message from channel to @userinfobot")
         return
     ch = context.args[0]
-    # Save runtime + persistent config. This channel is used ONLY for task screenshots.
-    global SCREENSHOT_CHANNEL_ID
-    SCREENSHOT_CHANNEL_ID = ch
+    # Try to resolve @username to ID by sending test message
     try:
+        # Save as is (can be @username or -100...)
         save_channel_config(screenshot=ch, withdraw=None)
         await update.message.reply_text(f"✅ Screenshot Channel Set: {ch}\n\nNow all task screenshots will go to this channel with Approve buttons!\nTest: Ask a user to submit a task")
         # Test send
@@ -2651,8 +2647,6 @@ async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"Current Withdraw Channel: {current}\nUsage: /set_withdraw_channel <channel_id or @username>\nExample: /set_withdraw_channel -1001234567890")
         return
     ch = context.args[0]
-    global WITHDRAW_CHANNEL_ID
-    WITHDRAW_CHANNEL_ID = ch
     save_channel_config(screenshot=None, withdraw=ch)
     await update.message.reply_text(f"✅ Withdraw Channel Set: {ch}\nAll withdraw requests will go here!")
     try:
@@ -2834,7 +2828,7 @@ async def backup_cmd(update, context):
         import os, json, glob
         files_to_backup = []
         # Original DB files
-        for jf in ["bot_data.json", "channel_config_v2.json"]:
+        for jf in ["bot_data.json", "channel_config.json"]:
             if os.path.exists(jf):
                 files_to_backup.append(jf)
         # Also backup all _db jsons if exists
@@ -2845,9 +2839,9 @@ async def backup_cmd(update, context):
         if not os.path.exists("bot_data.json"):
             with open("bot_data.json","w") as f: json.dump({}, f)
             files_to_backup.append("bot_data.json")
-        if not os.path.exists("channel_config_v2.json"):
-            with open("channel_config_v2.json","w") as f: json.dump({}, f)
-            files_to_backup.append("channel_config_v2.json")
+        if not os.path.exists("channel_config.json"):
+            with open("channel_config.json","w") as f: json.dump({}, f)
+            files_to_backup.append("channel_config.json")
         
         # Also create combined backup
         combined = {}
@@ -2917,7 +2911,7 @@ async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         import os, json, glob
         files=[]
-        for jf in ["bot_data.json","channel_config_v2.json","bot_config.json","users_progress.json","referrals.json"]:
+        for jf in ["bot_data.json","channel_config.json","bot_config.json","users_progress.json","referrals.json"]:
             if os.path.exists(jf): files.append(jf)
         for jf in glob.glob("*_db*.json"):
             if os.path.exists(jf) and jf not in files: files.append(jf)
@@ -3233,343 +3227,348 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
-    """Start Flask and Telegram polling exactly once.
-
-    IMPORTANT: python-telegram-bot's run_polling() owns the asyncio event loop.
-    The previous retry loop called run_polling() again after it had closed the
-    loop, which caused: RuntimeError: Event loop is closed.
-    """
-    global bot_application
-
-    print("=" * 72)
-    print("S2E Bot CLEAN FINAL - single polling loop + dedicated screenshot channel")
-    print(f"TASK SCREENSHOTS : {get_screenshot_channel()}")
-    print(f"WITHDRAW         : {get_withdraw_channel()}")
-    print(f"JOIN             : {get_join_channel()}")
-    print(f"JOIN LINK        : {get_join_channel_link()}")
-    print("=" * 72)
-
-    # Load persistent bot data before handlers start.
-    load_data()
-
-    # Flask health endpoint for Render.
+    import os, time, threading
+    print("============================================================")
+    print("S2E Bot FINAL V56 - No ConversationHandler - Important Channel Fix V56 FINAL - All Filters Fix V56 FINAL - No Reply Fix! - Upload Screenshot + Task Image Final Fix V56 FINAL - Screenshot + Task Image Final Fix V56 FINAL - Final Output! - Screenshot + Task Image Fix V56 FINAL - Final Output! - Task Image + Join ALWAYS True Fix V56 FINAL - Final Output! - Check Joined ALWAYS True + Task Image Fix V56 FINAL - Check Joined Bypass + Withdraw Buttons Fix V56 FINAL - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V56 FINAL - NameError Fixed!")
+    print("============================================================")
+    # V56 FIX: Flask IMMEDIATE start - No sleep! Fix Live but not responding! NameError Fixed!
     try:
         from flask import Flask
         flask_app = Flask(__name__)
-
         @flask_app.route('/')
         def home():
-            return "S2E Bot is running"
-
+            return "S2E Bot V56 FINAL Running - Immediate Polling - No Sleep - NameError Fixed"
         flask_port = int(os.environ.get("PORT", 10000))
-
+        print(f"V56 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')}")
         def run_flask():
             try:
-                flask_app.run(
-                    host="0.0.0.0",
-                    port=flask_port,
-                    debug=False,
-                    use_reloader=False,
-                )
+                print(f"V56 Flask thread running on 0.0.0.0:{flask_port}")
+                flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"Flask error: {e}")
-
-        threading.Thread(target=run_flask, daemon=True).start()
-        print(f"Flask health server started on port {flask_port}")
+                print(f"V56 Flask err {e}")
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        print(f"V56 Flask thread started IMMEDIATELY on port {flask_port} - No 120 sec sleep! FINAL! NameError Fixed!")
+        time.sleep(2)
     except Exception as e:
-        print(f"Flask setup error: {e}")
+        print(f"V56 Flask setup err {e}")
 
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable is missing")
-
-    # Build the application once. Do NOT wrap run_polling() in a retry loop.
-    app = Application.builder().token(BOT_TOKEN).build()
-    bot_application = app
-    app.add_error_handler(error_handler)
-
-    # Fixed callback handlers that must run before generic callbacks.
-    for handler, pattern in [
-        (back_admin_cb_fixed, r'^back_admin$'),
-        (back_menu_cb_fixed, r'^back_menu$'),
-        (withdraw_cb, r'^withdraw$'),
-        (promo_tasks_cb_fixed, r'^promo_tasks$'),
-        (scheduled_tasks_cb_fixed, r'^scheduled_tasks$'),
-        (support_plans_cb_fixed, r'^support_plans$'),
-        (bulk_approve_callback, r'^bulk_approve_'),
-    ]:
-        try:
-            app.add_handler(CallbackQueryHandler(handler, pattern=pattern), group=-2)
-        except Exception as e:
-            print(f"Callback registration error {pattern}: {e}")
-
-    # Registration conversation.
-    conv_reg = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            CallbackQueryHandler(check_joined_cb, pattern=r"^check_joined$"),
-        ],
-        states={
-            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
-            DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
-            MOBILE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
-            UPI: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
-            PINCODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
-            PROFESSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True,
-        per_chat=True,
-        per_message=False,
-    )
-
-    conv_skip = ConversationHandler(
-        entry_points=[CallbackQueryHandler(daily_skip_cb, pattern=r"^daily_skip_")],
-        states={
-            SKIP_REASON: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason),
-                CallbackQueryHandler(skip_reason_cb, pattern=r"^skip_reason_"),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_user=True,
-        per_chat=True,
-        per_message=False,
-    )
-
-    app.add_handler(conv_reg)
-    app.add_handler(conv_skip)
-
-    # Admin task-image upload handler. This is intentionally separate from member screenshots.
-    async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            uid = update.effective_user.id
-            if not is_admin(uid):
-                return
-            if not update.message.photo and not update.message.document:
-                return
-            task_id = context.user_data.get('set_image_task_id')
-            caption = update.message.caption or ""
-            if not task_id:
-                m = re.search(r'/set_task_image\s+(\d+)', caption)
-                if m:
-                    task_id = int(m.group(1))
-                else:
-                    m2 = re.search(r'\b(\d+)\b', caption)
-                    if m2:
-                        task_id = int(m2.group(1))
-            if not task_id:
-                if scheduled_tasks_db:
-                    task_id = scheduled_tasks_db[-1]['id']
-                else:
-                    return
-            file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
-            if not file_id:
-                return
-            task_images_db[task_id] = file_id
-            task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
-            if task:
-                task['image_file_id'] = file_id
-                task['has_image'] = True
-            save_data()
-            await update.message.reply_text(
-                f"✅ Image Poster Set for Task {task_id}! "
-                f"{task['title'] if task else ''}",
-                reply_markup=main_menu(),
-            )
-            context.user_data.pop('set_image_task_id', None)
-        except Exception as e:
-            print(f"Task image handler error: {e}")
-
-    # ONE screenshot handler for members. No generic fallback is registered.
-    async def v56_screenshot_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            uid = update.effective_user.id
-            if is_admin(uid):
-                return
-            if not update.message.photo and not update.message.document:
-                return
-
-            if update.message.photo:
-                media = update.message.photo[-1]
-            else:
-                media = update.message.document
-            file_id = media.file_id
-            file_unique_id = getattr(media, 'file_unique_id', None)
-            if not file_id:
-                return
-
-            # Promo upload has its own flow.
-            campaign_id = context.user_data.get('promo_upload_campaign_id')
-            if campaign_id:
-                context.user_data['promo_screenshot_file_id'] = file_id
-                context.user_data['promo_screenshot_campaign_id'] = campaign_id
-                await update.message.reply_text(
-                    "Screenshot received for Promo Campaign! Now type views count. Example: 150"
-                )
-                return
-
-            current, _ = get_current_scheduled_task_with_interval()
-            task_to_use = current
-            if not task_to_use:
-                task_to_use = get_today_task_for_user(uid)
-            if not task_to_use and scheduled_tasks_db:
-                task_to_use = scheduled_tasks_db[-1]
-            if not task_to_use:
-                task_to_use = {
-                    'id': 0,
-                    'title': 'Daily Task',
-                    'reward': 5,
-                    'task_number': 1,
-                    'open_time': '00:00',
-                    'close_time': '23:59',
-                }
-
-            if file_unique_id and file_unique_id in screenshot_hashes:
-                await update.message.reply_text("⚠️ Same screenshot already submitted.")
-                return
-            if file_unique_id:
-                screenshot_hashes.add(file_unique_id)
-
-            today = str(get_ist_today())
-            pending_daily[uid] = {
-                'date': today,
-                'task': task_to_use,
-                'screenshot_file_id': file_id,
-            }
-            user_task_status.setdefault(uid, {})
-            task_id = task_to_use.get('id', 0)
-            user_task_status[uid][task_id] = {
-                'status': 'pending_verification',
-                'submitted_at': get_ist_now(),
-            }
-
-            await update.message.reply_text(
-                f"✅ Screenshot Received for Task {task_to_use.get('task_number', 1)}! "
-                "Pending Admin Verification!",
-                reply_markup=main_menu(),
-            )
-
-            # CRITICAL: send task screenshots ONLY to the configured TASK Screenshots channel.
-            screenshot_channel = get_screenshot_channel()
-            if not screenshot_channel:
-                print("ERROR: screenshot channel is empty")
-                return
-
-            kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"),
-                InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}"),
-            ]])
-            caption = (
-                f"NEW TASK V56\n"
-                f"User: {uid}\n"
-                f"Task: {task_to_use.get('task_number', 1)}\n"
-                f"{task_to_use.get('title', 'Daily')}\n"
-                f"Reward: ₹{task_to_use.get('reward', 5)}"
-            )
-
+    print("V56 NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding! NameError Fixed!")
+    print("V56 Quick webhook delete 2 times - No long sleep! NameError Fixed!")
+    try:
+        import urllib.request
+        for i in range(2):
             try:
-                await context.bot.send_photo(
-                    chat_id=screenshot_channel,
-                    photo=file_id,
-                    caption=caption,
-                    reply_markup=kb,
-                )
-                print(f"SCREENSHOT OK -> {screenshot_channel} (task only)")
+                urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                print(f"V56 Quick Webhook delete {i+1}/2 - NameError Fixed!")
+                time.sleep(1)
             except Exception as e:
-                print(f"SCREENSHOT CHANNEL ERROR -> {screenshot_channel}: {e}")
-                # If the channel cannot accept a photo, try the same target as a document.
-                try:
-                    await context.bot.send_document(
-                        chat_id=screenshot_channel,
-                        document=file_id,
-                        caption=caption,
-                        reply_markup=kb,
-                    )
-                    print(f"SCREENSHOT DOCUMENT OK -> {screenshot_channel}")
-                except Exception as e2:
-                    print(f"SCREENSHOT DOCUMENT ERROR -> {screenshot_channel}: {e2}")
+                print(f"V56 Quick delete {i+1} err {e}")
+    except Exception as e:
+        print(f"V56 Quick webhook outer err {e}")
 
-            # Admin private notifications are kept as an additional notification only.
-            for admin_id in ADMIN_ID_LIST:
+    print("V56 Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
+    load_data()
+    print(f"EFFECTIVE CHANNELS: SCREENSHOT={get_screenshot_channel()} WITHDRAW={get_withdraw_channel()} JOIN={get_join_channel()}")
+    try:
+        threading.Thread(target=keep_alive_pinger, daemon=True).start()
+        print('Keep-alive started V56 FINAL')
+    except:
+        pass
+
+    retry_count = 0
+    max_retries = 100
+    while retry_count < max_retries:
+        print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - Polling NOW! No Sleep! FINAL! NameError Fixed!")
+        app = None
+        try:
+            print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - FINAL!")
+            app = Application.builder().token(BOT_TOKEN).build()
+            app.add_error_handler(error_handler)
+            try:
+                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
+                app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
+                app.add_handler(CallbackQueryHandler(withdraw_cb, pattern='^withdraw$',), group=-2)
+                app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
+                app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
+                print('V56 All Fixed group -2 - NameError Fixed!')
+                app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
+            except Exception as e:
+                print(f'V56 fix {e}')
+
+            conv_reg = ConversationHandler(
+                entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
+                states={
+                    NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+                    GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+                    DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+                    MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
+                    UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
+                    PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
+                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            # V56 FINAL FIX: No ConversationHandler for screenshot - Simple handlers - Important channel ki vachedi!
+            conv_screenshot = None  # Disabled - Using simple MessageHandler instead!
+            print("V56 conv_screenshot disabled - Using simple handlers! FINAL!")
+
+            conv_skip = ConversationHandler(
+                entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
+                states={
+                    SKIP_REASON:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_skip_reason), CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_")],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+                per_user=True, per_chat=True, per_message=False
+            )
+            # V56 FINAL FIX: No ConversationHandler for task image - Simple handlers - Important channel ki vachedi!
+            # Old ConversationHandler caused no reply - Replace with simple handlers!
+            conv_set_image = None  # Disabled - Using simple MessageHandler instead!
+            print("V56 conv_set_image disabled - Using simple handlers! FINAL!")
+
+            app.add_handler(conv_reg)
+            # V56 Disabled: app.add_handler(conv_screenshot) - Using simple handlers! FINAL!
+            app.add_handler(conv_skip)
+
+            # V56 FINAL FIX: Simple MessageHandlers - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!
+            # Task image handler - Admin photo with set_image_task_id or caption /set_task_image
+            async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
-                    await context.bot.send_photo(
-                        chat_id=admin_id,
-                        photo=file_id,
-                        caption=caption,
-                        reply_markup=kb,
-                    )
+                    uid = update.effective_user.id
+                    if not is_admin(uid):
+                        return
+                    if not update.message.photo and not update.message.document:
+                        return
+                    # Plan image upload has priority when /set_plan_image was used.
+                    if context.user_data.get('awaiting_plan_image'):
+                        await handle_plan_image_upload(update, context)
+                        return
+                    task_id = context.user_data.get('set_image_task_id')
+                    if not task_id and update.message.caption:
+                        import re
+                        m = re.search(r'/set_task_image\s+(\d+)', update.message.caption or "")
+                        if m:
+                            task_id = int(m.group(1))
+                        else:
+                            m2 = re.search(r'(\d+)', update.message.caption or "")
+                            if m2:
+                                try:
+                                    task_id = int(m2.group(1))
+                                except:
+                                    pass
+                    # Never consume an arbitrary admin photo. Only handle an explicitly requested task image.
+                    if not task_id:
+                        return
+                    file_id = None
+                    if update.message.photo:
+                        file_id = update.message.photo[-1].file_id
+                    elif update.message.document:
+                        file_id = update.message.document.file_id
+                    if not file_id:
+                        return
+                    task_images_db[task_id] = file_id
+                    task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
+                    if task:
+                        task['image_file_id'] = file_id
+                        task['has_image'] = True
+                        print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
+                    await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
+                    try:
+                        await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
+                    except:
+                        try:
+                            await context.bot.send_document(chat_id=uid, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
+                        except Exception as e:
+                            print(f"V56 confirmation err {e}")
+                    context.user_data.pop('set_image_task_id', None)
                 except Exception as e:
-                    print(f"Admin screenshot notification error {admin_id}: {e}")
+                    print(f"V56 v56_task_image_simple_handler err {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            async def v56_screenshot_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                try:
+                    uid = update.effective_user.id
+                    if is_admin(uid):
+                        return
+                    if not update.message.photo and not update.message.document:
+                        return
+                    # Check if user has active task or recently clicked Upload Screenshot
+                    # Always handle as screenshot for non-admin - Important channel ki vachedi!
+                    file_id = None
+                    file_unique_id = None
+                    if update.message.photo:
+                        file_id = update.message.photo[-1].file_id
+                        file_unique_id = update.message.photo[-1].file_unique_id
+                    elif update.message.document:
+                        file_id = update.message.document.file_id
+                        file_unique_id = update.message.document.file_unique_id
+                    if not file_id:
+                        return
+                    current, next_task = get_current_scheduled_task_with_interval()
+                    task_to_use = current
+                    if not current:
+                        default_task = get_today_task_for_user(uid)
+                        if not default_task and scheduled_tasks_db:
+                            default_task = scheduled_tasks_db[-1]
+                        if not default_task:
+                            default_task = {'id': 0, 'title': 'Daily Task', 'reward': 5, 'task_number': 1, 'open_time': '00:00', 'close_time': '23:59'}
+                        task_to_use = default_task
+                    if file_unique_id and file_unique_id in screenshot_hashes:
+                        await update.message.reply_text("WARNING Same Screenshot! V56")
+                        return
+                    if file_unique_id:
+                        screenshot_hashes.add(file_unique_id)
+                    today = str(get_ist_today())
+                    pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
+                    if uid not in user_task_status:
+                        user_task_status[uid] = {}
+                    task_id_for_status = task_to_use.get('id', 0)
+                    user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
+                    await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
+                    chan = get_screenshot_channel()
+                    if not chan:
+                        raise RuntimeError("Screenshot channel is not configured")
+                    try:
+                        kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)}", reply_markup=kb_chan)
+                        print(f"SCREENSHOT OK -> {chan} user={uid} task={task_to_use.get('task_number',1)}")
+                    except Exception as e:
+                        print(f"SCREENSHOT CHANNEL SEND FAILED -> {chan}: {e}")
+                        try:
+                            await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK User {uid} Task {task_to_use.get('task_number',1)}")
+                        except Exception as e2:
+                            print(f"SCREENSHOT FALLBACK PHOTO FAILED -> {chan}: {e2}")
+                            try:
+                                await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK User {uid}")
+                            except Exception as e3:
+                                print(f"SCREENSHOT FALLBACK DOCUMENT FAILED -> {chan}: {e3}")
+                                try:
+                                    await update.message.reply_text("⚠️ Screenshot received, but the screenshot channel could not be reached. Make the bot an admin with Post Messages permission in that channel.")
+                                except:
+                                    pass
+                    for admin_id in ADMIN_ID_LIST:
+                        try:
+                            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
+                        except:
+                            try:
+                                await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                            except Exception as e:
+                                print(f"V56 admin forward err {e}")
+                except Exception as e:
+                    print(f"V56 v56_screenshot_simple_handler err {e}")
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        await update.message.reply_text(f"✅ V56 Screenshot Received! Pending Verification! V56 FINAL - Important channel ki vachedi!", reply_markup=main_menu())
+                    except:
+                        pass
+
+            # V56 explicit media routing: plan image -> task image -> member screenshot.
+            app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
+            app.add_handler(MessageHandler(filters.Document.ALL, v56_task_image_simple_handler), group=1)
+            app.add_handler(MessageHandler(filters.PHOTO, v56_screenshot_simple_handler), group=2)
+            app.add_handler(MessageHandler(filters.Document.ALL, v56_screenshot_simple_handler), group=2)
+            print("V56 Simple handlers added - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!")
+            # V56 Disabled: app.add_handler(conv_set_image) - Using simple handlers! FINAL!
+            # No generic photo fallback: dedicated task-image/screenshot routing below is intentional.
+
+            app.add_handler(CommandHandler("menu", menu))
+            app.add_handler(CommandHandler("admin", admin_panel))
+            app.add_handler(CommandHandler("pending", pending_cmd))
+            app.add_handler(CommandHandler("approve", approve_cmd))
+            app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
+            app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
+            app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
+            app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
+            app.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
+            app.add_handler(CommandHandler("warnings", warnings_cmd))
+            app.add_handler(CommandHandler("banned", banned_cmd))
+            app.add_handler(CommandHandler("unban", unban_cmd))
+            app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+            app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            app.add_handler(CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"))
+            app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
+            app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
+            app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
+            app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
+            app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
+            app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
+            app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
+            app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
+            app.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
+            app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
+            app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
+            app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
+            app.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
+            app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
+            app.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
+            app.add_handler(CallbackQueryHandler(promo_reject_cb, pattern="^promo_reject_"))
+            app.add_handler(CallbackQueryHandler(admin_ban_cb, pattern="^admin_ban_"))
+            app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
+            app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
+            app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
+            app.add_handler(CallbackQueryHandler(wd_edit_upi_cb, pattern="^wd_edit_upi$"))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
+            app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
+            app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
+            app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_cb, pattern="^plan_basic$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_cb, pattern="^plan_premium$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_activate_cb, pattern="^plan_basic_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
+            app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
+            app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
+            app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
+            app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
+            app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
+            app.add_handler(CommandHandler("backup", backup_cmd))
+            app.add_handler(CommandHandler("add_task_manual", add_task_manual_cmd))
+            app.add_handler(CommandHandler("remove_task", remove_task_cmd))
+            app.add_handler(CommandHandler("del_task", remove_task_cmd))
+            app.add_handler(CommandHandler("add_balance", add_balance_cmd))
+            app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
+            app.add_handler(CommandHandler("deduct_balance", remove_balance_cmd))
+            app.add_handler(CommandHandler("set_tasks", set_task_count_cmd))
+            app.add_handler(CommandHandler("set_screenshot_channel", set_screenshot_channel_cmd))
+            app.add_handler(CommandHandler("set_withdraw_channel", set_withdraw_channel_cmd))
+            app.add_handler(CommandHandler("set_join_channel", set_join_channel_cmd))
+            app.add_handler(CommandHandler("approve_all", approve_all_pending_cmd))
+            app.add_handler(CommandHandler("list_pending", list_pending_cmd))
+            app.add_handler(CommandHandler("add_week", add_week_cmd))
+            app.add_handler(CommandHandler("add_date", add_date_cmd))
+            app.add_handler(CommandHandler("bulk_tasks", bulk_tasks_help_cmd))
+            app.add_handler(CommandHandler("add_plan", add_support_plan_cmd))
+            app.add_handler(CommandHandler("list_plans", list_plans_cmd))
+            app.add_handler(CommandHandler("remove_plan", remove_plan_cmd))
+            app.add_handler(CommandHandler("set_plan_image", set_plan_image_cmd))
+            app.add_handler(CommandHandler("bacup", backup_cmd))
+            app.add_handler(CommandHandler("add_admin", add_admin_cmd))
+            app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+            app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
+            app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
+            app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
+            app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("channels_status", channels_status_cmd))
+            app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+
+            print("V56 Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
+            app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
         except Exception as e:
-            print(f"Screenshot handler error: {e}")
+            print(f"V56 Polling attempt {retry_count+1} failed: {e}")
             import traceback
             traceback.print_exc()
-
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, v56_task_image_simple_handler), group=1)
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, v56_screenshot_simple_handler), group=2)
-
-    # Normal commands.
-    command_handlers = [
-        ("menu", menu), ("admin", admin_panel), ("pending", pending_cmd),
-        ("approve", approve_cmd), ("add_task", add_scheduled_task_with_interval_cmd),
-        ("list_tasks", list_scheduled_tasks_cmd), ("add_promo", add_promo_campaign_cmd),
-        ("list_promos", list_promo_campaigns_cmd), ("promo_pending", promo_pending_cmd),
-        ("skipped", skipped_tasks_cmd), ("warnings", warnings_cmd),
-        ("banned", banned_cmd), ("unban", unban_cmd), ("backup", backup_cmd),
-        ("add_task_manual", add_task_manual_cmd), ("remove_task", remove_task_cmd),
-        ("del_task", remove_task_cmd), ("add_balance", add_balance_cmd),
-        ("remove_balance", remove_balance_cmd), ("deduct_balance", remove_balance_cmd),
-        ("set_tasks", set_task_count_cmd), ("set_screenshot_channel", set_screenshot_channel_cmd),
-        ("set_withdraw_channel", set_withdraw_channel_cmd), ("set_join_channel", set_join_channel_cmd),
-        ("approve_all", approve_all_pending_cmd), ("list_pending", list_pending_cmd),
-        ("add_week", add_week_cmd), ("add_date", add_date_cmd),
-        ("bulk_tasks", bulk_tasks_help_cmd), ("add_plan", add_support_plan_cmd),
-        ("list_plans", list_plans_cmd), ("remove_plan", remove_plan_cmd),
-        ("set_plan_image", set_plan_image_cmd), ("bacup", backup_cmd),
-        ("add_admin", add_admin_cmd), ("referral_stats", referral_stats_cmd),
-        ("channels_status", channels_status_cmd), ("channels_list", channels_list_cmd),
-    ]
-    for name, callback in command_handlers:
-        app.add_handler(CommandHandler(name, callback))
-
-    # Callback handlers.
-    callback_handlers = [
-        (my_ref_cb, r"^my_ref$"), (wallet_cb, r"^wallet$"), (daily_cb, r"^daily$"),
-        (scheduled_cb, r"^scheduled$"), (promo_tasks_cb, r"^promo_tasks$"),
-        (promo_join_cb, r"^promo_join_"), (promote_shop_cb, r"^promote_shop$"),
-        (skip_reason_cb, r"^skip_reason_"), (admin_view_pending_cb, r"^admin_view_pending$"),
-        (admin_view_withdraw_cb, r"^admin_view_withdraw$"), (admin_view_tasks_cb, r"^admin_view_tasks$"),
-        (admin_view_promos_cb, r"^admin_view_promos$"), (admin_view_stats_cb, r"^admin_view_stats$"),
-        (admin_view_banned_cb, r"^admin_view_banned$"), (back_menu_cb, r"^back_menu$"),
-        (missed_tasks_cb, r"^missed_tasks$"), (back_admin_cb, r"^back_admin$"),
-        (admin_approve_daily_cb, r"^admin_approve_daily_"), (admin_reject_daily_cb, r"^admin_reject_daily_"),
-        (promo_approve_cb, r"^promo_approve_"), (promo_reject_cb, r"^promo_reject_"),
-        (admin_ban_cb, r"^admin_ban_"), (admin_unban_cb, r"^admin_unban_"),
-        (wd_select_cb, r"^wd_select_"), (wd_confirm_cb, r"^wd_confirm_"),
-        (wd_edit_upi_cb, r"^wd_edit_upi$"), (wd_admin_approve_cb, r"^wd_admin_approve_"),
-        (wd_admin_reject_cb, r"^wd_admin_reject_"), (support_plans_cb, r"^support_plans$"),
-        (plan_basic_cb, r"^plan_basic$"), (plan_premium_cb, r"^plan_premium$"),
-        (plan_basic_activate_cb, r"^plan_basic_activate$"), (plan_premium_activate_cb, r"^plan_premium_activate$"),
-        (plan_basic_proof_cb, r"^plan_basic_proof$"), (plan_premium_proof_cb, r"^plan_premium_proof$"),
-        (admin_view_plans_cb, r"^admin_view_plans$"), (admin_approve_plan_cb, r"^admin_approve_plan_"),
-        (admin_reject_plan_cb, r"^admin_reject_plan_"),
-        (admin_backup_cb, r"^admin_backup$"), (admin_add_admin_cb, r"^admin_add_admin$"),
-        (admin_referral_cb, r"^admin_referral$"), (admin_missed_toggle_cb, r"^admin_missed_toggle$"),
-    ]
-    for callback, pattern in callback_handlers:
-        app.add_handler(CallbackQueryHandler(callback, pattern=pattern))
-
-    # Text handler used by withdraw UPI editing.
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
-
-    print("S2E Bot CLEAN FINAL: handlers registered")
-    print(f"Task screenshots will go ONLY to: {get_screenshot_channel()}")
-    print("Starting Telegram polling once - no retry loop, no closed event loop")
-
-    # run_polling creates/manages the asyncio loop and blocks until shutdown.
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            retry_count += 1
+            time.sleep(5)
+            continue
 
 if __name__ == "__main__":
     main()
