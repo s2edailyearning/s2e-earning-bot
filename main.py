@@ -35,7 +35,26 @@ JOIN_LINK = "https://t.me/S2E_Daily_Earning"
 MISSED_ENABLED = True
 
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
+PAYMENT_UPI = ADMIN_UPI
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
+
+def get_payment_upi():
+    return str(globals().get("PAYMENT_UPI") or ADMIN_UPI)
+
+async def set_payment_upi_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(f"Current payment UPI: {get_payment_upi()}\nUsage: /set_payment_upi yourupi@bank")
+        return
+    upi = context.args[0].strip()
+    if "@" not in upi or len(upi) < 5:
+        await update.message.reply_text("Invalid UPI. Example: yourname@upi")
+        return
+    globals()["PAYMENT_UPI"] = upi
+    save_data()
+    await update.message.reply_text(f"✅ Payment UPI updated: {upi}\nAll new plan payment instructions will use this UPI.")
+
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
 _env = os.getenv("ADMIN_IDS") or ""
@@ -102,81 +121,95 @@ def notification_thread_func():
 
 
 
+async def _show_plan_purchase(update, context, plan_type):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    uid = q.from_user.id
+    is_active, plan_name, expiry = check_plan_active(uid)
+    plan_type = "premium" if plan_type == "premium" else "basic"
+    price = 499 if plan_type == "premium" else 199
+    limit = DAILY_TASK_LIMIT_PREMIUM if plan_type == "premium" else DAILY_TASK_LIMIT_BASIC
+    if is_active and plan_name.lower().startswith(plan_type):
+        text = f"✅ {plan_type.capitalize()} plan is already active.\\nValid till: {expiry}\\nDaily tasks: {limit}"
+        kb = [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+    else:
+        upi = get_payment_upi()
+        pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
+        text = (
+            f"💎 {plan_type.capitalize()} Plan — ₹{price}\\n\\n"
+            f"Daily Tasks: {limit}\\n"
+            f"Validity: 30 days\\n\\n"
+            f"💳 Pay manually to UPI:\\n{upi}\\n\\n"
+            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\\n"
+            "No payment link is required."
+        )
+        kb = [
+            [InlineKeyboardButton("📤 I Paid - Send Proof", callback_data=f"plan_proof_{plan_type}")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+        ]
+    await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
 async def plan_basic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    kb = [[InlineKeyboardButton("✅ Activate Basic (₹199)", callback_data="plan_basic_activate")],
-          [InlineKeyboardButton("📤 Upload Proof", callback_data="plan_basic_proof")]]
-    try:
-        await update.callback_query.edit_message_text("💎 Basic Plan - ₹199\n10 tasks/day, ₹200 cap", reply_markup=InlineKeyboardMarkup(kb))
-    except:
-        pass
+    await _show_plan_purchase(update, context, "basic")
 
 async def plan_premium_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    kb = [[InlineKeyboardButton("✅ Activate Premium (₹499)", callback_data="plan_premium_activate")],
-          [InlineKeyboardButton("📤 Upload Proof", callback_data="plan_premium_proof")]]
-    try:
-        await update.callback_query.edit_message_text("🔥 Premium Plan - ₹499\n20 tasks/day, ₹500 cap", reply_markup=InlineKeyboardMarkup(kb))
-    except:
-        pass
+    await _show_plan_purchase(update, context, "premium")
 
 async def plan_basic_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text(f"Basic Plan Activation\nPlease pay ₹199 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
-    except:
-        pass
+    await _show_plan_purchase(update, context, "basic")
 
 async def plan_premium_activate_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text(f"Premium Plan Activation\nPlease pay ₹499 to UPI: {ADMIN_UPI}\nAfter payment upload proof with /admin")
-    except:
-        pass
+    await _show_plan_purchase(update, context, "premium")
 
 async def plan_basic_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Please upload payment screenshot for Basic Plan. Use /admin to contact.")
-    except:
-        pass
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    pending_plans[uid] = {"plan": "basic", "date": str(get_ist_today()), "price": 199}
+    context.user_data["awaiting_plan_payment_proof"] = "basic"
+    await q.message.reply_text("📤 Send the Basic ₹199 payment screenshot as a PHOTO now.")
 
 async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    try:
-        await update.callback_query.edit_message_text("Please upload payment screenshot for Premium Plan. Use /admin to contact.")
-    except:
-        pass
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    pending_plans[uid] = {"plan": "premium", "date": str(get_ist_today()), "price": 499}
+    context.user_data["awaiting_plan_payment_proof"] = "premium"
+    await q.message.reply_text("📤 Send the Premium ₹499 payment screenshot as a PHOTO now.")
+
+async def plan_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    plan_type = q.data.replace("plan_proof_", "")
+    if plan_type not in ("basic", "premium"):
+        return
+    uid = q.from_user.id
+    price = 199 if plan_type == "basic" else 499
+    pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
+    context.user_data["awaiting_plan_payment_proof"] = plan_type
+    await q.message.reply_text(
+        f"📤 Send your ₹{price} payment screenshot as a PHOTO now.\n"
+        "Admin will verify it manually."
+    )
 
 async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.callback_query.answer()
-    except:
-        pass
-    kb = [[InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
-          [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")]]
-    try:
-        await update.callback_query.edit_message_text("Choose your plan:", reply_markup=InlineKeyboardMarkup(kb))
-    except:
-        pass
+    q = update.callback_query
+    await q.answer()
+    await q.message.reply_text(
+        "💎 SUPPORT PLANS\\n\\n"
+        f"Basic ₹199 — {DAILY_TASK_LIMIT_BASIC} tasks/day — 30 days\\n"
+        f"Premium ₹499 — {DAILY_TASK_LIMIT_PREMIUM} tasks/day — 30 days\\n\\n"
+        f"💳 Payment UPI: {get_payment_upi()}\\n"
+        "Choose a plan below:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Basic ₹199", callback_data="plan_basic")],
+            [InlineKeyboardButton("Premium ₹499", callback_data="plan_premium")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+        ])
+    )
 
 async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -194,21 +227,30 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
     except:
         pass
     try:
-        uid = int(update.callback_query.data.replace("admin_approve_plan_",""))
+        raw = update.callback_query.data.replace("admin_approve_plan_", "", 1)
+        parts = raw.split("_")
+        uid = int(parts[0])
+        plan_type = parts[1].lower() if len(parts) > 1 else "basic"
         if uid in pending_plans:
-            pending = pending_plans[uid]
-            plan_type = str(pending.get('plan', 'basic')).lower() if isinstance(pending, dict) else str(pending).lower()
+            price = 499 if plan_type == "premium" else 199
+            daily_limit = DAILY_TASK_LIMIT_PREMIUM if plan_type == "premium" else DAILY_TASK_LIMIT_BASIC
             user_plans[str(uid)] = {
-                'plan': 'premium' if 'premium' in plan_type else 'basic',
+                'plan': plan_type,
                 'status': 'active',
+                'price': price,
+                'daily_limit': daily_limit,
                 'date': str(get_ist_today()),
                 'expiry': str(get_ist_today() + timedelta(days=30)),
             }
             del pending_plans[uid]
             save_data()
-            await update.callback_query.edit_message_text(f"Approved plan for {uid}")
+            await update.callback_query.edit_message_text(f"✅ Approved {plan_type} plan for {uid}")
             try:
-                await context.bot.send_message(chat_id=uid, text="Your plan approved!")
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=f"🎉 Plan Activated!\n{plan_type.capitalize()} ₹{price}\nValid till: {get_ist_today() + timedelta(days=30)}\nDaily tasks: {daily_limit}",
+                    reply_markup=main_menu()
+                )
             except:
                 pass
     except Exception as e:
@@ -547,9 +589,10 @@ def get_plan_limits(uid):
     plan = _get_user_plan_record(uid) or {}
     plan_type = str(plan.get('plan') or plan.get('name') or '').lower()
     price = plan.get('price')
+    configured_limit = plan.get('daily_limit')
     if 'premium' in plan_type or price == 499:
-        return DAILY_TASK_LIMIT_PREMIUM, DAILY_EARNING_CAP_PREMIUM, "premium"
-    return DAILY_TASK_LIMIT_BASIC, DAILY_EARNING_CAP_BASIC, "basic"
+        return int(configured_limit or DAILY_TASK_LIMIT_PREMIUM), DAILY_EARNING_CAP_PREMIUM, "premium"
+    return int(configured_limit or DAILY_TASK_LIMIT_BASIC), DAILY_EARNING_CAP_BASIC, "basic"
 def check_daily_limits(uid):
     today = str(get_ist_today())
     count = daily_task_count.get(uid, {}).get(today, 0)
@@ -928,6 +971,35 @@ async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"{icon}{has_img} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {status}\n"
     await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
+def get_current_task_for_user(uid):
+    """Return the current task that this user can still work on.
+    Completed/skipped tasks are skipped; pending verification blocks progression.
+    """
+    current, next_task = get_current_scheduled_task_with_interval()
+    candidates = []
+    if current:
+        candidates.append(current)
+    if next_task and next_task is not current:
+        candidates.append(next_task)
+    # Also inspect all today's tasks so a completed current task never repeats.
+    for t in get_tasks_for_today():
+        if t not in candidates:
+            candidates.append(t)
+    now = get_ist_now()
+    for task in candidates:
+        tid = task.get("id")
+        data = user_task_status.get(uid, {}).get(tid, {})
+        status = data.get("status") if isinstance(data, dict) else data
+        if status == "pending_verification":
+            return task, "pending"
+        if status in ("completed", "skipped", "missed"):
+            continue
+        open_dt = datetime.combine(get_ist_today(), task["open_time_obj"], tzinfo=IST)
+        close_dt = datetime.combine(get_ist_today(), task["close_time_obj"], tzinfo=IST)
+        if open_dt <= now <= close_dt:
+            return task, "active"
+    return None, "none"
+
 async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
@@ -954,7 +1026,8 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             limit_msg = f"⏰ Daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nChoose a Support Plan for more daily tasks."
         await q.message.reply_text(limit_msg, reply_markup=main_menu())
         return
-    current, next_task = get_current_scheduled_task_with_interval()
+    current, current_state = get_current_task_for_user(uid)
+    _, next_task = get_current_scheduled_task_with_interval()
     missed, newly_missed = check_missed_tasks_with_interval(uid)
     if newly_missed:
         for nm in newly_missed:
@@ -2544,6 +2617,7 @@ def save_data():
             data['last_withdraw_date_db'] = last_withdraw_date_db
             data['daily_task_count'] = daily_task_count
             data['user_task_status'] = user_task_status
+            data['payment_upi'] = get_payment_upi()
         except:
             pass
         with open(DATA_FILE, 'w') as f:
@@ -2558,7 +2632,7 @@ def load_data():
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
             global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
-            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db, daily_task_count, user_task_status
+            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db, daily_task_count, user_task_status, PAYMENT_UPI
             if 'users_db' in data:
                 # Convert keys to int where possible
                 loaded_users = data['users_db']
@@ -2616,6 +2690,8 @@ def load_data():
                 for k, v in data['user_task_status'].items():
                     try: user_task_status[int(k)] = v
                     except: user_task_status[k] = v
+            if 'payment_upi' in data and data['payment_upi']:
+                PAYMENT_UPI = str(data['payment_upi'])
             print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
     except Exception as e:
         print(f"Load error {e}")
@@ -3454,7 +3530,7 @@ def main():
                 app.add_handler(CallbackQueryHandler(withdraw_cb, pattern='^withdraw$',), group=-2)
                 app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
-                app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
+                app.add_handler(CallbackQueryHandler(support_plans_cb, pattern='^support_plans$',), group=-2)
                 print('V56 All Fixed group -2 - NameError Fixed!')
                 app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
             except Exception as e:
@@ -3475,6 +3551,42 @@ def main():
                 per_user=True, per_chat=True, per_message=False
             )
             app.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
+            async def plan_payment_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                try:
+                    uid = update.effective_user.id
+                    plan_type = context.user_data.get("awaiting_plan_payment_proof")
+                    if not plan_type or not update.message.photo:
+                        return
+                    pending = pending_plans.get(uid) or {}
+                    price = 199 if plan_type == "basic" else 499
+                    file_id = update.message.photo[-1].file_id
+                    pending_plans[uid] = {
+                        "plan": plan_type,
+                        "date": str(get_ist_today()),
+                        "price": price,
+                        "proof_file_id": file_id,
+                        "user_name": users_db.get(uid, {}).get("name", update.effective_user.full_name)
+                    }
+                    context.user_data.pop("awaiting_plan_payment_proof", None)
+                    save_data()
+                    await update.message.reply_text("✅ Payment proof received. Pending admin verification.")
+                    for admin_id in ADMIN_ID_LIST:
+                        try:
+                            kb = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_plan_{uid}_{plan_type}"),
+                                InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")
+                            ]])
+                            await context.bot.send_photo(
+                                chat_id=admin_id, photo=file_id,
+                                caption=f"💎 PLAN PAYMENT PROOF\\nUser: {uid}\\nPlan: {plan_type}\\nAmount: ₹{price}\\nUPI: {get_payment_upi()}",
+                                reply_markup=kb
+                            )
+                        except Exception as e:
+                            print(f"plan proof admin send error: {e}")
+                except Exception as e:
+                    print(f"plan payment photo error: {e}")
+
+            app.add_handler(MessageHandler(filters.PHOTO, plan_payment_photo_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO, handle_plan_image_upload))
             # V56 FINAL FIX: No ConversationHandler for screenshot - Simple handlers - Important channel ki vachedi!
             conv_screenshot = None  # Disabled - Using simple MessageHandler instead!
@@ -3536,6 +3648,7 @@ def main():
                     if task:
                         task['image_file_id'] = file_id
                         task['has_image'] = True
+                        save_data()
                         print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
                     await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
                     try:
@@ -3661,6 +3774,8 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
+            app.add_handler(CommandHandler("set_payment_upi", set_payment_upi_cmd))
             app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
             app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
             app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
@@ -3706,6 +3821,7 @@ def main():
             app.add_handler(CallbackQueryHandler(plan_premium_activate_cb, pattern="^plan_premium_activate$"))
             app.add_handler(CallbackQueryHandler(plan_basic_proof_cb, pattern="^plan_basic_proof$"))
             app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
+            app.add_handler(CallbackQueryHandler(plan_proof_cb, pattern="^plan_proof_(basic|premium)$"))
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
             app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern="^admin_approve_plan_"))
             app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern="^admin_reject_plan_"))
