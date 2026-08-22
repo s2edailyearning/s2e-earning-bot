@@ -1267,6 +1267,8 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
         if task:
             task['image_file_id'] = file_id
             task['has_image'] = True
+        save_data()
+        if task:
             print(f"V56 Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Task image same issue fixed!")
         else:
             print(f"V56 Image Poster Set for Task {task_id} - Task not found but file_id saved! FINAL!")
@@ -1687,6 +1689,7 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
+        save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
         try:
             await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(uid)}\nTasks: {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}", reply_markup=main_menu())
@@ -1703,6 +1706,7 @@ async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TY
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
                 user_task_status[uid][tid] = {'status': 'pending', 'rejected_at': get_ist_now()}
                 break
+        save_data()
         await q.message.reply_text(f"❌ Rejected {uid}")
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Task Rejected! Screenshot not valid!\n\nTips:\n- Send clear photo\n- Complete task fully\n- If already have account, use Skip with reason!", reply_markup=main_menu())
@@ -2190,6 +2194,7 @@ def save_data():
             data['referrals_db'] = referrals_db
             data['referral_map'] = referral_map
             data['scheduled_tasks_db'] = scheduled_tasks_db
+            data['task_images_db'] = task_images_db
             data['support_plans_db'] = support_plans_db
             data['user_plans'] = user_plans
         except:
@@ -2233,6 +2238,27 @@ def load_data():
             if 'scheduled_tasks_db' in data:
                 scheduled_tasks_db.clear()
                 scheduled_tasks_db.extend(data['scheduled_tasks_db'])
+                # JSON converts time objects to strings. Rebuild the runtime
+                # time objects so scheduled tasks still work after Render restart.
+                for task in scheduled_tasks_db:
+                    for key in ('open_time', 'close_time', 'next_time'):
+                        obj_key = f'{key}_obj'
+                        if obj_key not in task or not isinstance(task.get(obj_key), time):
+                            raw = task.get(key)
+                            parsed = parse_time_str(str(raw)) if raw else None
+                            if parsed:
+                                task[obj_key] = parsed
+            if 'task_images_db' in data:
+                task_images_db.clear()
+                for k, v in data['task_images_db'].items():
+                    try:
+                        task_images_db[int(k)] = v
+                    except:
+                        task_images_db[k] = v
+            # Backfill the task image map from task records created by older versions.
+            for task in scheduled_tasks_db:
+                if task.get('image_file_id'):
+                    task_images_db[task['id']] = task['image_file_id']
             if 'support_plans_db' in data:
                 support_plans_db.clear()
                 support_plans_db.extend(data['support_plans_db'])
@@ -2365,14 +2391,19 @@ SCREENSHOT_CHANNEL_ID = None  # Set via /set_screenshot_channel
 WITHDRAW_CHANNEL_ID = None    # Set via /set_withdraw_channel
 
 def get_screenshot_channel():
+    # Always prefer the channel configured by /set_screenshot_channel.
+    # Fall back to the hardcoded task-screenshot channel so uploads never
+    # silently disappear when channel_config.json is missing.
     try:
         if os.path.exists("channel_config.json"):
             with open("channel_config.json", 'r') as f:
                 cfg = json.load(f)
-                return cfg.get('screenshot_channel')
-    except:
-        pass
-    return SCREENSHOT_CHANNEL_ID
+            configured = cfg.get('screenshot_channel')
+            if configured:
+                return configured
+    except Exception as e:
+        print(f"Screenshot channel config read error: {e}")
+    return SCREENSHOT_CHANNEL or SCREENSHOT_CHANNEL_ID
 
 def get_withdraw_channel():
     try:
@@ -3101,10 +3132,9 @@ def main():
                                 except:
                                     pass
                     if not task_id:
-                        if scheduled_tasks_db:
-                            task_id = scheduled_tasks_db[-1]['id']
-                        else:
-                            return
+                        # Do not guess a task. An admin photo without a pending
+                        # /set_task_image command must never overwrite another task's poster.
+                        return
                     file_id = None
                     if update.message.photo:
                         file_id = update.message.photo[-1].file_id
@@ -3117,7 +3147,8 @@ def main():
                     if task:
                         task['image_file_id'] = file_id
                         task['has_image'] = True
-                        print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
+                        print(f"FIXED task image: Task {task_id}: {task['title']} file_id {file_id[:20]}")
+                    save_data()
                     await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
                     try:
                         await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
@@ -3167,25 +3198,41 @@ def main():
                         screenshot_hashes.add(file_unique_id)
                     today = str(get_ist_today())
                     pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
+                    save_data()
                     if uid not in user_task_status:
                         user_task_status[uid] = {}
                     task_id_for_status = task_to_use.get('id', 0)
                     user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
-                    try:
-                        chan = SCREENSHOT_CHANNEL
-                        kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
-                        print(f"V56 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Important channel ki vachedi!")
-                    except Exception as e:
-                        print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan}")
+                    channel_sent = False
+                    chan = get_screenshot_channel()
+                    if chan:
                         try:
-                            await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)}")
-                        except:
+                            kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                            await context.bot.send_photo(
+                                chat_id=chan,
+                                photo=file_id,
+                                caption=f"📸 TASK SCREENSHOT\nUser: {uid}\nTask: {task_to_use.get('task_number',1)} - {task_to_use.get('title','Daily')}\nReward: Rs{task_to_use.get('reward',5)}",
+                                reply_markup=kb_chan,
+                            )
+                            channel_sent = True
+                            print(f"FIXED: screenshot forwarded to configured channel {chan}")
+                        except Exception as e:
+                            print(f"Screenshot channel send failed for {chan}: {e}")
+                            # Fallback to document if Telegram rejects photo transport.
                             try:
-                                await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                            except Exception as e3:
-                                print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
+                                await context.bot.send_document(
+                                    chat_id=chan,
+                                    document=file_id,
+                                    caption=f"📸 TASK SCREENSHOT | User {uid} | Task {task_to_use.get('task_number',1)}",
+                                    reply_markup=kb_chan,
+                                )
+                                channel_sent = True
+                                print(f"FIXED: screenshot forwarded as document to {chan}")
+                            except Exception as e2:
+                                print(f"Screenshot channel document fallback failed for {chan}: {e2}")
+                    else:
+                        print("Screenshot channel is not configured. Use /set_screenshot_channel <channel_id>")
                     for admin_id in ADMIN_ID_LIST:
                         try:
                             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
@@ -3246,6 +3293,9 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            # FIX: /set_task_image existed in code but was never registered.
+            # Without this handler the admin's "send poster" flow cannot start reliably.
+            app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
             app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
             app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
             app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
