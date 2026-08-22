@@ -2841,6 +2841,212 @@ async def bulk_task_image_handler(update, context):
 
 
 
+
+# === PERSISTENT STORAGE + PLAN/REFERRAL HELPERS ===
+DATA_FILE = "bot_data.json"
+
+def _parse_plan_expiry(value):
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S%z"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except Exception:
+            pass
+    return None
+
+def save_data():
+    """Persist the bot state without crashing on sets/datetime objects."""
+    try:
+        data = {
+            'users_db': users_db,
+            'referrals_db': referrals_db,
+            'tasks_db': tasks_db,
+            'bonus_balance': bonus_balance,
+            'referral_earnings': referral_earnings,
+            'referral_map': referral_map,
+            'daily_task_count': daily_task_count,
+            'scheduled_tasks_db': scheduled_tasks_db,
+            'user_plans': user_plans,
+            'pending_plans': pending_plans,
+            'support_plans_db': support_plans_db,
+            'withdraw_requests': withdraw_requests,
+            'withdraw_done_date': withdraw_done_date,
+            'last_withdraw_date_db': last_withdraw_date_db,
+            'missed_tasks_db': missed_tasks_db,
+            'user_task_status': user_task_status,
+            'skip_db': skip_db,
+            'task_images_db': task_images_db,
+            'promo_earnings_db': promo_earnings_db,
+            'promo_views_db': promo_views_db,
+            'ADMIN_UPI': ADMIN_UPI,
+        }
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, default=str, ensure_ascii=False)
+        print("Data saved OK")
+    except Exception as e:
+        print(f"Save error {e}")
+
+def _restore_dict(target, source, int_keys=False):
+    target.clear()
+    if not isinstance(source, dict):
+        return
+    for k, v in source.items():
+        if int_keys:
+            try:
+                k = int(k)
+            except Exception:
+                pass
+        target[k] = v
+
+def load_data():
+    """Load persisted state; missing/old fields are safely ignored."""
+    try:
+        if not os.path.exists(DATA_FILE):
+            print("No bot_data.json yet - starting with fresh data")
+            return
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        _restore_dict(users_db, data.get('users_db', {}), True)
+        _restore_dict(referrals_db, data.get('referrals_db', {}), True)
+        _restore_dict(tasks_db, data.get('tasks_db', {}), True)
+        _restore_dict(bonus_balance, data.get('bonus_balance', {}), True)
+        _restore_dict(referral_earnings, data.get('referral_earnings', {}), True)
+        _restore_dict(referral_map, data.get('referral_map', {}), True)
+        _restore_dict(daily_task_count, data.get('daily_task_count', {}), True)
+        _restore_dict(user_plans, data.get('user_plans', {}), True)
+        _restore_dict(pending_plans, data.get('pending_plans', {}), True)
+        _restore_dict(withdraw_requests, data.get('withdraw_requests', {}), True)
+        _restore_dict(withdraw_done_date, data.get('withdraw_done_date', {}), True)
+        _restore_dict(last_withdraw_date_db, data.get('last_withdraw_date_db', {}), True)
+        _restore_dict(missed_tasks_db, data.get('missed_tasks_db', {}), True)
+        _restore_dict(user_task_status, data.get('user_task_status', {}), True)
+        _restore_dict(skip_db, data.get('skip_db', {}), True)
+        _restore_dict(task_images_db, data.get('task_images_db', {}), True)
+        _restore_dict(promo_earnings_db, data.get('promo_earnings_db', {}), True)
+        _restore_dict(promo_views_db, data.get('promo_views_db', {}), True)
+
+        if isinstance(data.get('support_plans_db'), list) and data['support_plans_db']:
+            support_plans_db.clear()
+            support_plans_db.extend(data['support_plans_db'])
+
+        if isinstance(data.get('scheduled_tasks_db'), list):
+            scheduled_tasks_db.clear()
+            for t in data['scheduled_tasks_db']:
+                t = dict(t)
+                try:
+                    if isinstance(t.get('open_time'), str):
+                        t['open_time_obj'] = parse_time_str(t['open_time'])
+                    if isinstance(t.get('close_time'), str):
+                        t['close_time_obj'] = parse_time_str(t['close_time'])
+                    if isinstance(t.get('next_time'), str):
+                        t['next_time_obj'] = parse_time_str(t['next_time'])
+                except Exception:
+                    pass
+                scheduled_tasks_db.append(t)
+
+        upi = data.get('ADMIN_UPI')
+        if upi:
+            globals()['ADMIN_UPI'] = str(upi)
+
+        # Restore set-like fields where they are used by runtime logic.
+        global screenshot_hashes
+        screenshot_hashes.clear()
+        print(f"Data loaded OK - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
+    except Exception as e:
+        print(f"Load error {e}")
+        import traceback
+        traceback.print_exc()
+
+def get_plan_record_by_id(pid):
+    try:
+        pid = int(pid)
+    except Exception:
+        return None
+    for plan in support_plans_db:
+        try:
+            if int(plan.get('id')) == pid:
+                return plan
+        except Exception:
+            continue
+    return None
+
+def get_user_plan_record(uid):
+    try:
+        record = user_plans.get(uid)
+        if record is None:
+            record = user_plans.get(str(uid))
+        if isinstance(record, dict):
+            return record
+        if record is not None:
+            plan = get_plan_record_by_id(record)
+            return plan
+    except Exception:
+        pass
+    return None
+
+def activate_user_plan(uid, plan):
+    duration = int(plan.get('duration', 30) or 30)
+    expiry = get_ist_today() + timedelta(days=max(duration - 1, 0))
+    record = {
+        'id': plan.get('id'),
+        'plan_id': plan.get('id'),
+        'name': plan.get('name', 'Plan'),
+        'plan': str(plan.get('name', 'Plan')).lower(),
+        'price': int(plan.get('price', 0) or 0),
+        'duration': duration,
+        'daily_limit': int(plan.get('daily_limit', 0) or 0),
+        'earnings_limit': int(plan.get('earnings_limit', 0) or 0),
+        'status': 'active',
+        'activated_at': str(get_ist_now()),
+        'expiry': str(expiry),
+    }
+    user_plans[uid] = record
+    return record
+
+def get_reward_for_user(uid, base_reward=5):
+    try:
+        plan = get_user_plan_record(uid)
+        if not plan or str(plan.get("status", "active")).lower() != "active":
+            return base_reward
+        price = int(plan.get("price", 0) or 0)
+        if price >= 999:
+            return 20
+        if price >= 499:
+            return 15
+        if price >= 199:
+            return 10
+        return base_reward
+    except Exception:
+        return base_reward
+
+def credit_referral_task_commission(uid, reward):
+    """Credit L1=2% and L2=0.5% of an approved task reward, once per approval."""
+    try:
+        reward = float(reward or 0)
+        l1 = referral_map.get(uid)
+        if l1 is None:
+            l1 = referral_map.get(str(uid))
+        l2 = referral_map.get(l1) if l1 is not None else None
+        if l2 is None and l1 is not None:
+            l2 = referral_map.get(str(l1))
+        l1_comm = round(reward * REFERRAL_L1_TASK_PERCENT / 100.0, 2) if l1 else 0.0
+        l2_comm = round(reward * REFERRAL_L2_TASK_PERCENT / 100.0, 2) if l2 else 0.0
+        if l1 and l1 != uid and l1_comm > 0:
+            referral_earnings[l1] = float(referral_earnings.get(l1, 0) or 0) + l1_comm
+        if l2 and l2 != uid and l2 != l1 and l2_comm > 0:
+            referral_earnings[l2] = float(referral_earnings.get(l2, 0) or 0) + l2_comm
+        return l1_comm, l2_comm
+    except Exception as e:
+        print(f"Referral commission error: {e}")
+        return 0.0, 0.0
+
 def main():
     """Start Flask and Telegram polling exactly once.
 
