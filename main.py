@@ -29,6 +29,137 @@ print(f"V56 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK 
 print(f"V56 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
 print(f"V56 Join Channel {JOIN_CHANNEL} = -1004352241439 - SEPARATE!")
 print(f"V56 Main Link {CHANNEL_LINK} - Task->TASK ONLY, Withdraw->Withdraw ONLY! FINAL!")
+
+
+# === CHANNEL HELPERS ===
+# Keep all channel access behind small helpers so the bot never crashes at startup
+# when a channel-specific function is referenced by the polling/notification code.
+def get_screenshot_channel():
+    return int(SCREENSHOT_CHANNEL)
+
+def get_withdraw_channel():
+    return int(WITHDRAW_CHANNEL)
+
+def get_join_channel():
+    return int(JOIN_CHANNEL)
+
+def get_join_channel_link():
+    return JOIN_LINK
+
+async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    global SCREENSHOT_CHANNEL
+    if not context.args:
+        await update.message.reply_text(f"Current screenshot channel: {SCREENSHOT_CHANNEL}\nUsage: /set_screenshot_channel <chat_id>")
+        return
+    try:
+        SCREENSHOT_CHANNEL = int(context.args[0])
+        await update.message.reply_text(f"✅ Screenshot channel updated: {SCREENSHOT_CHANNEL}")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid chat ID. Example: /set_screenshot_channel -1001234567890")
+
+async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    global WITHDRAW_CHANNEL
+    if not context.args:
+        await update.message.reply_text(f"Current withdraw channel: {WITHDRAW_CHANNEL}\nUsage: /set_withdraw_channel <chat_id>")
+        return
+    try:
+        WITHDRAW_CHANNEL = int(context.args[0])
+        await update.message.reply_text(f"✅ Withdraw channel updated: {WITHDRAW_CHANNEL}")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid chat ID. Example: /set_withdraw_channel -1001234567890")
+
+async def set_join_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    global JOIN_CHANNEL
+    if not context.args:
+        await update.message.reply_text(f"Current join channel: {JOIN_CHANNEL}\nUsage: /set_join_channel <chat_id>")
+        return
+    try:
+        JOIN_CHANNEL = int(context.args[0])
+        await update.message.reply_text(f"✅ Join channel updated: {JOIN_CHANNEL}")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid chat ID. Example: /set_join_channel -1001234567890")
+
+async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(
+        f"📡 CHANNEL STATUS\n\n"
+        f"Task screenshots: {get_screenshot_channel()}\n"
+        f"Withdraw: {get_withdraw_channel()}\n"
+        f"Join/Verify: {get_join_channel()}\n"
+        f"Join link: {get_join_channel_link()}"
+    )
+
+async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await channels_status_cmd(update, context)
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        save_data()
+        await update.message.reply_text("✅ Backup/data save completed successfully.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Backup failed: {e}")
+
+async def add_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /add_admin <user_id>")
+        return
+    try:
+        new_admin = int(context.args[0])
+        if new_admin not in ADMIN_ID_LIST:
+            ADMIN_ID_LIST.append(new_admin)
+        await update.message.reply_text(f"✅ Admin added: {new_admin}")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+
+async def referral_stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(
+        f"🔗 Referral task commission\nL1: {REFERRAL_L1_TASK_PERCENT}%\nL2: {REFERRAL_L2_TASK_PERCENT}%"
+    )
+
+async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    try:
+        save_data()
+        await q.message.reply_text("✅ Backup/data save completed.")
+    except Exception as e:
+        await q.message.reply_text(f"❌ Backup failed: {e}")
+
+async def admin_add_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    await q.message.reply_text("👑 Add Admin\nUse: /add_admin <user_id>")
+
+async def admin_referral_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    await q.message.reply_text(
+        f"🔗 Referral task commission\nL1: {REFERRAL_L1_TASK_PERCENT}%\nL2: {REFERRAL_L2_TASK_PERCENT}%"
+    )
+
+async def admin_missed_toggle_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id): return
+    global MISSED_ENABLED
+    MISSED_ENABLED = not MISSED_ENABLED
+    await q.message.reply_text(f"⏰ Missed Tasks: {'ON' if MISSED_ENABLED else 'OFF'}")
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
 WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
 JOIN_LINK = "https://t.me/S2E_Daily_Earning"
