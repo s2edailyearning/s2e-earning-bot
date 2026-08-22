@@ -23,11 +23,11 @@ CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/S2E_Daily_Earning")
 SCREENSHOT_CHANNEL = int(os.getenv("SCREENSHOT_CHANNEL", "-1004295034675"))
 WITHDRAW_CHANNEL = int(os.getenv("WITHDRAW_CHANNEL", "-1004319888475"))
 JOIN_CHANNEL = int(os.getenv("JOIN_CHANNEL", "-1004352241439"))
-print(f"V44 CHANNELS: VERIFY CHANNEL_ID={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
-print(f"V44 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs")
-print(f"V44 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475")
-print(f"V44 Join Channel {JOIN_CHANNEL} = -1004352241439")
-print(f"V44 Main Link {CHANNEL_LINK} - Task->Task channel ONLY, Withdraw->Withdraw channel ONLY!")
+print(f"V45 CHANNELS: VERIFY CHANNEL_ID={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
+print(f"V45 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs")
+print(f"V45 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475")
+print(f"V45 Join Channel {JOIN_CHANNEL} = -1004352241439")
+print(f"V45 Main Link {CHANNEL_LINK} - Task->Task channel ONLY, Withdraw->Withdraw channel ONLY!")
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
 WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
 JOIN_LINK = "https://t.me/S2E_Daily_Earning"
@@ -1031,22 +1031,22 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][0] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
-        await update.message.reply_text("Screenshot Received for default task! Pending Admin Verification! V44", reply_markup=main_menu())
+        await update.message.reply_text("Screenshot Received for default task! Pending Admin Verification! V45", reply_markup=main_menu())
         try:
             chan = SCREENSHOT_CHANNEL
             if chan:
                 try:
                     kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK SUBMISSION V44 DEFAULT User {uid} Reward {default_task.get('reward',5)}", reply_markup=kb_chan)
-                    print(f"V44 forwarded to SCREENSHOT_CHANNEL {chan}")
+                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK SUBMISSION V45 DEFAULT User {uid} Reward {default_task.get('reward',5)}", reply_markup=kb_chan)
+                    print(f"V45 forwarded to SCREENSHOT_CHANNEL {chan}")
                 except Exception as e:
-                    print(f"V44 channel err {e}")
+                    print(f"V45 channel err {e}")
         except:
             pass
         for admin_id in ADMIN_ID_LIST:
             try:
                 kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V44 DEFAULT User {uid}", reply_markup=kb)
+                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V45 DEFAULT User {uid}", reply_markup=kb)
             except:
                 pass
         return ConversationHandler.END
@@ -1077,22 +1077,22 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         user_task_status[uid] = {}
     user_task_status[uid][current['id']] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
     next_time_str = next_task['open_time'] if next_task else 'tomorrow'
-    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! Reward Rs{task.get('reward',5)} V44", reply_markup=main_menu())
+    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! Reward Rs{task.get('reward',5)} V45", reply_markup=main_menu())
     try:
         chan = SCREENSHOT_CHANNEL
         if chan:
             try:
                 kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V44 Task {current['task_number']} User {uid}", reply_markup=kb_chan)
-                print(f"V44 forwarded to SCREENSHOT_CHANNEL {chan}")
+                await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V45 Task {current['task_number']} User {uid}", reply_markup=kb_chan)
+                print(f"V45 forwarded to SCREENSHOT_CHANNEL {chan}")
             except Exception as e:
-                print(f"V44 channel err {e}")
+                print(f"V45 channel err {e}")
     except:
         pass
     for admin_id in ADMIN_ID_LIST:
         try:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V44 Task {current['task_number']} User {uid}", reply_markup=kb)
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V45 Task {current['task_number']} User {uid}", reply_markup=kb)
         except:
             pass
     return ConversationHandler.END
@@ -1539,22 +1539,22 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
     withdraw_done_date[uid]=str(get_ist_today())
-    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V44", reply_markup=main_menu())
+    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V45", reply_markup=main_menu())
     try:
         w_chan = WITHDRAW_CHANNEL
         if w_chan:
             try:
                 kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V44 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
-                print(f"V44 forwarded withdraw to WITHDRAW_CHANNEL {w_chan}")
+                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V45 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
+                print(f"V45 forwarded withdraw to WITHDRAW_CHANNEL {w_chan}")
             except Exception as e:
-                print(f"V44 withdraw channel err {e}")
+                print(f"V45 withdraw channel err {e}")
     except:
         pass
     for admin_id in ADMIN_ID_LIST:
         try:
             kb=InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V44 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
+            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V45 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
         except:
             pass
 
@@ -3096,68 +3096,68 @@ async def admin_reject_new_plan_cb(update, context):
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V44 - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V44 - Withdraw Fix V44 - Separate Channels Fix V44 - Flask PORT Fix + app_flask Fix + Conflict Fix V44")
+    print("S2E Bot FINAL V45 - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V45 - Separate Channels Fix V45 - Flask PORT Fix + app_flask Fix + Conflict Fix V45")
     print("============================================================")
-    # V44 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
+    # V45 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
     try:
         from flask import Flask
         flask_app = Flask(__name__)
         @flask_app.route('/')
         def home():
-            return "S2E Bot V44 Running - Flask Immediate Fix - No Ports Error"
+            return "S2E Bot V45 Running - Flask Immediate Fix - No Ports Error"
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V44 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
+        print(f"V45 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
         def run_flask():
             try:
-                print(f"V44 Flask thread running on 0.0.0.0:{flask_port}")
+                print(f"V45 Flask thread running on 0.0.0.0:{flask_port}")
                 flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V44 Flask immediate err {e}")
+                print(f"V45 Flask immediate err {e}")
                 try:
                     # Fallback to app_flask if exists
                     app_flask.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
                 except Exception as e2:
-                    print(f"V44 Flask fallback err {e2}")
+                    print(f"V45 Flask fallback err {e2}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V44 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
+        print(f"V45 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
         time.sleep(3)
     except Exception as e:
-        print(f"V44 Flask immediate setup err {e}")
+        print(f"V45 Flask immediate setup err {e}")
         import traceback
         traceback.print_exc()
 
-    # V44 FIX: Delete webhook BEFORE sleep
-    print("V44 Deleting webhook BEFORE sleep - to kill old instance")
+    # V45 FIX: Delete webhook BEFORE sleep
+    print("V45 Deleting webhook BEFORE sleep - to kill old instance")
     try:
         import urllib.request
         for i in range(3):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V44 Pre-sleep Webhook delete {i+1}/3")
+                print(f"V45 Pre-sleep Webhook delete {i+1}/3")
                 time.sleep(1)
             except Exception as e:
-                print(f"V44 Pre-sleep delete {i+1} err {e}")
+                print(f"V45 Pre-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V44 Pre-sleep webhook outer err {e}")
+        print(f"V45 Pre-sleep webhook outer err {e}")
 
-    print("Waiting 120 sec for old instance to die... V44 Flask already started")
+    print("Waiting 120 sec for old instance to die... V45 Flask already started")
     time.sleep(120)
-    print("120 sec done! Deleting webhook 5 times V44 after sleep")
+    print("120 sec done! Deleting webhook 5 times V45 after sleep")
     try:
         import urllib.request
         for i in range(5):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V44 Post-sleep Webhook delete {i+1}/5 via urllib")
+                print(f"V45 Post-sleep Webhook delete {i+1}/5 via urllib")
                 time.sleep(2)
             except Exception as e:
-                print(f"V44 Post-sleep delete {i+1} err {e}")
+                print(f"V45 Post-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V44 Post-sleep webhook outer err {e}")
+        print(f"V45 Post-sleep webhook outer err {e}")
 
-    print("Keep-alive started V44 - Flask already running")
-    print("Starting bot V44 with correct handlers - No Conflict expected")
+    print("Keep-alive started V45 - Flask already running")
+    print("Starting bot V45 with correct handlers - No Conflict expected")
 
     for attempt in range(1, 101):
         try:
@@ -3295,14 +3295,14 @@ def main():
             except Exception as e:
                 print(f"V38 photo handlers err {e}")
             
-            # V44 FIX: Add error handlers to suppress Conflict spam
+            # V45 FIX: Add error handlers to suppress Conflict spam
             try:
                 application.add_error_handler(error_handler)
-                print("V44 Added error_handler to suppress Conflict")
+                print("V45 Added error_handler to suppress Conflict")
             except Exception as e:
-                print(f"V44 error_handler add err {e}")
+                print(f"V45 error_handler add err {e}")
             
-            print(f"V44 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
+            print(f"V45 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
