@@ -1,25 +1,16 @@
 services:
-    - type: web
+  - type: web
     name: s2e-earning-bot
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
-            - key: ADMIN_ID
-        value: 7256515560
-            - key: ADMIN_IDS
-        value: 7256515560
-            - key: BOT_TOKEN
-        value: 8819208182:AAGWg_GuyKsKHR4p5YZ-2IaBGTDO3qf1fdY
+      - key: BOT_TOKEN
         sync: false
-            - key: CHANNEL_ID
-        value: -1004295034675
-            - key: CHANNEL_LINK
-        value: https://t.me/S2E_Daily_Earning
-            - key: PYTHON_VERSION
-        value: 3.11.4
-            - key: UPLOAD_CHANNEL_ID
-        value: -1004295034675
-            - key: WEB_CONCURRENCY
-        value: 1
+      - key: ADMIN_UPI
+        sync: false
+      - key: SUPPORT_USERNAME
+        sync: false
+      - key: DATABASE_URL
+        sync: false
