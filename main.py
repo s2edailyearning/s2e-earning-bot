@@ -1054,31 +1054,55 @@ async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
+    # Member-facing scheduled tasks view: show only task availability/status.
+    # Never expose admin commands, plan limits, caps, or internal scheduling instructions.
+    q = update.callback_query
+    await q.answer()
     uid = q.from_user.id
     today_tasks = get_tasks_for_today()
     current, next_task = get_current_scheduled_task_with_interval()
-    missed, _ = check_missed_tasks_with_interval(uid)
-    count, limit, cap = check_daily_limits(uid)
-    is_active, plan_name, _ = check_plan_active(uid)
-    msg = f"📋 Scheduled Tasks Today - {get_ist_today()}\nWindow: {TASK_COMPLETION_WINDOW_MINUTES} mins\n\nYour Plan: {plan_name} Daily: {count}/{limit} Cap Rs{cap}\nTotal Tasks Today: {len(today_tasks)}\n\n"
+
     if not today_tasks:
-        msg += "No tasks scheduled today! Admin will add tasks via /add_task\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5"
-    else:
-        for task in today_tasks:
-            task_id = task['id']
-            status_data = user_task_status.get(uid, {}).get(task_id, {})
-            status = status_data.get('status') if isinstance(status_data, dict) else status_data
-            if not status:
-                skip_data = skip_db.get(uid, {}).get(task_id, {})
-                if (skip_data.get('status') if isinstance(skip_data, dict) else skip_data) == 'skipped':
-                    status = 'skipped'
-                else:
-                    status = 'pending'
-            icon = "✅" if status == 'completed' else "❌" if status == 'missed' else "⏭️" if status == 'skipped' else "🔴 LIVE NOW" if current and current['id'] == task_id else "⏰"
-            has_img = "🖼️" if task.get('image_file_id') or task['id'] in task_images_db else ""
-            msg += f"{icon}{has_img} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {status}\n"
-    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
+        await q.message.reply_text(
+            "📋 Scheduled Tasks\n\n"
+            "No scheduled tasks right now.",
+            reply_markup=main_menu()
+        )
+        return
+
+    lines = ["📋 Scheduled Tasks", ""]
+    visible = 0
+    for task in today_tasks:
+        task_id = task.get('id')
+        status_data = user_task_status.get(uid, {}).get(task_id, {})
+        status = status_data.get('status') if isinstance(status_data, dict) else status_data
+        if not status:
+            skip_data = skip_db.get(uid, {}).get(task_id, {})
+            status = (skip_data.get('status') if isinstance(skip_data, dict) else skip_data) or 'pending'
+
+        # Completed/skipped/missed tasks are still useful to the member, but keep
+        # the wording simple and do not expose internal/admin details.
+        if status == 'completed':
+            icon = "✅"; label = "Completed"
+        elif status == 'skipped':
+            icon = "⏭️"; label = "Skipped"
+        elif status == 'missed':
+            icon = "❌"; label = "Missed"
+        elif current and current.get('id') == task_id:
+            icon = "🔴"; label = "Live now"
+        else:
+            icon = "⏰"; label = "Scheduled"
+
+        visible += 1
+        lines.append(
+            f"{icon} {task.get('open_time','')}–{task.get('close_time','')} "
+            f"• {task.get('title','Task')} • Rs{task.get('reward',5)}\n"
+            f"   {label}"
+        )
+
+    if visible == 0:
+        lines = ["📋 Scheduled Tasks", "", "No scheduled tasks right now."]
+    await q.message.reply_text("\n".join(lines)[:4000], reply_markup=main_menu())
 
 def get_current_task_for_user(uid):
     """Return the current task that this user can still work on.
@@ -1452,7 +1476,8 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
                 # Create approve buttons for channel
                 kb = [
                     [InlineKeyboardButton(f"✅ Approve {uid}", callback_data=f"approve_{uid}"), InlineKeyboardButton(f"❌ Reject {uid}", callback_data=f"reject_{uid}")],
-                    [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")]
+                    [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")],
+                    [InlineKeyboardButton("✅ Approve ALL Pending", callback_data="bulk_approve_all")]
                 ]
                 mk = InlineKeyboardMarkup(kb)
                 cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
@@ -2924,7 +2949,10 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 context.args = [task_num]
                 await approve_task_all_cmd(update, context)
             try:
-                await update.callback_query.answer(f"Approved Task {task_num}")
+                if task_num == "all":
+                    await update.callback_query.answer("Approved ALL pending tasks")
+                else:
+                    await update.callback_query.answer(f"Approved Task {task_num}")
             except:
                 pass
     except Exception as e:
@@ -3145,6 +3173,12 @@ async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_
             pass
     save_data()
     await update.message.reply_text(f"✅ APPROVED ALL! {approved} members approved!")
+    ch = get_screenshot_channel()
+    if ch:
+        try:
+            await context.bot.send_message(chat_id=ch, text=f"✅ APPROVED ALL PENDING — {approved} member(s) approved by admin.")
+        except:
+            pass
 
 # Enhanced pending view with bulk buttons
 async def pending_bulk_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
