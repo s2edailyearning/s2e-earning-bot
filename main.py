@@ -196,8 +196,16 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         uid = int(update.callback_query.data.replace("admin_approve_plan_",""))
         if uid in pending_plans:
-            user_plans[uid] = pending_plans[uid]
+            pending = pending_plans[uid]
+            plan_type = str(pending.get('plan', 'basic')).lower() if isinstance(pending, dict) else str(pending).lower()
+            user_plans[str(uid)] = {
+                'plan': 'premium' if 'premium' in plan_type else 'basic',
+                'status': 'active',
+                'date': str(get_ist_today()),
+                'expiry': str(get_ist_today() + timedelta(days=30)),
+            }
             del pending_plans[uid]
+            save_data()
             await update.callback_query.edit_message_text(f"Approved plan for {uid}")
             try:
                 await context.bot.send_message(chat_id=uid, text="Your plan approved!")
@@ -471,24 +479,77 @@ def get_tasks(uid):
 
 def get_total_tasks(uid):
     return tasks_db.get(uid,0)
-def check_plan_active(uid):
+def _get_user_plan_record(uid):
+    # Support both the old dict format and the newer plan-id format.
     plan = user_plans.get(uid)
-    if not plan: return False, "No Plan", None
-    if plan.get('status') != 'active': return False, f"{plan.get('plan','')} Pending", None
+    if plan is None:
+        plan = user_plans.get(str(uid))
+    if isinstance(plan, dict):
+        return plan
+    if isinstance(plan, (int, str)) and str(plan).isdigit():
+        try:
+            pid = int(plan)
+            found = next((p for p in support_plans_db if int(p.get('id', -1)) == pid), None)
+            if found:
+                return found
+        except Exception:
+            pass
+    return None
+
+def check_plan_active(uid):
+    plan = _get_user_plan_record(uid)
+    if not plan:
+        return False, "No Plan", None
+
+    # Legacy approval records contain only {'plan': 'basic', 'date': ...}.
+    # Treat those as active for 30 days so the daily limit never becomes 0.
+    plan_type = str(plan.get('plan') or plan.get('name') or '').lower()
+    if 'premium' in plan_type or plan.get('price') == 499:
+        plan_type = 'premium'
+    elif 'basic' in plan_type or plan.get('price') == 199:
+        plan_type = 'basic'
+
+    status = str(plan.get('status', 'active')).lower()
+    if status not in ('active', 'approved'):
+        return False, f"{plan_type.upper()} Pending", None
+
     expiry = plan.get('expiry')
-    if expiry and get_ist_today() > expiry: return False, f"{plan.get('plan','').upper()} Expired", expiry
-    return True, f"{plan.get('plan','').upper()} till {expiry}", expiry
+    if expiry:
+        try:
+            if isinstance(expiry, str):
+                expiry = date.fromisoformat(expiry)
+            if get_ist_today() > expiry:
+                return False, f"{plan_type.upper()} Expired", expiry
+        except Exception:
+            pass
+    else:
+        base_date = plan.get('date') or plan.get('activated_at')
+        try:
+            if base_date:
+                if isinstance(base_date, str):
+                    base_date = date.fromisoformat(base_date[:10])
+                expiry = base_date + timedelta(days=30)
+            else:
+                expiry = get_ist_today() + timedelta(days=30)
+            plan['expiry'] = expiry
+            plan['status'] = 'active'
+            plan['plan'] = plan_type or 'basic'
+        except Exception:
+            expiry = None
+    return True, f"{(plan_type or 'basic').upper()} till {expiry}", expiry
+
 def get_plan_limits(uid):
     is_active, _, _ = check_plan_active(uid)
     if not is_active:
-        if tasks_db.get(uid,0) == 0:
-            return DAILY_TASK_LIMIT_FREE, 10, "free"
-        return 0, 0, "none"
-    plan = user_plans.get(uid, {}).get('plan','basic')
-    if plan == 'premium':
-        return DAILY_TASK_LIMIT_PREMIUM, 500, "premium"
-    else:
-        return DAILY_TASK_LIMIT_BASIC, 200, "basic"
+        # Never return a zero denominator for a normal user.
+        return DAILY_TASK_LIMIT_FREE, DAILY_EARNING_CAP_FREE if 'DAILY_EARNING_CAP_FREE' in globals() else 10, "free"
+
+    plan = _get_user_plan_record(uid) or {}
+    plan_type = str(plan.get('plan') or plan.get('name') or '').lower()
+    price = plan.get('price')
+    if 'premium' in plan_type or price == 499:
+        return DAILY_TASK_LIMIT_PREMIUM, DAILY_EARNING_CAP_PREMIUM, "premium"
+    return DAILY_TASK_LIMIT_BASIC, DAILY_EARNING_CAP_BASIC, "basic"
 def check_daily_limits(uid):
     today = str(get_ist_today())
     count = daily_task_count.get(uid, {}).get(today, 0)
@@ -2481,6 +2542,8 @@ def save_data():
             data['withdraw_requests'] = withdraw_requests
             data['withdraw_done_date'] = withdraw_done_date
             data['last_withdraw_date_db'] = last_withdraw_date_db
+            data['daily_task_count'] = daily_task_count
+            data['user_task_status'] = user_task_status
         except:
             pass
         with open(DATA_FILE, 'w') as f:
@@ -2495,7 +2558,7 @@ def load_data():
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
             global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
-            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db
+            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db, daily_task_count, user_task_status
             if 'users_db' in data:
                 # Convert keys to int where possible
                 loaded_users = data['users_db']
@@ -2543,6 +2606,16 @@ def load_data():
                 for k, v in data['last_withdraw_date_db'].items():
                     try: last_withdraw_date_db[int(k)] = v
                     except: last_withdraw_date_db[k] = v
+            if 'daily_task_count' in data:
+                daily_task_count.clear()
+                for k, v in data['daily_task_count'].items():
+                    try: daily_task_count[int(k)] = v
+                    except: daily_task_count[k] = v
+            if 'user_task_status' in data:
+                user_task_status.clear()
+                for k, v in data['user_task_status'].items():
+                    try: user_task_status[int(k)] = v
+                    except: user_task_status[k] = v
             print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
     except Exception as e:
         print(f"Load error {e}")
