@@ -3511,6 +3511,7 @@ def main():
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            app.add_handler(CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
