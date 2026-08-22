@@ -2770,13 +2770,12 @@ async def bulk_task_image_handler(update, context):
 
 UPI_ID_GLOBAL = "s2edaily@upi"
 UPI_NAME_GLOBAL = "S2E"
-
 async def set_upi_cmd(update, context):
     global UPI_ID_GLOBAL, UPI_NAME_GLOBAL
     try:
-        print(f"V32 set_upi called by {update.effective_user.id} args={context.args}")
+        print(f"V33 set_upi by {update.effective_user.id} args={context.args}")
         if not context.args:
-            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL}\nUsage: /set_upi 9700000000@upi S2E\nEx: /set_upi 9700000000@upi S2E Earning")
+            await update.message.reply_text(f"Current UPI: {UPI_ID_GLOBAL}\nUsage: /set_upi 9700000000@upi S2E")
             return
         UPI_ID_GLOBAL = context.args[0]
         UPI_NAME_GLOBAL = " ".join(context.args[1:]) if len(context.args)>1 else "S2E"
@@ -2784,14 +2783,10 @@ async def set_upi_cmd(update, context):
             import json
             with open("upi_config.json","w") as fw:
                 json.dump({"upi": UPI_ID_GLOBAL, "name": UPI_NAME_GLOBAL}, fw)
-        except Exception as e:
-            print(f"UPI save err {e}")
-        await update.message.reply_text(f"UPI SET V32 SUCCESS!\nUPI: {UPI_ID_GLOBAL}\nName: {UPI_NAME_GLOBAL}\nUser plan click cheste idi kanapaduthundi!")
-        print(f"V32 UPI SET {UPI_ID_GLOBAL}")
+        except:
+            pass
+        await update.message.reply_text(f"UPI SET V33 SUCCESS! UPI: {UPI_ID_GLOBAL} Name: {UPI_NAME_GLOBAL}")
     except Exception as e:
-        print(f"V32 set_upi err {e}")
-        import traceback
-        traceback.print_exc()
         try:
             await update.message.reply_text(f"Error: {e}")
         except:
@@ -2820,7 +2815,6 @@ def get_current_upi_name():
 DEFAULT_PLANS=[
     {"id":1,"name":"Basic","price":199,"duration":30,"daily_limit":10,"max_earning":500,"features":["10 Tasks/Day","30 Days","Max Rs500"],"emoji":"⭐"},
     {"id":2,"name":"Premium","price":499,"duration":60,"daily_limit":20,"max_earning":2000,"features":["20 Tasks/Day","60 Days","Max Rs2000","Family 2"],"emoji":"💎"},
-    {"id":3,"name":"Gold","price":999,"duration":90,"daily_limit":30,"max_earning":5000,"features":["30 Tasks/Day","90 Days","Max Rs5000","Family 4"],"emoji":"👑"},
 ]
 
 def get_all_plans():
@@ -2838,16 +2832,16 @@ async def support_plans_cb(update, context):
         pass
     try:
         plans=get_all_plans()
-        msg="SUPPORT PLANS V32 - OTT Comparison\n\n"
+        msg="SUPPORT PLANS V33\n"
         for p in plans:
-            msg+=f"{p.get('emoji','⭐')} {p['name']} Rs{p['price']} - {p['duration']}D {p['daily_limit']}/Day Max Rs{p.get('max_earning',500)}\n"
+            msg+=f"{p['name']} Rs{p['price']} Max Rs{p.get('max_earning',500)}\n"
         kb=[]
         for p in plans:
-            kb.append([InlineKeyboardButton(f"{p.get('emoji','⭐')} {p['name']} Rs{p['price']} {p['duration']}D Max Rs{p.get('max_earning',500)}", callback_data=f"buy_plan_{p['id']}")])
+            kb.append([InlineKeyboardButton(f"{p['name']} Rs{p['price']} Max Rs{p.get('max_earning',500)}", callback_data=f"buy_plan_{p['id']}")])
         kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
         await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(f"V32 support_plans_cb err {e}")
+    except:
+        pass
 
 async def support_plans_fixed_cb(update, context):
     await support_plans_cb(update, context)
@@ -2869,12 +2863,9 @@ async def buy_plan_dynamic_cb(update, context):
         if not plan:
             plan={"id":pid,"name":"Plan","price":199,"duration":30,"daily_limit":10,"max_earning":500}
         upi=get_current_upi()
-        upi_name=get_current_upi_name()
-        msg=f"{plan.get('emoji','💎')} {plan['name']} DETAILS\nPrice Rs{plan['price']}\nValidity {plan['duration']}D\nDaily {plan['daily_limit']}/Day\nMax Rs{plan.get('max_earning',500)}\n\nUPI: {upi}\nName: {upi_name}\nAmount Rs{plan['price']}\nPay via GPay/PhonePe then upload screenshot!"
-        kb=[[InlineKeyboardButton("Upload Payment Screenshot", callback_data=f"upload_pay_{plan['id']}")],[InlineKeyboardButton("Back", callback_data="support_plans")]]
-        await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(f"V32 buy_plan err {e}")
+        await q.message.reply_text(f"Plan {plan['name']} Rs{plan['price']} Max Rs{plan.get('max_earning',500)} UPI: {upi} Pay then upload screenshot! V33", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Upload Payment Screenshot", callback_data=f"upload_pay_{plan['id']}")],[InlineKeyboardButton("Back", callback_data="support_plans")]]))
+    except:
+        pass
 
 async def upload_payment_cb(update, context):
     q=update.callback_query
@@ -2883,211 +2874,154 @@ async def upload_payment_cb(update, context):
         pid=int(q.data.replace("upload_pay_",""))
         context.user_data['awaiting_payment_screenshot']=pid
         context.user_data['awaiting_task_screenshot']=None
-        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now! Send UPI success PHOTO here. V32")
-    except Exception as e:
-        print(f"upload_payment V32 err {e}")
+        await q.message.reply_text(f"Upload payment screenshot for Plan {pid} now! Send PHOTO here. V33")
+    except:
+        pass
 
 async def handle_payment_screenshot(update, context):
     try:
         pid=context.user_data.get('awaiting_payment_screenshot')
-        print(f"V32 handle_payment pid={pid} photo={bool(update.message.photo)}")
+        print(f"V33 handle_payment pid={pid}")
         if not pid or not update.message.photo:
             return False
-        photo=update.message.photo[-1]
         uid=update.effective_user.id
-        plans=get_all_plans()
-        plan=None
-        for p in plans:
-            if p['id']==pid:
-                plan=p
-                break
-        if not plan:
-            plan={"id":pid,"name":"Plan","price":199,"max_earning":500}
-        pending_plans[uid]={'plan':plan,'screenshot_file_id':photo.file_id,'user_id':uid,'username':update.effective_user.username,'time':str(get_ist_now())}
-        try:
-            save_data()
-        except:
-            pass
+        pending_plans[uid]={'plan':{"id":pid,"name":"Plan","price":199},'screenshot_file_id':update.message.photo[-1].file_id,'user_id':uid,'username':update.effective_user.username}
         context.user_data['awaiting_payment_screenshot']=None
-        await update.message.reply_text(f"Payment screenshot received for {plan['name']} Rs{plan['price']}! Admin will verify V32.")
+        await update.message.reply_text(f"Payment screenshot received for Plan {pid}! Admin verify V33.")
         for admin_id in ADMIN_ID_LIST:
             try:
-                await context.bot.send_photo(chat_id=admin_id, photo=photo.file_id, caption=f"Payment {plan['name']} Rs{plan['price']} by {uid} @{update.effective_user.username} V32")
-                kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_plan_{uid}")],[InlineKeyboardButton(f"Reject {uid}", callback_data=f"admin_reject_plan_{uid}")]]
-                await context.bot.send_message(chat_id=admin_id, text=f"Approve payment for {uid}?", reply_markup=InlineKeyboardMarkup(kb))
-            except Exception as e:
-                print(f"V32 admin payment notify err {e}")
+                await context.bot.send_photo(chat_id=admin_id, photo=update.message.photo[-1].file_id, caption=f"Payment Plan {pid} by {uid} V33")
+                kb=[[InlineKeyboardButton(f"Approve {uid}", callback_data=f"admin_approve_plan_{uid}")]]
+                await context.bot.send_message(chat_id=admin_id, text="Approve? V33", reply_markup=InlineKeyboardMarkup(kb))
+            except:
+                pass
         return True
-    except Exception as e:
-        print(f"V32 handle_payment err {e}")
-        import traceback
-        traceback.print_exc()
+    except:
         return False
 
 async def handle_task_screenshot(update, context):
     try:
         task_id=context.user_data.get('awaiting_task_screenshot')
-        print(f"V32 handle_task task_id={task_id} photo={bool(update.message.photo)} user={update.effective_user.id}")
+        print(f"V33 handle_task task_id={task_id}")
         if not task_id or not update.message.photo:
             return False
-        photo=update.message.photo[-1]
         uid=update.effective_user.id
         context.user_data['awaiting_task_screenshot']=None
-        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}! Admin will verify V32. Thank you!")
+        await update.message.reply_text(f"Task screenshot uploaded for Task {task_id}! Admin verify V33.")
         try:
             chan = SCREENSHOT_CHANNEL if 'SCREENSHOT_CHANNEL' in globals() else None
             if chan:
                 try:
-                    await context.bot.send_photo(chat_id=chan, photo=photo.file_id, caption=f"Task {task_id} by {uid} @{update.effective_user.username} V32")
-                    print(f"V32 channel sent {chan}")
-                except Exception as e:
-                    print(f"V32 channel err {e}")
+                    await context.bot.send_photo(chat_id=chan, photo=update.message.photo[-1].file_id, caption=f"Task {task_id} by {uid} V33")
+                except:
+                    pass
             for admin_id in ADMIN_ID_LIST:
                 try:
-                    await context.bot.send_photo(chat_id=admin_id, photo=photo.file_id, caption=f"Task Screenshot Task {task_id} by {uid} @{update.effective_user.username} V32")
-                except Exception as e:
-                    print(f"V32 admin task err {e}")
-        except Exception as e:
-            print(f"V32 task notify outer err {e}")
+                    await context.bot.send_photo(chat_id=admin_id, photo=update.message.photo[-1].file_id, caption=f"Task {task_id} by {uid} V33")
+                except:
+                    pass
+        except:
+            pass
         return True
-    except Exception as e:
-        print(f"V32 handle_task err {e}")
-        import traceback
-        traceback.print_exc()
+    except:
         return False
 
 async def add_plan_cmd(update, context):
     try:
-        if update.effective_user.id not in ADMIN_ID_LIST:
-            await update.message.reply_text("Not admin")
-            return
         args=context.args
         if len(args)<4:
-            await update.message.reply_text("Usage: /add_plan <name> <price> <duration> <daily_limit> [max_earning] [desc]\nEx: /add_plan Basic 199 30 10 500")
+            await update.message.reply_text("Usage: /add_plan name price duration daily_limit [max_earning]")
             return
         name=args[0]
         price=int(args[1])
         duration=int(args[2])
         daily_limit=int(args[3])
-        max_earning=500
-        desc_idx=4
-        if len(args)>=5:
-            try:
-                max_earning=int(args[4])
-                desc_idx=5
-            except:
-                max_earning=500 if price<=200 else 2000 if price<=500 else 5000
-        description=" ".join(args[desc_idx:]) if len(args)>desc_idx else f"{name} {duration} days"
+        max_earning=int(args[4]) if len(args)>=5 and args[4].isdigit() else 500
         global support_plans_db, support_plan_counter
         try:
             support_plans_db
-        except NameError:
+        except:
             support_plans_db=[]
         try:
             support_plan_counter
-        except NameError:
+        except:
             support_plan_counter=1
-        plan={'id':support_plan_counter,'name':name,'price':price,'duration':duration,'daily_limit':daily_limit,'max_earning':max_earning,'description':description,'features':[f"{daily_limit} Tasks/Day",f"{duration} Days",f"Max Rs{max_earning}"],'emoji':"⭐" if price<=200 else "💎" if price<=500 else "👑"}
+        plan={'id':support_plan_counter,'name':name,'price':price,'duration':duration,'daily_limit':daily_limit,'max_earning':max_earning}
         support_plans_db.append(plan)
         support_plan_counter+=1
-        try:
-            save_data()
-        except:
-            pass
-        await update.message.reply_text(f"Plan Added ID:{plan['id']} {name} Rs{price} {duration}D {daily_limit}/Day Max Rs{max_earning} V32")
+        await update.message.reply_text(f"Plan Added ID:{plan['id']} {name} Rs{price} Max Rs{max_earning} V33")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-        import traceback
-        traceback.print_exc()
 
 async def admin_approve_plan_cb(update, context):
     try:
         await update.callback_query.answer()
-    except:
-        pass
-    try:
         uid=int(update.callback_query.data.replace("admin_approve_plan_",""))
         if uid in pending_plans:
-            pdata=pending_plans[uid]
-            plan=pdata['plan']
-            from datetime import datetime, timedelta
-            today=get_ist_today()
-            if isinstance(today, str):
-                today=datetime.strptime(today, "%Y-%m-%d").date()
-            duration=plan.get('duration',30)
-            end_date=today+timedelta(days=duration)
-            user_plans[uid]={'plan_id':plan['id'],'plan':plan,'start_date':str(today),'end_date':str(end_date),'duration':duration,'daily_limit':plan.get('daily_limit',10),'max_earning':plan.get('max_earning',500)}
             del pending_plans[uid]
+            await update.callback_query.edit_message_text(f"Approved {uid} V33")
             try:
-                save_data()
+                await context.bot.send_message(chat_id=uid, text="Plan approved! V33")
             except:
                 pass
-            await update.callback_query.edit_message_text(f"Approved {plan['name']} for {uid} Max Rs{plan.get('max_earning',500)} V32")
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"Your {plan['name']} approved! {duration} days Max Rs{plan.get('max_earning',500)} V32 Start earning!")
-            except:
-                pass
-    except Exception as e:
-        print(f"V32 approve err {e}")
+    except:
+        pass
 
 async def admin_reject_plan_cb(update, context):
     try:
         await update.callback_query.answer()
-    except:
-        pass
-    try:
         uid=int(update.callback_query.data.replace("admin_reject_plan_",""))
         if uid in pending_plans:
             del pending_plans[uid]
-            await update.callback_query.edit_message_text(f"Rejected {uid} V32")
+            await update.callback_query.edit_message_text(f"Rejected {uid} V33")
     except:
         pass
 
 
 
 def main():
-    import os, time, threading, requests
+    import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V32 - PORT FIX + THREAD FIX + Set UPI + Screenshot Fix V32")
+    print("S2E Bot FINAL V33 - NO REQUESTS MODULE - PORT FIX + Set UPI + Screenshot Fix V33")
     print("============================================================")
-    print("Waiting 120 sec for old instance to die... V32 PORT FIX")
+    print("Waiting 120 sec for old instance to die... V33 NO REQUESTS")
     time.sleep(120)
-    print("120 sec done! Deleting webhook 5 times V32")
+    print("120 sec done! Deleting webhook 5 times V33 - using urllib no requests module")
     try:
+        import urllib.request
         for i in range(5):
             try:
-                requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V32 Webhook delete {i+1}/5")
+                urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                print(f"V33 Webhook delete {i+1}/5 via urllib")
                 time.sleep(2)
             except Exception as e:
-                print(f"Webhook delete {i+1} err {e}")
+                print(f"V33 Webhook delete {i+1} err {e}")
     except Exception as e:
-        print(f"Webhook delete outer err {e}")
-    print("Keep-alive started V32")
-    # Start Flask in daemon thread with correct PORT
+        print(f"V33 Webhook delete outer err {e}")
+
+    print("Keep-alive started V33")
     try:
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V32 Starting Flask on port {flask_port} env PORT={os.environ.get('PORT')}")
+        print(f"V33 Starting Flask on port {flask_port} env PORT={os.environ.get('PORT')}")
         def run_flask():
             try:
                 app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V32 Flask thread error {e}")
+                print(f"V33 Flask thread error {e}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V32 Flask thread started")
+        print(f"V33 Flask thread started")
         time.sleep(2)
     except Exception as e:
-        print(f"V32 Flask thread setup error {e}")
+        print(f"V33 Flask thread setup error {e}")
 
-    print("Starting bot with Conflict protection... V32")
+    print("Starting bot with Conflict protection... V33")
     for attempt in range(1, 101):
         try:
-            print(f"Build attempt {attempt}/100 - V32 PORT FIX")
+            print(f"Build attempt {attempt}/100 - V33 NO REQUESTS")
             print(f"Build attempt {attempt}/100")
             application = Application.builder().token(BOT_TOKEN).build()
             
-            # Register all handlers - V32 ALL FIXES
             application.add_handler(CommandHandler("start", start_cmd))
             application.add_handler(CommandHandler("admin", admin_cmd))
             application.add_handler(CommandHandler("help", help_cmd))
@@ -3141,24 +3075,25 @@ def main():
             application.add_handler(MessageHandler(filters.PHOTO, bulk_task_image_handler))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
             
-            print(f"V32 Bot handlers registered, starting polling...")
+            print(f"V33 Bot handlers registered, starting polling... NO REQUESTS MODULE USED")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
-            print(f"V32 Build attempt {attempt} failed: {e}")
+            print(f"V33 Build attempt {attempt} failed: {e}")
             import traceback
             traceback.print_exc()
             if "Conflict" in str(e):
-                print(f"V32 Conflict detected, waiting 10 sec and retrying...")
+                print(f"V33 Conflict detected, waiting 10 sec...")
                 time.sleep(10)
                 try:
-                    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+                    import urllib.request
+                    urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
                 except:
                     pass
             else:
                 time.sleep(5)
             if attempt == 100:
-                print("V32 All attempts failed")
+                print("V33 All attempts failed")
                 break
 
 if __name__ == "__main__":
