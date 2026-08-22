@@ -3056,7 +3056,7 @@ async def admin_reject_new_plan_cb(update, context):
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V38 - Flask Immediate + Admin Forward Fix + Upload Fix V38")
+    print("S2E Bot FINAL V39 - Conflict Fix + Error Handler + Flask Immediate + Admin Forward V39")
     print("============================================================")
     # V38 FIX: Flask IMMEDIATE start before 120 sec sleep
     try:
@@ -3103,7 +3103,15 @@ def main():
     except Exception as e:
         print(f"V38 Post-sleep webhook outer err {e}")
 
-    print("Keep-alive started V38 - Flask already running")
+    print("Keep-alive started V39 - Flask already running")
+    # V39 EXTRA: Delete webhook one more time right before polling
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
+        print("V39 Extra webhook delete right before polling")
+        time.sleep(2)
+    except Exception as e:
+        print(f"V39 extra delete err {e}")
     print("Starting bot V38 with correct handlers - No Conflict expected")
     for attempt in range(1, 101):
         try:
@@ -3241,7 +3249,14 @@ def main():
             except Exception as e:
                 print(f"V38 photo handlers err {e}")
             
-            print(f"V38 Bot handlers registered including ConversationHandlers, polling...")
+            # V39 FIX: Add error handlers to suppress Conflict spam
+            try:
+                application.add_error_handler(error_handler)
+                print("V39 Added error_handler to suppress Conflict")
+            except Exception as e:
+                print(f"V39 error_handler add err {e}")
+            
+            print(f"V39 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
