@@ -3053,66 +3053,75 @@ async def admin_reject_new_plan_cb(update, context):
 
 
 
+
+
+
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V39 - Conflict Fix + Error Handler + Flask Immediate + Admin Forward V39")
+    print("S2E Bot FINAL V40 - Flask PORT Fix + app_flask Fix + Conflict Fix V40")
     print("============================================================")
-    # V38 FIX: Flask IMMEDIATE start before 120 sec sleep
+    # V40 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
     try:
+        from flask import Flask
+        flask_app = Flask(__name__)
+        @flask_app.route('/')
+        def home():
+            return "S2E Bot V40 Running - Flask Immediate Fix - No Ports Error"
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V38 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep")
+        print(f"V40 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
         def run_flask():
             try:
-                app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
+                print(f"V40 Flask thread running on 0.0.0.0:{flask_port}")
+                flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V38 Flask immediate err {e}")
+                print(f"V40 Flask immediate err {e}")
+                try:
+                    # Fallback to app_flask if exists
+                    app_flask.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
+                except Exception as e2:
+                    print(f"V40 Flask fallback err {e2}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V38 Flask thread started IMMEDIATELY - Render port scan will succeed")
+        print(f"V40 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
         time.sleep(3)
     except Exception as e:
-        print(f"V38 Flask immediate setup err {e}")
+        print(f"V40 Flask immediate setup err {e}")
+        import traceback
+        traceback.print_exc()
 
-    # V38 FIX: Delete webhook BEFORE sleep
-    print("V38 Deleting webhook BEFORE sleep - to kill old instance")
+    # V40 FIX: Delete webhook BEFORE sleep
+    print("V40 Deleting webhook BEFORE sleep - to kill old instance")
     try:
         import urllib.request
         for i in range(3):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V38 Pre-sleep Webhook delete {i+1}/3")
+                print(f"V40 Pre-sleep Webhook delete {i+1}/3")
                 time.sleep(1)
             except Exception as e:
-                print(f"V38 Pre-sleep delete {i+1} err {e}")
+                print(f"V40 Pre-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V38 Pre-sleep webhook outer err {e}")
+        print(f"V40 Pre-sleep webhook outer err {e}")
 
-    print("Waiting 120 sec for old instance to die... V38 Flask already started")
+    print("Waiting 120 sec for old instance to die... V40 Flask already started")
     time.sleep(120)
-    print("120 sec done! Deleting webhook 5 times V38 after sleep")
+    print("120 sec done! Deleting webhook 5 times V40 after sleep")
     try:
         import urllib.request
         for i in range(5):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V38 Post-sleep Webhook delete {i+1}/5 via urllib")
+                print(f"V40 Post-sleep Webhook delete {i+1}/5 via urllib")
                 time.sleep(2)
             except Exception as e:
-                print(f"V38 Post-sleep delete {i+1} err {e}")
+                print(f"V40 Post-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V38 Post-sleep webhook outer err {e}")
+        print(f"V40 Post-sleep webhook outer err {e}")
 
-    print("Keep-alive started V39 - Flask already running")
-    # V39 EXTRA: Delete webhook one more time right before polling
-    try:
-        import urllib.request
-        urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-        print("V39 Extra webhook delete right before polling")
-        time.sleep(2)
-    except Exception as e:
-        print(f"V39 extra delete err {e}")
-    print("Starting bot V38 with correct handlers - No Conflict expected")
+    print("Keep-alive started V40 - Flask already running")
+    print("Starting bot V40 with correct handlers - No Conflict expected")
+
     for attempt in range(1, 101):
         try:
             print(f"V38 Build attempt {attempt}/100 - Flask Immediate + Admin Forward Fix")
@@ -3249,14 +3258,14 @@ def main():
             except Exception as e:
                 print(f"V38 photo handlers err {e}")
             
-            # V39 FIX: Add error handlers to suppress Conflict spam
+            # V40 FIX: Add error handlers to suppress Conflict spam
             try:
                 application.add_error_handler(error_handler)
-                print("V39 Added error_handler to suppress Conflict")
+                print("V40 Added error_handler to suppress Conflict")
             except Exception as e:
-                print(f"V39 error_handler add err {e}")
+                print(f"V40 error_handler add err {e}")
             
-            print(f"V39 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
+            print(f"V40 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
