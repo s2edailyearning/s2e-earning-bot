@@ -1069,15 +1069,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             print(f"V56 screenshot channel err3 {e3}")
         except Exception as e:
             print(f"V56 screenshot outer err {e}")
-        for admin_id in ADMIN_ID_LIST:
-            try:
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-            except:
-                try:
-                    await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                except Exception as e:
-                    print(f"V56 admin forward err {e}")
+        # V56: Task screenshot is handled ONLY in the dedicated Screenshot Channel.
         return ConversationHandler.END
     except Exception as e:
         print(f"V56 handle_screenshot_upload outer exception {e}")
@@ -3441,15 +3433,7 @@ def main():
                                 await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
                             except Exception as e3:
                                 print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
-                    for admin_id in ADMIN_ID_LIST:
-                        try:
-                            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} V56", reply_markup=kb)
-                        except:
-                            try:
-                                await context.bot.send_document(chat_id=admin_id, document=file_id, caption=f"NEW TASK V56 User {uid}")
-                            except Exception as e:
-                                print(f"V56 admin forward err {e}")
+                    # V56: Task screenshot is handled ONLY in the dedicated Screenshot Channel.
                 except Exception as e:
                     print(f"V56 v56_screenshot_simple_handler err {e}")
                     import traceback
