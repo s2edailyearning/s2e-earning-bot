@@ -916,7 +916,7 @@ async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAU
     q=update.callback_query; await q.answer()
     current, next_task = get_current_scheduled_task_with_interval()
     if current:
-        await q.message.reply_text(f"📤 Send screenshot for Task {current['task_number']}!\n\nOpen {current['open_time']} Close {current['close_time']} ({current['window_minutes']} mins)\n\nSend as PHOTO, not file!")
+        await q.message.reply_text(f"📤 Send screenshot for Task {current['task_number']}!\n\nOpen {current['open_time']} Close {current['close_time']} ({current['window_minutes']} mins)\n\nSend the screenshot here as a PHOTO (Telegram image), not as a file.")
     else:
         await q.message.reply_text("📤 Send screenshot as PHOTO!\n\nMake sure it's for today's task!")
     return UPLOAD_SCREENSHOT
@@ -2626,9 +2626,16 @@ async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(f"Current Screenshot Channel: {current}\n\nUsage: /set_screenshot_channel <channel_id or @username>\nExample: /set_screenshot_channel -1001234567890\nOR /set_screenshot_channel @s2e_screenshots_admin\n\nHow to get ID: Forward a message from channel to @userinfobot")
         return
     ch = context.args[0]
-    # Try to resolve @username to ID by sending test message
+    # Keep the 3 channels strictly separate. Numeric Telegram chat IDs are
+    # normalized to int so they cannot accidentally behave like a username.
     try:
-        # Save as is (can be @username or -100...)
+        ch = int(ch) if str(ch).lstrip('-').isdigit() else str(ch)
+    except Exception:
+        ch = str(ch)
+    if str(ch) == str(get_join_channel()):
+        await update.message.reply_text("❌ Screenshot channel cannot be the same as the Member Join/Main channel. Use the separate Task Screenshot channel ID.")
+        return
+    try:
         save_channel_config(screenshot=ch, withdraw=None)
         await update.message.reply_text(f"✅ Screenshot Channel Set: {ch}\n\nNow all task screenshots will go to this channel with Approve buttons!\nTest: Ask a user to submit a task")
         # Test send
@@ -2647,6 +2654,13 @@ async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"Current Withdraw Channel: {current}\nUsage: /set_withdraw_channel <channel_id or @username>\nExample: /set_withdraw_channel -1001234567890")
         return
     ch = context.args[0]
+    try:
+        ch = int(ch) if str(ch).lstrip('-').isdigit() else str(ch)
+    except Exception:
+        ch = str(ch)
+    if str(ch) == str(get_join_channel()):
+        await update.message.reply_text("❌ Withdraw channel cannot be the same as the Member Join/Main channel. Use the separate Withdrawal channel ID.")
+        return
     save_channel_config(screenshot=None, withdraw=ch)
     await update.message.reply_text(f"✅ Withdraw Channel Set: {ch}\nAll withdraw requests will go here!")
     try:
@@ -3492,8 +3506,9 @@ def main():
                 except Exception as e:
                     print(f"V56 fallback_photo_handler err {e}")
             
-            app.add_handler(MessageHandler(filters.PHOTO, fallback_photo_handler))
-            print("V56 Fallback photo handler added - Task image + Screenshot fix! FINAL!")
+            # Do not register the old broad fallback: it could process the same
+            # member screenshot a second time and trigger duplicate-screenshot logic.
+            print("V56 Broad fallback photo handler disabled to prevent duplicate screenshot processing.")
 
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
@@ -3511,10 +3526,14 @@ def main():
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            # FIX: The Upload Screenshot button was created with callback_data
+            # daily_upload_screenshot, but its callback handler was never registered.
             app.add_handler(CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
+            # FIX: Promo upload button also needs its callback handler registered.
+            app.add_handler(CallbackQueryHandler(promo_upload_cb, pattern="^promo_upload_"))
             app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
             app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
