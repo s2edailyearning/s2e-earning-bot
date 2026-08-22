@@ -1267,8 +1267,6 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
         if task:
             task['image_file_id'] = file_id
             task['has_image'] = True
-        save_data()
-        if task:
             print(f"V56 Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Task image same issue fixed!")
         else:
             print(f"V56 Image Poster Set for Task {task_id} - Task not found but file_id saved! FINAL!")
@@ -1575,97 +1573,240 @@ async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
 async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query
+    q = update.callback_query
     try:
         await q.answer()
-    except:
+    except Exception:
         pass
-    uid=q.from_user.id
-    bal=get_balance(uid)
-    tasks_done=get_tasks(uid)
+
+    uid = update.effective_user.id
     today = str(get_ist_today())
-    # V56 FIX: Bypass join check if check fails - Allow withdraw even if Not joined yet issue!
+
+    # One withdrawal request per day. A submitted/pending request also counts for today.
+    if withdraw_done_date.get(uid) == today or last_withdraw_date_db.get(uid) == today:
+        req = withdraw_requests.get(uid, {})
+        status = req.get('status')
+        if status == 'processing':
+            text = ("⏳ Withdrawal already submitted today!\n\n"
+                    f"Amount: Rs{req.get('amount', 0)}\n"
+                    "Status: Pending Admin Processing\n\n"
+                    "You can make another withdrawal tomorrow.")
+        elif status == 'approved':
+            text = "✅ You have already withdrawn once today!\n\nYou can withdraw again tomorrow."
+        elif status == 'rejected':
+            text = "❌ Today's withdrawal request was rejected.\n\nYou can submit another withdrawal tomorrow."
+        else:
+            text = "⏰ You can withdraw only once per day.\n\nPlease try again tomorrow."
+        await q.message.reply_text(text, reply_markup=main_menu())
+        return
+
+    bal = get_balance(uid)
+    tasks_done = get_tasks(uid)
+
+    # Keep existing membership check behavior, but do not block withdrawals if Telegram check fails.
     try:
         is_joined = await check_user_in_channel(uid, context)
-    except:
+    except Exception:
         is_joined = True
-        print(f"V56 withdraw_cb: check_user_in_channel failed - Bypass True!")
-    if not is_joined:
-        # If still not joined, try to allow for testing - Don't block withdraw!
-        print(f"V56 withdraw_cb: Not joined but allowing bypass for testing! User {uid}")
-        # For final, allow bypass to fix Not joined yet loop!
-        is_joined = True
-    if is_joined == False:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Join Channel", url=CHANNEL_LINK)], [InlineKeyboardButton("Check Joined", callback_data="check_joined")]])
-        await q.message.reply_text(f"You left channel {CHANNEL_ID}! Re-join! Link: {CHANNEL_LINK}", reply_markup=kb)
-        return
-    if last_withdraw_date_db.get(uid) == today:
-        await q.message.reply_text(f"Already withdrew today! 1 per day only! Last: {today}", reply_markup=main_menu())
-        return
-    if tasks_done < TASKS_REQUIRED_FOR_WITHDRAW:
-        await q.message.reply_text(f"Need {TASKS_REQUIRED_FOR_WITHDRAW} TODAY! You have {tasks_done}/{TASKS_REQUIRED_FOR_WITHDRAW} Total: {tasks_db.get(uid,0)} - V56 1 task required!", reply_markup=main_menu())
-        return
-    if bal < WITHDRAW_MIN:
-        await q.message.reply_text(f"Min Rs{WITHDRAW_MIN}! Balance Rs{bal} - Add tasks! V56", reply_markup=main_menu())
-        return
-    available = [opt for opt in WITHDRAW_OPTIONS if opt <= bal]
-    if not available:
-        await q.message.reply_text(f"Balance Rs{bal} less than min Rs{WITHDRAW_MIN}! V56", reply_markup=main_menu())
-        return
-    kb = [[InlineKeyboardButton(f"Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in available]
-    kb.append([InlineKeyboardButton("Menu", callback_data="back_menu")])
-    msg = f"Withdraw - Balance: Rs{bal} Available: " + ", ".join([f"Rs{o}" for o in available]) + f" V56 FINAL - Select amount! 200 300 500 1000 based on balance!"
-    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
-    print(f"V56 withdraw_cb: User {uid} Balance Rs{bal} Available {available} - Showing buttons! FINAL!")
 
+    if not is_joined:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Join Channel", url=CHANNEL_LINK)],
+            [InlineKeyboardButton("Check Joined", callback_data="check_joined")]
+        ])
+        await q.message.reply_text(f"You left channel {CHANNEL_ID}! Re-join first.", reply_markup=kb)
+        return
+
+    if tasks_done < TASKS_REQUIRED_FOR_WITHDRAW:
+        await q.message.reply_text(
+            f"Need {TASKS_REQUIRED_FOR_WITHDRAW} completed task(s) to withdraw.\n"
+            f"You have {tasks_done} task(s).",
+            reply_markup=main_menu()
+        )
+        return
+
+    if bal < WITHDRAW_MIN:
+        await q.message.reply_text(
+            f"WITHDRAW\n\nEarnings: Rs{bal}\nMin: Rs{WITHDRAW_MIN}\n\n"
+            "Complete more tasks to reach the minimum withdrawal amount.",
+            reply_markup=main_menu()
+        )
+        return
+
+    # Only amounts that are <= current balance are selectable.
+    available = [opt for opt in WITHDRAW_OPTIONS if opt <= bal]
+    unavailable = [opt for opt in WITHDRAW_OPTIONS if opt > bal]
+
+    if not available:
+        await q.message.reply_text(f"Balance Rs{bal} is below the minimum withdrawal amount Rs{WITHDRAW_MIN}.", reply_markup=main_menu())
+        return
+
+    rows = [[InlineKeyboardButton(f"💰 Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in available]
+    rows.append([InlineKeyboardButton("↩️ Menu", callback_data="back_menu")])
+
+    disabled_text = ""
+    if unavailable:
+        disabled_text = "\n\nUnavailable with current balance: " + ", ".join(f"Rs{o}" for o in unavailable)
+
+    msg = (
+        f"💸 WITHDRAW\n\n"
+        f"Balance: Rs{bal}\n"
+        f"Minimum: Rs{WITHDRAW_MIN}\n\n"
+        "Select withdrawal amount:"
+        f"{disabled_text}"
+    )
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    amount=int(q.data.split("_")[-1])
-    uid=q.from_user.id
-    fee=int(amount*PLATFORM_FEE_PERCENT/100)
-    net=amount-fee
-    upi = users_db.get(uid,{}).get('upi','Not set')
-    context.user_data['withdraw_amount'] = amount
+    q = update.callback_query
+    await q.answer()
+    amount = int(q.data.split("_")[-1])
+    uid = q.from_user.id
     bal = get_balance(uid)
-    remaining = bal - amount
-    msg = f"Withdraw Details Selected: Rs{amount} Fee {PLATFORM_FEE_PERCENT}%: Rs{fee} You Get: Rs{net} Balance: Rs{bal} Remaining: Rs{remaining} UPI: {upi} Is correct?"
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"UPI Correct - Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")],[InlineKeyboardButton("Edit UPI", callback_data="wd_edit_upi")],[InlineKeyboardButton("Cancel", callback_data="back_menu")]])
+
+    if amount not in WITHDRAW_OPTIONS or amount > bal:
+        await q.message.reply_text("❌ This withdrawal amount is not available for your current balance.", reply_markup=main_menu())
+        return
+
+    fee = int(amount * PLATFORM_FEE_PERCENT / 100)
+    net = amount - fee
+    upi = users_db.get(uid, {}).get('upi', 'Not set')
+    context.user_data['withdraw_amount'] = amount
+
+    msg = (
+        f"💸 Withdrawal Details\n\n"
+        f"Amount: Rs{amount}\n"
+        f"Platform Fee: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
+        f"You Receive: Rs{net}\n"
+        f"Current Balance: Rs{bal}\n"
+        f"Remaining Balance: Rs{bal - amount}\n\n"
+        f"UPI ID: {upi}\n\n"
+        "Is this UPI correct?"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ UPI Correct — Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")],
+        [InlineKeyboardButton("✏️ Change UPI", callback_data="wd_edit_upi")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]
+    ])
     await q.message.reply_text(msg, reply_markup=kb)
 
 
+async def wd_edit_upi_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    amount = context.user_data.get('withdraw_amount')
+    if not amount:
+        await q.message.reply_text("Please select a withdrawal amount again.", reply_markup=main_menu())
+        return
+    context.user_data['editing_withdraw_upi'] = True
+    await q.message.reply_text(
+        f"✏️ Change UPI for Rs{amount} withdrawal.\n\n"
+        "Send your correct UPI ID now.\n"
+        "Example: yourname@upi"
+    )
+
+
+async def wd_edit_upi_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('editing_withdraw_upi'):
+        return
+    uid = update.effective_user.id
+    upi = update.message.text.strip()
+    valid, msg = is_valid_upi_format(upi)
+    if not valid:
+        await update.message.reply_text(f"❌ Invalid UPI: {msg}\n\nSend the correct UPI ID again:")
+        return
+
+    if uid not in users_db:
+        users_db[uid] = {}
+    users_db[uid]['upi'] = upi
+    context.user_data['editing_withdraw_upi'] = False
+    amount = context.user_data.get('withdraw_amount')
+    if not amount:
+        await update.message.reply_text("✅ UPI updated. Please select withdrawal amount again.", reply_markup=main_menu())
+        return
+
+    bal = get_balance(uid)
+    fee = int(amount * PLATFORM_FEE_PERCENT / 100)
+    net = amount - fee
+    await update.message.reply_text(
+        f"✅ UPI Updated!\n\nUPI ID: {upi}\n"
+        f"Withdrawal: Rs{amount}\nFee: Rs{fee}\nYou Receive: Rs{net}\n\n"
+        "Please confirm:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"✅ Confirm Rs{amount}", callback_data=f"wd_confirm_{amount}")],
+            [InlineKeyboardButton("✏️ Change UPI Again", callback_data="wd_edit_upi")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]
+        ])
+    )
 
 async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid=q.from_user.id
-    amount=int(q.data.split("_")[-1])
-    fee=int(amount*PLATFORM_FEE_PERCENT/100)
-    net=amount-fee
-    upi = users_db.get(uid,{}).get('upi')
-    if not upi:
-        await q.message.reply_text("UPI not set! Please set UPI via /start registration again!", reply_markup=main_menu())
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    amount = int(q.data.split("_")[-1])
+    today = str(get_ist_today())
+
+    # Prevent duplicate confirmations on the same day.
+    if withdraw_done_date.get(uid) == today or last_withdraw_date_db.get(uid) == today:
+        await q.message.reply_text("⏰ You can withdraw only once per day. You can withdraw again tomorrow.", reply_markup=main_menu())
         return
-    withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
-    withdraw_done_date[uid]=str(get_ist_today())
-    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V56 FINAL", reply_markup=main_menu())
+
+    bal = get_balance(uid)
+    if amount not in WITHDRAW_OPTIONS or amount > bal:
+        await q.message.reply_text("❌ Withdrawal amount is no longer available for your current balance.", reply_markup=main_menu())
+        return
+
+    upi = users_db.get(uid, {}).get('upi')
+    if not upi:
+        await q.message.reply_text("❌ UPI not set. Please set your UPI first.", reply_markup=main_menu())
+        return
+
+    fee = int(amount * PLATFORM_FEE_PERCENT / 100)
+    net = amount - fee
+    withdraw_requests[uid] = {
+        'amount': amount,
+        'fee': fee,
+        'net': net,
+        'upi': upi,
+        'status': 'processing',
+        'date': today
+    }
+    withdraw_done_date[uid] = today
+    save_data()
+
+    await q.message.reply_text(
+        f"✅ Withdrawal Request Submitted!\n\n"
+        f"Amount: Rs{amount}\nFee: Rs{fee}\nYou Receive: Rs{net}\nUPI: {upi}\n\n"
+        "Your request has been sent to Admin. Once processed, you will receive the approval message.\n\n"
+        "⏰ One withdrawal per day only. You can withdraw again tomorrow.",
+        reply_markup=main_menu()
+    )
+
+    # Send the request ONLY to the configured Withdraw channel.
     try:
-        w_chan = WITHDRAW_CHANNEL
-        if w_chan:
-            try:
-                kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V56 FINAL User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
-                print(f"V56 forwarded withdraw to WITHDRAW_CHANNEL {w_chan} - Withdraw ONLY! FINAL!")
-            except Exception as e:
-                print(f"V56 withdraw channel err {e}")
-    except:
-        pass
-    for admin_id in ADMIN_ID_LIST:
-        try:
-            kb=InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
-            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V56 FINAL User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
-        except:
-            pass
+        w_chan = get_withdraw_channel()
+        if not w_chan:
+            print("Withdraw channel not configured")
+            return
+        kb_chan = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"wd_admin_approve_{uid}"),
+             InlineKeyboardButton("❌ Reject", callback_data=f"wd_admin_reject_{uid}")]
+        ])
+        await context.bot.send_message(
+            chat_id=w_chan,
+            text=(f"💰 NEW WITHDRAWAL REQUEST\n\n"
+                  f"User ID: {uid}\n"
+                  f"Amount: Rs{amount}\n"
+                  f"Fee: Rs{fee}\n"
+                  f"Net Payable: Rs{net}\n"
+                  f"UPI: {upi}\n"
+                  f"Date: {today}\n"
+                  f"Status: ⏳ Pending"),
+            reply_markup=kb_chan
+        )
+    except Exception as e:
+        print(f"Withdraw channel send error: {e}")
 
 async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1689,7 +1830,6 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
-        save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
         try:
             await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +Rs{reward}\nBalance: Rs{get_balance(uid)}\nTasks: {get_tasks(uid)}/{TASKS_REQUIRED_FOR_WITHDRAW}", reply_markup=main_menu())
@@ -1706,7 +1846,6 @@ async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TY
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
                 user_task_status[uid][tid] = {'status': 'pending', 'rejected_at': get_ist_now()}
                 break
-        save_data()
         await q.message.reply_text(f"❌ Rejected {uid}")
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Task Rejected! Screenshot not valid!\n\nTips:\n- Send clear photo\n- Complete task fully\n- If already have account, use Skip with reason!", reply_markup=main_menu())
@@ -1761,41 +1900,93 @@ async def promo_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
+    q = update.callback_query
+    await q.answer()
     if not is_admin(q.from_user.id):
         await q.message.reply_text("❌ Admin only!")
         return
-    uid=int(q.data.split("_")[-1])
-    if uid in withdraw_requests:
-        req = withdraw_requests[uid]
-        amount = req['amount']
-        current_bal = get_balance(uid)
-        bonus_balance[uid] = bonus_balance.get(uid, 0) - amount
-        new_bal = get_balance(uid)
-        if new_bal < 0:
-            bonus_balance[uid] = bonus_balance.get(uid,0) - new_bal
-            new_bal = get_balance(uid)
-        req['status']='approved'
-        req['approved_at'] = str(get_ist_now())
-        last_withdraw_date_db[uid] = str(get_ist_today())
-        await q.message.reply_text(f"Approved {uid} Rs{amount} Old Rs{current_bal} New Rs{new_bal}")
-        try:
-            await context.bot.send_message(chat_id=uid, text=f"Withdraw Approved! Withdrawn Rs{amount} You Get Rs{req['net']} Old Rs{current_bal} New Remaining Rs{new_bal}", reply_markup=main_menu())
-        except:
-            pass
 
+    uid = int(q.data.split("_")[-1])
+    req = withdraw_requests.get(uid)
+    if not req:
+        await q.message.reply_text("❌ Withdrawal request not found.")
+        return
+    if req.get('status') != 'processing':
+        await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
+        return
+
+    amount = int(req['amount'])
+    current_bal = get_balance(uid)
+    if current_bal < amount:
+        req['status'] = 'rejected'
+        save_data()
+        await q.message.reply_text("❌ Cannot approve: user's current balance is insufficient.")
+        try:
+            await context.bot.send_message(chat_id=uid, text="❌ Withdrawal rejected because your balance is insufficient at processing time.", reply_markup=main_menu())
+        except Exception:
+            pass
+        return
+
+    # Deduct the withdrawal amount without changing the completed-task count.
+    bonus_balance[uid] = bonus_balance.get(uid, 0) - amount
+    new_bal = get_balance(uid)
+    req['status'] = 'approved'
+    req['approved_at'] = str(get_ist_now())
+    last_withdraw_date_db[uid] = str(get_ist_today())
+    save_data()
+
+    await q.message.reply_text(
+        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(f"✅ Withdrawal Approved!\n\n"
+                  f"Amount: Rs{amount}\n"
+                  f"UPI: {req['upi']}\n"
+                  f"You Receive: Rs{req['net']}\n"
+                  f"Remaining Balance: Rs{new_bal}\n\n"
+                  "Your payment request has been processed.\n"
+                  "⏰ You can withdraw again tomorrow."),
+            reply_markup=main_menu()
+        )
+    except Exception:
+        pass
 
 
 async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return
-    uid=int(q.data.split("_")[-1])
-    if uid in withdraw_requests:
-        withdraw_requests[uid]['status']='rejected'
-        await q.message.reply_text(f"❌ Withdraw Rejected for {uid}")
-        try:
-            await context.bot.send_message(chat_id=uid, text="❌ Withdraw Rejected! Contact admin for reason!", reply_markup=main_menu())
-        except: pass
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(q.from_user.id):
+        await q.message.reply_text("❌ Admin only!")
+        return
+
+    uid = int(q.data.split("_")[-1])
+    req = withdraw_requests.get(uid)
+    if not req:
+        await q.message.reply_text("❌ Withdrawal request not found.")
+        return
+    if req.get('status') != 'processing':
+        await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
+        return
+
+    req['status'] = 'rejected'
+    req['rejected_at'] = str(get_ist_now())
+    save_data()
+    await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
+    try:
+        await context.bot.send_message(
+            chat_id=uid,
+            text=(f"❌ Withdrawal Rejected\n\nAmount: Rs{req['amount']}\n"
+                  f"UPI: {req['upi']}\n\n"
+                  "Your withdrawal request was rejected by Admin.\n"
+                  "⏰ You can submit another withdrawal tomorrow."),
+            reply_markup=main_menu()
+        )
+    except Exception:
+        pass
+
+
 async def error_handler(update, context):
     print(f"Polling error: {context.error}")
     import traceback
@@ -2194,9 +2385,11 @@ def save_data():
             data['referrals_db'] = referrals_db
             data['referral_map'] = referral_map
             data['scheduled_tasks_db'] = scheduled_tasks_db
-            data['task_images_db'] = task_images_db
             data['support_plans_db'] = support_plans_db
             data['user_plans'] = user_plans
+            data['withdraw_requests'] = withdraw_requests
+            data['withdraw_done_date'] = withdraw_done_date
+            data['last_withdraw_date_db'] = last_withdraw_date_db
         except:
             pass
         with open(DATA_FILE, 'w') as f:
@@ -2211,7 +2404,7 @@ def load_data():
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
             global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
-            global scheduled_tasks_db, support_plans_db, user_plans
+            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db
             if 'users_db' in data:
                 # Convert keys to int where possible
                 loaded_users = data['users_db']
@@ -2238,33 +2431,27 @@ def load_data():
             if 'scheduled_tasks_db' in data:
                 scheduled_tasks_db.clear()
                 scheduled_tasks_db.extend(data['scheduled_tasks_db'])
-                # JSON converts time objects to strings. Rebuild the runtime
-                # time objects so scheduled tasks still work after Render restart.
-                for task in scheduled_tasks_db:
-                    for key in ('open_time', 'close_time', 'next_time'):
-                        obj_key = f'{key}_obj'
-                        if obj_key not in task or not isinstance(task.get(obj_key), time):
-                            raw = task.get(key)
-                            parsed = parse_time_str(str(raw)) if raw else None
-                            if parsed:
-                                task[obj_key] = parsed
-            if 'task_images_db' in data:
-                task_images_db.clear()
-                for k, v in data['task_images_db'].items():
-                    try:
-                        task_images_db[int(k)] = v
-                    except:
-                        task_images_db[k] = v
-            # Backfill the task image map from task records created by older versions.
-            for task in scheduled_tasks_db:
-                if task.get('image_file_id'):
-                    task_images_db[task['id']] = task['image_file_id']
             if 'support_plans_db' in data:
                 support_plans_db.clear()
                 support_plans_db.extend(data['support_plans_db'])
             if 'user_plans' in data:
                 user_plans.clear()
                 user_plans.update(data['user_plans'])
+            if 'withdraw_requests' in data:
+                withdraw_requests.clear()
+                for k, v in data['withdraw_requests'].items():
+                    try: withdraw_requests[int(k)] = v
+                    except: withdraw_requests[k] = v
+            if 'withdraw_done_date' in data:
+                withdraw_done_date.clear()
+                for k, v in data['withdraw_done_date'].items():
+                    try: withdraw_done_date[int(k)] = v
+                    except: withdraw_done_date[k] = v
+            if 'last_withdraw_date_db' in data:
+                last_withdraw_date_db.clear()
+                for k, v in data['last_withdraw_date_db'].items():
+                    try: last_withdraw_date_db[int(k)] = v
+                    except: last_withdraw_date_db[k] = v
             print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
     except Exception as e:
         print(f"Load error {e}")
@@ -2390,31 +2577,15 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
 SCREENSHOT_CHANNEL_ID = None  # Set via /set_screenshot_channel
 WITHDRAW_CHANNEL_ID = None    # Set via /set_withdraw_channel
 
-def _load_channel_config():
-    """Load persisted channel routing safely after every restart/deploy."""
+def get_screenshot_channel():
     try:
         if os.path.exists("channel_config.json"):
-            with open("channel_config.json", "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
-    except Exception as e:
-        print(f"Channel config load error: {e}")
-    return {}
-
-def get_screenshot_channel():
-    # V59 FINAL: screenshot routing has ONE source of truth.
-    # /set_screenshot_channel updates channel_config.json and that value is
-    # used after every restart. Never fall back to JOIN/MAIN channel.
-    cfg = _load_channel_config()
-    value = cfg.get("screenshot_channel")
-    if value is None or str(value).strip() == "":
-        value = os.getenv("TASK_SCREENSHOT_CHANNEL_ID") or SCREENSHOT_CHANNEL
-    try:
-        if isinstance(value, str) and value.lstrip("-").isdigit():
-            return int(value)
-    except Exception:
+            with open("channel_config.json", 'r') as f:
+                cfg = json.load(f)
+                return cfg.get('screenshot_channel')
+    except:
         pass
-    return value
+    return SCREENSHOT_CHANNEL_ID
 
 def get_withdraw_channel():
     try:
@@ -2446,57 +2617,21 @@ async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAU
         return
     if not context.args:
         current = get_screenshot_channel()
-        try:
-            chat = await context.bot.get_chat(current)
-            title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(chat.id)
-            await update.message.reply_text(
-                f"📸 Current TASK Screenshot Channel: {title}\nID: {chat.id}\n\n"
-                "Usage: /set_screenshot_channel <CHANNEL_ID>\n"
-                "Example: /set_screenshot_channel -1001234567890"
-            )
-        except Exception as e:
-            await update.message.reply_text(
-                f"📸 Current TASK Screenshot Channel ID: {current}\n\n"
-                f"⚠️ Could not read channel details: {e}\n\n"
-                "Usage: /set_screenshot_channel <CHANNEL_ID>"
-            )
+        await update.message.reply_text(f"Current Screenshot Channel: {current}\n\nUsage: /set_screenshot_channel <channel_id or @username>\nExample: /set_screenshot_channel -1001234567890\nOR /set_screenshot_channel @s2e_screenshots_admin\n\nHow to get ID: Forward a message from channel to @userinfobot")
         return
-
-    raw = context.args[0].strip()
-    ch = int(raw) if raw.lstrip("-").isdigit() else raw
+    ch = context.args[0]
+    # Try to resolve @username to ID by sending test message
     try:
-        # Validate the destination before saving it. This prevents an invalid
-        # or unrelated value from silently becoming the screenshot destination.
-        chat = await context.bot.get_chat(ch)
-        if getattr(chat, "type", None) not in ("channel", "supergroup"):
-            await update.message.reply_text("❌ Please give the TASK Screenshots channel/group ID, not a user or bot ID.")
-            return
-
-        # For numeric IDs, persist as int so there is no username/ID ambiguity.
+        # Save as is (can be @username or -100...)
         save_channel_config(screenshot=ch, withdraw=None)
-        configured = get_screenshot_channel()
-        title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(chat.id)
-        await update.message.reply_text(
-            f"✅ TASK Screenshot Channel Set!\n\n"
-            f"Name: {title}\nID: {chat.id}\n\n"
-            "All daily-task screenshots will go ONLY to this channel with Approve/Reject buttons."
-        )
-
+        await update.message.reply_text(f"✅ Screenshot Channel Set: {ch}\n\nNow all task screenshots will go to this channel with Approve buttons!\nTest: Ask a user to submit a task")
+        # Test send
         try:
-            await context.bot.send_message(
-                chat_id=configured,
-                text="✅ S2E Bot Connected! TASK Screenshots will come here.\nApprove/Reject buttons are enabled."
-            )
+            await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Screenshots will come here!\n\nBulk Approve: Use /approve_task <task_number> in bot or click Approve All button")
         except Exception as e:
-            await update.message.reply_text(
-                f"⚠️ Channel was saved, but test message failed: {e}\n"
-                "Make the bot an admin in the TASK Screenshots channel with Post Messages permission."
-            )
+            await update.message.reply_text(f"Channel set but test send failed: {e}\nMake bot admin in channel with Post permission!")
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Could not set screenshot channel: {e}\n\n"
-            "Check the channel ID and make sure this bot is a member/admin of that channel."
-        )
+        await update.message.reply_text(f"Error {e}")
 
 async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -3110,7 +3245,7 @@ def main():
             try:
                 app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
                 app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
-                app.add_handler(CallbackQueryHandler(withdraw_cb_fixed, pattern='^withdraw$',), group=-2)
+                app.add_handler(CallbackQueryHandler(withdraw_cb, pattern='^withdraw$',), group=-2)
                 app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(support_plans_cb_fixed, pattern='^support_plans$',), group=-2)
@@ -3179,9 +3314,10 @@ def main():
                                 except:
                                     pass
                     if not task_id:
-                        # Do not guess a task. An admin photo without a pending
-                        # /set_task_image command must never overwrite another task's poster.
-                        return
+                        if scheduled_tasks_db:
+                            task_id = scheduled_tasks_db[-1]['id']
+                        else:
+                            return
                     file_id = None
                     if update.message.photo:
                         file_id = update.message.photo[-1].file_id
@@ -3194,8 +3330,7 @@ def main():
                     if task:
                         task['image_file_id'] = file_id
                         task['has_image'] = True
-                        print(f"FIXED task image: Task {task_id}: {task['title']} file_id {file_id[:20]}")
-                    save_data()
+                        print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
                     await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
                     try:
                         await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
@@ -3245,41 +3380,25 @@ def main():
                         screenshot_hashes.add(file_unique_id)
                     today = str(get_ist_today())
                     pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
-                    save_data()
                     if uid not in user_task_status:
                         user_task_status[uid] = {}
                     task_id_for_status = task_to_use.get('id', 0)
                     user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
-                    channel_sent = False
-                    chan = get_screenshot_channel()
-                    if chan:
+                    try:
+                        chan = SCREENSHOT_CHANNEL
+                        kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
+                        print(f"V56 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Important channel ki vachedi!")
+                    except Exception as e:
+                        print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan}")
                         try:
-                            kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                            await context.bot.send_photo(
-                                chat_id=chan,
-                                photo=file_id,
-                                caption=f"📸 TASK SCREENSHOT\nUser: {uid}\nTask: {task_to_use.get('task_number',1)} - {task_to_use.get('title','Daily')}\nReward: Rs{task_to_use.get('reward',5)}",
-                                reply_markup=kb_chan,
-                            )
-                            channel_sent = True
-                            print(f"FIXED: screenshot forwarded to configured channel {chan}")
-                        except Exception as e:
-                            print(f"Screenshot channel send failed for {chan}: {e}")
-                            # Fallback to document if Telegram rejects photo transport.
+                            await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)}")
+                        except:
                             try:
-                                await context.bot.send_document(
-                                    chat_id=chan,
-                                    document=file_id,
-                                    caption=f"📸 TASK SCREENSHOT | User {uid} | Task {task_to_use.get('task_number',1)}",
-                                    reply_markup=kb_chan,
-                                )
-                                channel_sent = True
-                                print(f"FIXED: screenshot forwarded as document to {chan}")
-                            except Exception as e2:
-                                print(f"Screenshot channel document fallback failed for {chan}: {e2}")
-                    else:
-                        print("Screenshot channel is not configured. Use /set_screenshot_channel <channel_id>")
+                                await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                            except Exception as e3:
+                                print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
                     for admin_id in ADMIN_ID_LIST:
                         try:
                             kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
@@ -3340,9 +3459,6 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
-            # FIX: /set_task_image existed in code but was never registered.
-            # Without this handler the admin's "send poster" flow cannot start reliably.
-            app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
             app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
             app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
             app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
@@ -3375,6 +3491,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_unban_cb, pattern="^admin_unban_"))
             app.add_handler(CallbackQueryHandler(wd_select_cb, pattern="^wd_select_"))
             app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
+            app.add_handler(CallbackQueryHandler(wd_edit_upi_cb, pattern="^wd_edit_upi$"))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
             app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
             app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
             app.add_handler(CallbackQueryHandler(support_plans_cb, pattern="^support_plans$"))
@@ -3395,6 +3513,8 @@ def main():
             app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
             app.add_handler(CommandHandler("deduct_balance", remove_balance_cmd))
             app.add_handler(CommandHandler("set_tasks", set_task_count_cmd))
+            app.add_handler(CommandHandler("set_screenshot_channel", set_screenshot_channel_cmd))
+            app.add_handler(CommandHandler("set_withdraw_channel", set_withdraw_channel_cmd))
             app.add_handler(CommandHandler("approve_all", approve_all_pending_cmd))
             app.add_handler(CommandHandler("list_pending", list_pending_cmd))
             app.add_handler(CommandHandler("add_week", add_week_cmd))
@@ -3413,11 +3533,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
-            app.add_handler(CommandHandler("set_screenshot_channel", set_screenshot_channel_cmd))
-            app.add_handler(CommandHandler("set_withdraw_channel", set_withdraw_channel_cmd))
 
             print("V56 Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
-            print(f"V58 ROUTING: TASK SCREENSHOTS -> {SCREENSHOT_CHANNEL}; WITHDRAW -> {WITHDRAW_CHANNEL}; JOIN/MAIN -> {JOIN_CHANNEL}. Screenshot routing is HARD-LOCKED to TASK SCREENSHOTS.")
             app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
         except Exception as e:
