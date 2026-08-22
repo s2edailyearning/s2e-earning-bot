@@ -2589,14 +2589,17 @@ def _load_channel_config():
         print(f"Channel config load error: {e}")
     return {}
 
+# IMPORTANT: These 3 routing functions intentionally ignore channel_config.json.
+# An old channel_config.json on Render was overriding the newly supplied IDs.
+# The three channels below are the single source of truth for this deployment.
 def get_screenshot_channel():
-    return _load_channel_config().get('screenshot_channel') or SCREENSHOT_CHANNEL_ID or SCREENSHOT_CHANNEL
+    return SCREENSHOT_CHANNEL
 
 def get_withdraw_channel():
-    return _load_channel_config().get('withdraw_channel') or WITHDRAW_CHANNEL_ID or WITHDRAW_CHANNEL
+    return WITHDRAW_CHANNEL
 
 def get_join_channel():
-    return _load_channel_config().get('join_channel') or JOIN_CHANNEL_ID or JOIN_CHANNEL
+    return JOIN_CHANNEL
 
 def get_join_channel_link():
     return _load_channel_config().get('join_link') or JOIN_CHANNEL_LINK or CHANNEL_LINK
@@ -2629,11 +2632,18 @@ async def set_screenshot_channel_cmd(update: Update, context: ContextTypes.DEFAU
     # Try to resolve @username to ID by sending test message
     try:
         # Save as is (can be @username or -100...)
-        save_channel_config(screenshot=ch, withdraw=None)
-        await update.message.reply_text(f"✅ Screenshot Channel Set: {ch}\n\nNow all task screenshots will go to this channel with Approve buttons!\nTest: Ask a user to submit a task")
-        # Test send
+        # Do not persist a runtime override. This deployment uses the fixed channel above.
+        fixed = get_screenshot_channel()
+        if str(ch) != str(fixed):
+            await update.message.reply_text(
+                f"⚠️ Screenshot routing is fixed to {fixed}.\n"
+                f"The supplied channel {ch} was NOT saved, so old channel_config.json cannot override it."
+            )
+        else:
+            await update.message.reply_text(f"✅ Screenshot Channel Confirmed: {fixed}\nAll task screenshots will go here with Approve/Reject buttons!")
+        # Test send to the actual fixed target.
         try:
-            await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Screenshots will come here!\n\nBulk Approve: Use /approve_task <task_number> in bot or click Approve All button")
+            await context.bot.send_message(chat_id=fixed, text="✅ S2E Bot Connected! Task screenshots will come here.")
         except Exception as e:
             await update.message.reply_text(f"Channel set but test send failed: {e}\nMake bot admin in channel with Post permission!")
     except Exception as e:
@@ -2647,10 +2657,10 @@ async def set_withdraw_channel_cmd(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(f"Current Withdraw Channel: {current}\nUsage: /set_withdraw_channel <channel_id or @username>\nExample: /set_withdraw_channel -1001234567890")
         return
     ch = context.args[0]
-    save_channel_config(screenshot=None, withdraw=ch)
-    await update.message.reply_text(f"✅ Withdraw Channel Set: {ch}\nAll withdraw requests will go here!")
+    fixed = get_withdraw_channel()
+    await update.message.reply_text(f"✅ Withdraw Channel is fixed to {fixed}.\nSupplied value: {ch} (not persisted)")
     try:
-        await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! Withdraw requests will come here!")
+        await context.bot.send_message(chat_id=fixed, text="✅ S2E Bot Connected! Withdraw requests will come here!")
     except Exception as e:
         await update.message.reply_text(f"Set but test failed: {e} - Make bot admin!")
 
@@ -3269,7 +3279,7 @@ def main():
 
     print("V56 Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     load_data()
-    print(f"EFFECTIVE CHANNELS: SCREENSHOT={get_screenshot_channel()} WITHDRAW={get_withdraw_channel()} JOIN={get_join_channel()}")
+    print(f"EFFECTIVE CHANNELS (FIXED): SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
         print('Keep-alive started V56 FINAL')
