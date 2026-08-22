@@ -2390,6 +2390,17 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
 SCREENSHOT_CHANNEL_ID = None  # Set via /set_screenshot_channel
 WITHDRAW_CHANNEL_ID = None    # Set via /set_withdraw_channel
 
+def _load_channel_config():
+    """Load persisted channel routing safely after every restart/deploy."""
+    try:
+        if os.path.exists("channel_config.json"):
+            with open("channel_config.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"Channel config load error: {e}")
+    return {}
+
 def get_screenshot_channel():
     # V59 FINAL: screenshot routing has ONE source of truth.
     # /set_screenshot_channel updates channel_config.json and that value is
