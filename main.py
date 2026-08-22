@@ -1003,7 +1003,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         file_id = photo.file_id
         context.user_data['promo_screenshot_file_id'] = file_id
         context.user_data['promo_screenshot_campaign_id'] = campaign_id
-        await update.message.reply_text("Screenshot received for Promo Campaign! Now type how many views you got: Example 150")
+        await update.message.reply_text("Screenshot received for Promo Campaign! Now type views count Example 150")
         return PROMO_DETAILS
     current, next_task = get_current_scheduled_task_with_interval()
     if not current:
@@ -1026,21 +1026,31 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][0] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
-        await update.message.reply_text(f"Screenshot Received for {default_task.get('title','Daily Task')}! Pending Admin Verification! Reward: Rs{default_task.get('reward',5)} V38 FIX", reply_markup=main_menu())
+        await update.message.reply_text("Screenshot Received for default task! Pending Admin Verification! V41", reply_markup=main_menu())
+        try:
+            chan = SCREENSHOT_CHANNEL
+            if chan:
+                try:
+                    kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK SUBMISSION V41 DEFAULT User {uid} Reward {default_task.get('reward',5)}", reply_markup=kb_chan)
+                    print(f"V41 forwarded to SCREENSHOT_CHANNEL {chan}")
+                except Exception as e:
+                    print(f"V41 channel err {e}")
+        except:
+            pass
         for admin_id in ADMIN_ID_LIST:
             try:
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Approve Rs{default_task.get('reward',5)}", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK SUBMISSION V38 FIX DEFAULT User {users_db.get(uid,{}).get('name')} ID {uid} Task {default_task.get('title')} Reward Rs{default_task.get('reward',5)}", reply_markup=kb)
-                print(f"V38 forwarded default task to admin {admin_id}")
-            except Exception as e:
-                print(f"V38 admin forward err {e}")
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V41 DEFAULT User {uid}", reply_markup=kb)
+            except:
+                pass
         return ConversationHandler.END
     now = get_ist_time()
     if now > current['close_time_obj']:
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][current['id']] = {'status': 'missed', 'missed_at': get_ist_now(), 'task_number': current['task_number']}
-        await update.message.reply_text(f"Time over! Task {current['task_number']} closed at {current['close_time']}!", reply_markup=main_menu())
+        await update.message.reply_text("Time over! Task closed!", reply_markup=main_menu())
         return ConversationHandler.END
     photo = update.message.photo[-1]
     file_id = photo.file_id
@@ -1051,9 +1061,9 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         warnings_db[uid]['count'] += 1
         if warnings_db[uid]['count'] >= 3:
             banned_users.add(uid)
-            await update.message.reply_text("BANNED! 3 Warnings for same screenshot!")
+            await update.message.reply_text("BANNED! 3 Warnings!")
             return ConversationHandler.END
-        await update.message.reply_text(f"WARNING {warnings_db[uid]['count']}/3 - Same Screenshot already used! Use original!")
+        await update.message.reply_text("WARNING Same Screenshot used!")
         return ConversationHandler.END
     task = current
     screenshot_hashes.add(file_unique_id)
@@ -1062,14 +1072,24 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         user_task_status[uid] = {}
     user_task_status[uid][current['id']] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
     next_time_str = next_task['open_time'] if next_task else 'tomorrow'
-    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! Reward Rs{task.get('reward',5)} Next Task at {next_time_str} V38", reply_markup=main_menu())
+    await update.message.reply_text(f"Screenshot Received for Task {current['task_number']}! Pending Admin Verification! Reward Rs{task.get('reward',5)} V41", reply_markup=main_menu())
+    try:
+        chan = SCREENSHOT_CHANNEL
+        if chan:
+            try:
+                kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+                await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V41 Task {current['task_number']} User {uid}", reply_markup=kb_chan)
+                print(f"V41 forwarded to SCREENSHOT_CHANNEL {chan}")
+            except Exception as e:
+                print(f"V41 channel err {e}")
+    except:
+        pass
     for admin_id in ADMIN_ID_LIST:
         try:
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"Approve Rs{task.get('reward',5)}", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK SUBMISSION V38 Task {current['task_number']} {current['open_time']}->{current['close_time']} User {users_db.get(uid,{}).get('name')} ID {uid} Task {task.get('title')} Reward Rs{task.get('reward',5)}", reply_markup=kb)
-            print(f"V38 forwarded scheduled task to admin {admin_id}")
-        except Exception as e:
-            print(f"V38 admin forward err {e}")
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"NEW TASK V41 Task {current['task_number']} User {uid}", reply_markup=kb)
+        except:
+            pass
     return ConversationHandler.END
 
 async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1510,16 +1530,28 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     net=amount-fee
     upi = users_db.get(uid,{}).get('upi')
     if not upi:
-        await q.message.reply_text("❌ UPI not set! Please set UPI via /start registration again!", reply_markup=main_menu())
+        await q.message.reply_text("UPI not set! Please set UPI via /start registration again!", reply_markup=main_menu())
         return
     withdraw_requests[uid]={'amount':amount, 'fee':fee, 'net':net, 'upi':upi, 'status':'processing', 'date':str(get_ist_today())}
     withdraw_done_date[uid]=str(get_ist_today())
-    await q.message.reply_text(f"✅ Withdraw request submitted!\n\nAmount: Rs{amount}\nFee: Rs{fee}\nNet: Rs{net}\nUPI: {upi}\nStatus: Processing\n\nAdmin will approve within 24 hours!", reply_markup=main_menu())
+    await q.message.reply_text("Withdraw request submitted! Admin will approve within 24 hours! V41", reply_markup=main_menu())
+    try:
+        w_chan = WITHDRAW_CHANNEL
+        if w_chan:
+            try:
+                kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
+                await context.bot.send_message(chat_id=w_chan, text=f"NEW Withdraw V41 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb_chan)
+                print(f"V41 forwarded withdraw to WITHDRAW_CHANNEL {w_chan}")
+            except Exception as e:
+                print(f"V41 withdraw channel err {e}")
+    except:
+        pass
     for admin_id in ADMIN_ID_LIST:
         try:
-            kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"wd_admin_reject_{uid}")]])
-            await context.bot.send_message(chat_id=admin_id, text=f"💸 NEW Withdraw Request\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nAmount: Rs{amount} Fee: Rs{fee} Net: Rs{net}\nUPI: {upi}\nBalance: Rs{get_balance(uid)}", reply_markup=kb)
-        except: pass
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"wd_admin_approve_{uid}"), InlineKeyboardButton("Reject", callback_data=f"wd_admin_reject_{uid}")]])
+            await context.bot.send_message(chat_id=admin_id, text=f"NEW Withdraw V41 User {uid} Amount Rs{amount} Fee Rs{fee} Net Rs{net} UPI {upi}", reply_markup=kb)
+        except:
+            pass
 
 async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -3059,68 +3091,68 @@ async def admin_reject_new_plan_cb(update, context):
 def main():
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V40 - Flask PORT Fix + app_flask Fix + Conflict Fix V40")
+    print("S2E Bot FINAL V41 - Flask PORT Fix + app_flask Fix + Conflict Fix V41")
     print("============================================================")
-    # V40 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
+    # V41 FIX: Flask IMMEDIATE start with correct app_flask + PORT env
     try:
         from flask import Flask
         flask_app = Flask(__name__)
         @flask_app.route('/')
         def home():
-            return "S2E Bot V40 Running - Flask Immediate Fix - No Ports Error"
+            return "S2E Bot V41 Running - Flask Immediate Fix - No Ports Error"
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V40 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
+        print(f"V41 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')} - Before sleep - Using flask_app")
         def run_flask():
             try:
-                print(f"V40 Flask thread running on 0.0.0.0:{flask_port}")
+                print(f"V41 Flask thread running on 0.0.0.0:{flask_port}")
                 flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V40 Flask immediate err {e}")
+                print(f"V41 Flask immediate err {e}")
                 try:
                     # Fallback to app_flask if exists
                     app_flask.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
                 except Exception as e2:
-                    print(f"V40 Flask fallback err {e2}")
+                    print(f"V41 Flask fallback err {e2}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V40 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
+        print(f"V41 Flask thread started IMMEDIATELY on port {flask_port} - Render port scan will succeed in 5 sec")
         time.sleep(3)
     except Exception as e:
-        print(f"V40 Flask immediate setup err {e}")
+        print(f"V41 Flask immediate setup err {e}")
         import traceback
         traceback.print_exc()
 
-    # V40 FIX: Delete webhook BEFORE sleep
-    print("V40 Deleting webhook BEFORE sleep - to kill old instance")
+    # V41 FIX: Delete webhook BEFORE sleep
+    print("V41 Deleting webhook BEFORE sleep - to kill old instance")
     try:
         import urllib.request
         for i in range(3):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V40 Pre-sleep Webhook delete {i+1}/3")
+                print(f"V41 Pre-sleep Webhook delete {i+1}/3")
                 time.sleep(1)
             except Exception as e:
-                print(f"V40 Pre-sleep delete {i+1} err {e}")
+                print(f"V41 Pre-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V40 Pre-sleep webhook outer err {e}")
+        print(f"V41 Pre-sleep webhook outer err {e}")
 
-    print("Waiting 120 sec for old instance to die... V40 Flask already started")
+    print("Waiting 120 sec for old instance to die... V41 Flask already started")
     time.sleep(120)
-    print("120 sec done! Deleting webhook 5 times V40 after sleep")
+    print("120 sec done! Deleting webhook 5 times V41 after sleep")
     try:
         import urllib.request
         for i in range(5):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V40 Post-sleep Webhook delete {i+1}/5 via urllib")
+                print(f"V41 Post-sleep Webhook delete {i+1}/5 via urllib")
                 time.sleep(2)
             except Exception as e:
-                print(f"V40 Post-sleep delete {i+1} err {e}")
+                print(f"V41 Post-sleep delete {i+1} err {e}")
     except Exception as e:
-        print(f"V40 Post-sleep webhook outer err {e}")
+        print(f"V41 Post-sleep webhook outer err {e}")
 
-    print("Keep-alive started V40 - Flask already running")
-    print("Starting bot V40 with correct handlers - No Conflict expected")
+    print("Keep-alive started V41 - Flask already running")
+    print("Starting bot V41 with correct handlers - No Conflict expected")
 
     for attempt in range(1, 101):
         try:
@@ -3258,14 +3290,14 @@ def main():
             except Exception as e:
                 print(f"V38 photo handlers err {e}")
             
-            # V40 FIX: Add error handlers to suppress Conflict spam
+            # V41 FIX: Add error handlers to suppress Conflict spam
             try:
                 application.add_error_handler(error_handler)
-                print("V40 Added error_handler to suppress Conflict")
+                print("V41 Added error_handler to suppress Conflict")
             except Exception as e:
-                print(f"V40 error_handler add err {e}")
+                print(f"V41 error_handler add err {e}")
             
-            print(f"V40 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
+            print(f"V41 Bot handlers registered including ConversationHandlers + Error Handler, polling...")
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
