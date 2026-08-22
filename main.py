@@ -3292,11 +3292,6 @@ async def list_support_plans_cmd(update, context):
 async def remove_plan_cmd(update, context):
     return await remove_support_plan_cmd_v2(update, context)
 
-# Compatibility alias: the handler below registers /remove_support_plan.
-# Keep both command names working and avoid NameError during startup.
-async def remove_support_plan_cmd(update, context):
-    return await remove_support_plan_cmd_v2(update, context)
-
 async def set_plan_image_cmd(update, context):
     return await set_plan_image_cmd_v2(update, context)
 
@@ -3680,7 +3675,7 @@ def main():
             app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
             app.add_handler(CommandHandler("list_support_plans", list_support_plans_cmd))
             app.add_handler(CommandHandler("add_support_plan", add_support_plan_cmd))
-            app.add_handler(CommandHandler("remove_support_plan", remove_support_plan_cmd))
+            app.add_handler(CommandHandler("remove_support_plan", remove_support_plan_cmd_v2))
             app.add_handler(CommandHandler("bacup", backup_cmd))
             app.add_handler(CommandHandler("add_admin", add_admin_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
