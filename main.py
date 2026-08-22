@@ -1051,7 +1051,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
         await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Upload screenshot button fix!", reply_markup=main_menu())
         try:
-            chan = SCREENSHOT_CHANNEL
+            chan = get_screenshot_channel() or SCREENSHOT_CHANNEL
             if chan:
                 try:
                     kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
@@ -1088,7 +1088,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             if update.message.photo or update.message.document:
                 file_id = (update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id)
                 try:
-                    chan = SCREENSHOT_CHANNEL
+                    chan = get_screenshot_channel() or SCREENSHOT_CHANNEL
                     await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {update.effective_user.id} Fallback")
                 except:
                     try:
@@ -2913,13 +2913,13 @@ async def admin_missed_toggle_cb(update, context):
 
 async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels Status\nTask: {SCREENSHOT_CHANNEL}\nWithdraw: {WITHDRAW_CHANNEL}\nJoin: {JOIN_CHANNEL}\nActive: Yes Total:3")
+        await update.message.reply_text(f"📢 Channels Status\nTask: {get_screenshot_channel() or SCREENSHOT_CHANNEL}\nWithdraw: {get_withdraw_channel() or WITHDRAW_CHANNEL}\nJoin: {JOIN_CHANNEL}\nActive: Yes Total:3")
     except Exception as e:
         print(e)
 
 async def channels_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text(f"📢 Channels List - 3 Channels\n1. Task: {SCREENSHOT_CHANNEL}\n2. Withdraw: {WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3\nLink: https://t.me/S2E_Daily_Earning")
+        await update.message.reply_text(f"📢 Channels List - 3 Channels\n1. Task: {get_screenshot_channel() or SCREENSHOT_CHANNEL}\n2. Withdraw: {get_withdraw_channel() or WITHDRAW_CHANNEL}\n3. Join: {JOIN_CHANNEL}\nTotal: 3\nLink: https://t.me/S2E_Daily_Earning")
     except Exception as e:
         print(e)
 
@@ -3386,7 +3386,7 @@ def main():
                     user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
-                        chan = SCREENSHOT_CHANNEL
+                        chan = get_screenshot_channel() or SCREENSHOT_CHANNEL
                         kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
                         await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
                         print(f"V56 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Important channel ki vachedi!")
@@ -3469,6 +3469,7 @@ def main():
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
+            app.add_handler(CallbackQueryHandler(daily_upload_screenshot_cb, pattern="^daily_upload_screenshot$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
