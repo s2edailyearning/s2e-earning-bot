@@ -4575,6 +4575,16 @@ def main():
                 ),
                 group=-10
             )
+            # JOIN VERIFICATION FIX: the callback handler was missing from the
+            # application registration, so tapping "I Joined - Check Again"
+            # produced no response even when the user had joined.
+            app.add_handler(
+                CallbackQueryHandler(
+                    check_joined_cb,
+                    pattern=r"^check_joined$"
+                ),
+                group=-9
+            )
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
