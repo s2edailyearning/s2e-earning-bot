@@ -3039,8 +3039,38 @@ support_plans_db = [
 awaiting_plan_image_admins = set()
 awaiting_plan_payment_adminless = set()
 
+
+# === FORCE NEW PLANS - 60 DAYS ALL - OVERWRITE OLD DB PLANS ===
+def force_update_plans_to_new():
+    global support_plans_db
+    new_plans = [
+        {"id": 1, "name": "Starter", "price": 499, "validity_days": 60, "duration": 60, "daily_task_limit": 5, "daily_limit": 5, "daily_earning_min": 30, "daily_earning_max": 60, "total_earning_cap": 900, "earnings_limit": 900, "users": 1, "desc": "₹499 | 60 DAYS | 5 TASKS/DAY | ₹30-₹60/DAY | MAX ₹900"},
+        {"id": 2, "name": "Pro", "price": 1999, "validity_days": 60, "duration": 60, "daily_task_limit": 10, "daily_limit": 10, "daily_earning_min": 50, "daily_earning_max": 80, "total_earning_cap": 4400, "earnings_limit": 4400, "users": 2, "desc": "₹1999 | 60 DAYS | 10 TASKS/DAY | ₹50-₹80/DAY | MAX ₹4400 | TEAM COMMISSION"},
+        {"id": 3, "name": "Elite", "price": 4999, "validity_days": 60, "duration": 60, "daily_task_limit": 15, "daily_limit": 15, "daily_earning_min": 200, "daily_earning_max": 400, "total_earning_cap": 15000, "earnings_limit": 15000, "users": 4, "desc": "₹4999 | 60 DAYS | 15 TASKS/DAY | ₹200-₹400/DAY | MAX ₹15000"},
+        {"id": 4, "name": "VIP", "price": 9999, "validity_days": 60, "duration": 60, "daily_task_limit": 20, "daily_limit": 20, "daily_earning_min": 500, "daily_earning_max": 700, "total_earning_cap": 35000, "earnings_limit": 35000, "users": 6, "desc": "₹9999 | 60 DAYS | 20 TASKS/DAY | ₹500-₹700/DAY | MAX ₹35000"},
+    ]
+    support_plans_db = new_plans
+    try:
+        save_data()
+        print(f"FORCE UPDATED PLANS: {len(support_plans_db)} plans set to 60 DAYS ALL")
+    except Exception as e:
+        print(f"Force update save failed: {e}")
+
+
+
 def normalize_support_plans():
     global support_plans_db
+    # Force new plans if old 199/499/1999 detected
+    try:
+        has_old = any(int(p.get("price",0)) in (199,499,1999) and int(p.get("id",0)) <=3 for p in support_plans_db)
+        if has_old or len(support_plans_db) < 4:
+            force_update_plans_to_new()
+            return
+    except:
+        pass
+    # original logic below
+    _old_global = support_plans_db
+    
     defaults = {
         1: {"id": 1, "name": "Starter", "price": 499, "validity_days": 60, "daily_task_limit": 5, "daily_earning_min": 30, "daily_earning_max": 60, "total_earning_cap": 900, "desc": "₹499 | 60 DAYS | 5 TASKS/DAY | ₹30-₹60/DAY | MAX ₹900"},
         2: {"id": 2, "name": "Pro", "price": 1999, "validity_days": 60, "daily_task_limit": 10, "daily_earning_min": 50, "daily_earning_max": 80, "total_earning_cap": 4400, "desc": "₹1999 | 60 DAYS | 10 TASKS/DAY | ₹50-₹80/DAY | MAX ₹4400"},
@@ -4550,6 +4580,7 @@ def main():
     _db_init()
     load_data()
     normalize_support_plans()
+    force_update_plans_to_new()
     save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
