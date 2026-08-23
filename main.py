@@ -855,27 +855,71 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
-async def check_user_in_channel(user_id, context):
-    """Return True only when the user is currently a member of the configured join channel.
-    The channel ID saved by /set_join_channel is used here. The bot must be an administrator in the channel for get_chat_member() to work.
-    Main/support admins bypass this check. On API errors we fail closed so a user
-    cannot continue with the menu while membership cannot be verified.
+def _join_channel_targets():
+    """Return all usable Telegram chat identifiers for membership verification.
+    Prefer the configured numeric ID, then the public @username from the join link.
     """
+    targets = []
     try:
-        uid = int(user_id)
-        if is_any_admin(uid):
-            return True
-        join_chat = get_join_channel()
-        member = await context.bot.get_chat_member(chat_id=join_chat, user_id=uid)
-        status = getattr(member, "status", "")
-        if status in ("member", "administrator", "creator"):
-            return True
-        if status == "restricted" and bool(getattr(member, "is_member", False)):
-            return True
-        return False
-    except Exception as e:
-        print(f"Membership check failed for {user_id} in {get_join_channel()}: {e}")
-        return False
+        configured = get_join_channel()
+        if configured not in (None, ""):
+            targets.append(configured)
+    except Exception:
+        pass
+    try:
+        link = str(get_join_channel_link() or "").strip()
+        m = re.match(r"^https?://t\.me/([A-Za-z0-9_]+)(?:[/?#].*)?$", link)
+        if m:
+            username = "@" + m.group(1)
+            if username not in targets:
+                targets.append(username)
+    except Exception:
+        pass
+    # Always keep the hardcoded public channel as a final fallback.
+    try:
+        if CHANNEL_LINK:
+            m = re.match(r"^https?://t\.me/([A-Za-z0-9_]+)", str(CHANNEL_LINK))
+            if m:
+                username = "@" + m.group(1)
+                if username not in targets:
+                    targets.append(username)
+    except Exception:
+        pass
+    return targets
+
+
+async def check_user_in_channel(user_id, context):
+    """Verify current membership in the configured join channel.
+
+    Uses the saved numeric channel ID first and, for public channels, also tries
+    the @username from the configured join link. This avoids false 'not joined'
+    results when one identifier is stale/misconfigured. Admins bypass the gate.
+    """
+    uid = int(user_id)
+    if is_any_admin(uid):
+        return True
+
+    targets = _join_channel_targets()
+    last_error = None
+
+    for chat_id in targets:
+        try:
+            member = await context.bot.get_chat_member(chat_id=chat_id, user_id=uid)
+            status = getattr(member, "status", "")
+            is_member = bool(getattr(member, "is_member", False))
+            if status in ("member", "administrator", "creator"):
+                print(f"JOIN CHECK OK user={uid} chat={chat_id} status={status}")
+                return True
+            if status == "restricted" and is_member:
+                print(f"JOIN CHECK OK user={uid} chat={chat_id} status=restricted,is_member=True")
+                return True
+            print(f"JOIN CHECK NOT MEMBER user={uid} chat={chat_id} status={status} is_member={is_member}")
+        except Exception as e:
+            last_error = e
+            print(f"JOIN CHECK ERROR user={uid} chat={chat_id}: {e}")
+
+    print(f"JOIN CHECK FAILED user={uid} targets={targets} last_error={last_error}")
+    return False
 
 def join_required_markup():
     return InlineKeyboardMarkup([
@@ -943,21 +987,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return NAME
 
 async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verify the channel and open the user portal without creating duplicate prompts."""
     q = update.callback_query
+    if not q:
+        return ConversationHandler.END
     try:
         await q.answer()
     except Exception:
         pass
+
     uid = q.from_user.id
+
     if await check_user_in_channel(uid, context):
         if uid in users_db:
-            await q.message.reply_text(
-                f"✅ Channel membership verified. Welcome back {users_db[uid].get('name','User')}!\n"
-                f"Balance: ₹{get_balance(uid)}", reply_markup=main_menu())
+            name = users_db[uid].get("name", "User")
+            text = (
+                f"✅ Channel membership verified. Welcome back {name}!\n"
+                f"Balance: ₹{get_balance(uid)}"
+            )
+            try:
+                await q.message.edit_text(text, reply_markup=main_menu())
+            except Exception:
+                await q.message.reply_text(text, reply_markup=main_menu())
             return ConversationHandler.END
-        await q.message.reply_text("✅ Channel membership verified. What is your Name?")
+
+        text = "✅ Channel membership verified!\n\nPlease continue your registration by entering your Name."
+        try:
+            await q.message.edit_text(text)
+        except Exception:
+            await q.message.reply_text(text)
         return NAME
-    await require_join_message(q.message)
+
+    # Do not send another separate join message on every tap.
+    # Replace the current verification message instead.
+    text = (
+        f"🔒 Please join {get_join_channel()} first.\n\n"
+        "After joining, tap **I Joined - Check Again**.\n"
+        "You must remain in the channel to use the bot menu."
+    )
+    try:
+        await q.message.edit_text(
+            text,
+            reply_markup=join_required_markup(),
+            parse_mode="Markdown",
+        )
+    except Exception:
+        await require_join_message(q.message)
     return ConversationHandler.END
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
