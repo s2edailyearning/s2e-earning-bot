@@ -1,6 +1,7 @@
 import warnings
 warnings.filterwarnings('ignore')
 import os, re, threading, json, asyncio
+from urllib.parse import quote
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
@@ -2238,13 +2239,20 @@ async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def get_contact_username():
     return str(globals().get("CONTACT_USERNAME") or SUPPORT_USERNAME).strip()
 
-def get_contact_url():
-    # Telegram user-ID deep link opens the admin directly and avoids "Username not found".
+def get_contact_url(message_text=None):
+    # Always use the manually configured public Telegram username.
+    # This avoids opening the wrong Telegram account when CONTACT_ADMIN_ID is stale.
+    username=get_contact_username().lstrip("@").strip()
+    if username:
+        base=f"https://t.me/{username}"
+        if message_text:
+            return base + "?text=" + quote(str(message_text), safe="")
+        return base
+    # Fallback only when no username has been configured.
     try:
         return f"tg://user?id={int(CONTACT_ADMIN_ID)}"
     except Exception:
-        username=get_contact_username().lstrip("@")
-        return f"https://t.me/{username}" if username else CHANNEL_LINK
+        return CHANNEL_LINK
 
 async def set_contact_username_cmd(update, context):
     if not is_admin(update.effective_user.id):
@@ -2264,8 +2272,10 @@ async def set_contact_username_cmd(update, context):
 async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     username=get_contact_username()
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Message Admin", url=get_contact_url())],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
-    await q.message.reply_text(f"📞 CONTACT US\n\nAdmin: {username}\n\nTap below to send a private message directly to Admin.", reply_markup=kb)
+    # Pre-fill a simple message after redirecting to the configured admin username.
+    contact_message="Hello Admin, I need help with my S2E account."
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Message Admin", url=get_contact_url(contact_message))],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+    await q.message.reply_text(f"📞 CONTACT US\n\nAdmin: {username}\n\nTap below to open Admin chat and send your message.", reply_markup=kb)
 
 async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query
