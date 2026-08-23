@@ -417,6 +417,25 @@ NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REA
 
 users_db = {}
 referrals_db = {}
+
+def get_user_record(uid):
+    """Return a registered user record regardless of whether persistence restored the key as int or string."""
+    try:
+        uid_int = int(uid)
+    except Exception:
+        uid_int = uid
+    user = users_db.get(uid_int)
+    if user is None:
+        user = users_db.get(str(uid_int))
+        if user is not None and uid_int != str(uid_int):
+            users_db[uid_int] = user
+            try: users_db.pop(str(uid_int), None)
+            except Exception: pass
+    return user if isinstance(user, dict) else {}
+
+def has_registered_user(uid):
+    user = get_user_record(uid)
+    return bool(user.get("name"))
 tasks_db = {}
 daily_done = {}
 bonus_balance = {}
@@ -788,7 +807,7 @@ def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
         [InlineKeyboardButton("📅 Daily Task", callback_data="daily"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
-        [InlineKeyboardButton("🧾 Withdraw History", callback_data="withdraw_history"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
+        [InlineKeyboardButton("🧾 Withdraw History", callback_data="withdraw_history")],
         [InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks"), InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop")],
         [InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled"), InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],
         [InlineKeyboardButton("👤 My Details", callback_data="my_details"), InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks")],
@@ -830,8 +849,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_id = int(args[0])
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
-    if uid in users_db:
-        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
+    user = get_user_record(uid)
+    if user.get("name"):
+        await update.message.reply_text(f"Welcome back {user.get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -847,8 +867,9 @@ async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_joined = await check_user_in_channel(uid, context)
     print(f"V56 check_joined_cb: User {uid} is_joined {is_joined} - ALWAYS True - Fix Not joined yet! FINAL!")
     # V56 FIX: Always allow - Show Joined! Welcome!
-    if uid in users_db:
-        await q.message.reply_text(f"✅ V56 Thanks for joining! Welcome back {users_db[uid].get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
+    user = get_user_record(uid)
+    if user.get("name"):
+        await q.message.reply_text(f"✅ V56 Thanks for joining! Welcome back {user.get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
         return ConversationHandler.END
     await q.message.reply_text("✅ V56 Thanks for joining! What is your Name? Join bypass - No Not joined error! FINAL!")
     return NAME
@@ -964,7 +985,8 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PROFESSION
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
-    users_db[uid]['reg_date']=get_ist_today()
+    users_db[uid]['reg_date']=str(get_ist_today())
+    save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -1029,7 +1051,7 @@ async def admin_view_pending_cb(update: Update, context: ContextTypes.DEFAULT_TY
     msg = f"📋 Pending Daily Tasks - {len(pending_daily)}:\n\n"
     for uid, data in list(pending_daily.items())[:20]:
         task = data.get('task',{})
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} - Task {task.get('task_number','?')} {task.get('title','?')} Rs{task.get('reward',5)} /approve {uid}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
@@ -1042,7 +1064,7 @@ async def admin_view_withdraw_cb(update: Update, context: ContextTypes.DEFAULT_T
         return
     msg = f"💰 Pending Withdraw - {len(pending_wd)}:\n\n"
     for uid, data in list(pending_wd.items())[:20]:
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} - Rs{data.get('amount')} Fee Rs{data.get('fee')} Net Rs{data.get('net')} UPI {data.get('upi')}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
@@ -1084,7 +1106,7 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     msg = f"🚫 Banned Users - {len(banned_users)}:\n\n"
     for uid in list(banned_users)[:20]:
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} /unban {uid}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
@@ -1492,7 +1514,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             chan = get_screenshot_channel()
             if chan:
                 try:
-                    user_name = users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')
+                    user_name = get_user_record(uid).get('name', update.effective_user.full_name or 'Unknown')
                     kb_chan = InlineKeyboardMarkup([
                         [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_daily_{uid}"),
                          InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_daily_{uid}")],
@@ -1562,7 +1584,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Campaign not found!", reply_markup=main_menu())
         return ConversationHandler.END
     earning = int(views * campaign['per_view_member_earning'] / 100)
-    submission = {'uid': uid, 'campaign_id': campaign_id, 'views': views, 'earning': earning, 'file_id': file_id, 'submitted_at': get_ist_now(), 'status': 'pending', 'user_name': users_db.get(uid,{}).get('name','Unknown')}
+    submission = {'uid': uid, 'campaign_id': campaign_id, 'views': views, 'earning': earning, 'file_id': file_id, 'submitted_at': get_ist_now(), 'status': 'pending', 'user_name': get_user_record(uid).get('name','Unknown')}
     campaign['screenshots'].append(submission)
     campaign['total_views'] += views
     campaign['members_joined'].add(uid)
@@ -1571,7 +1593,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
     for admin_id in ADMIN_ID_LIST:
         try:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Approve Rs{earning} for {views} views", callback_data=f"promo_approve_{uid}_{campaign_id}_{views}"), InlineKeyboardButton("❌ Reject", callback_data=f"promo_reject_{uid}_{campaign_id}")]])
-            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"🏪 NEW PROMO SUBMISSION!\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nCampaign {campaign_id}: {campaign['shop_name']} Views: {views} Earning: Rs{earning}", reply_markup=kb)
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"🏪 NEW PROMO SUBMISSION!\nUser {get_user_record(uid).get('name')} ID {uid}\nCampaign {campaign_id}: {campaign['shop_name']} Views: {views} Earning: Rs{earning}", reply_markup=kb)
         except: pass
 
         # === CHANNEL METHOD - Forward to Screenshot Channel ===
@@ -1585,7 +1607,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")]
                 ]
                 mk = InlineKeyboardMarkup(kb)
-                cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
+                cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {get_user_record(uid).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
                 try:
                     if 'file_id' in locals() and file_id:
                         await context.bot.send_photo(chat_id=screenshot_ch, photo=file_id, caption=cap, reply_markup=mk)
@@ -1745,7 +1767,7 @@ async def pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📋 Pending Daily Tasks - {len(pending_daily)}:\n\n"
     for uid, data in list(pending_daily.items())[:20]:
         task = data.get('task',{})
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} - Task {task.get('task_number','?')} {task.get('title','?')} /approve {uid}\n"
     await update.message.reply_text(msg[:4000])
 
@@ -1942,7 +1964,7 @@ async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for uid, tasks_dict in skip_db.items():
             cnt = len([tid for tid, data in tasks_dict.items() if (data.get('status') if isinstance(data, dict) else data) == 'skipped'])
             if cnt > 0:
-                name = users_db.get(uid,{}).get('name','Unknown')
+                name = get_user_record(uid).get('name','Unknown')
                 msg += f"👤 {uid} {name} - Skipped {cnt} tasks /skipped {uid}\n"
                 total += cnt
         msg += f"\nTotal skipped: {total}"
@@ -1955,7 +1977,7 @@ async def skipped_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id not in skip_db:
         await update.message.reply_text(f"User {target_id} has no skipped tasks!")
         return
-    msg = f"⏭️ Skipped tasks for {target_id} {users_db.get(target_id,{}).get('name','')}:\n\n"
+    msg = f"⏭️ Skipped tasks for {target_id} {get_user_record(target_id).get('name','')}:\n\n"
     for tid, data in skip_db[target_id].items():
         if (data.get('status') if isinstance(data, dict) else data) == 'skipped':
             msg += f"Task {data.get('task_number', tid)} {data.get('title','?')} Reason: {data.get('reason','?')}\n"
@@ -1973,7 +1995,7 @@ async def warnings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = f"⚠️ Warnings - {len(warnings_db)}:\n"
     for uid, data in warnings_db.items():
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} - {data.get('count')}/3 /unban {uid}\n"
     await update.message.reply_text(msg[:4000])
 
@@ -1989,7 +2011,7 @@ async def banned_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     msg = f"🚫 Banned - {len(banned_users)}:\n"
     for uid in list(banned_users)[:20]:
-        name = users_db.get(uid,{}).get('name','Unknown')
+        name = get_user_record(uid).get('name','Unknown')
         msg += f"👤 {uid} {name} /unban {uid}\n"
     await update.message.reply_text(msg[:4000])
 
@@ -2014,7 +2036,7 @@ async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for admin_id in ADMIN_ID_LIST:
         try:
             kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Approve {plan_type} for {uid}", callback_data=f"admin_approve_plan_{uid}_{plan_type}"), InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_plan_{uid}")]])
-            await context.bot.send_message(chat_id=admin_id, text=f"💎 Plan Request\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nPlan: {plan_type}\nUPI: {users_db.get(uid,{}).get('upi')}\nMobile: {users_db.get(uid,{}).get('mobile')}", reply_markup=kb)
+            await context.bot.send_message(chat_id=admin_id, text=f"💎 Plan Request\nUser {get_user_record(uid).get('name')} ID {uid}\nPlan: {plan_type}\nUPI: {get_user_record(uid).get('upi')}\nMobile: {users_db.get(uid,{}).get('mobile')}", reply_markup=kb)
         except: pass
 
 
@@ -2051,7 +2073,7 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     uid=q.from_user.id
-    user=users_db.get(uid,{})
+    user=get_user_record(uid)
     plan=_get_user_plan_record(uid)
     total_earned=get_balance(uid)
     joined=user.get('joined') or user.get('reg_date') or 'N/A'
@@ -2172,7 +2194,7 @@ async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     fee = int(amount * PLATFORM_FEE_PERCENT / 100)
     net = amount - fee
-    upi = users_db.get(uid, {}).get('upi', 'Not set')
+    upi = get_user_record(uid).get('upi', 'Not set')
     context.user_data['withdraw_amount'] = amount
 
     msg = (
@@ -2258,7 +2280,7 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("❌ Withdrawal amount is no longer available for your current balance.", reply_markup=main_menu())
         return
 
-    upi = users_db.get(uid, {}).get('upi')
+    upi = get_user_record(uid).get('upi')
     if not upi:
         await q.message.reply_text("❌ UPI not set. Please set your UPI first.", reply_markup=main_menu())
         return
@@ -3036,6 +3058,19 @@ def save_data():
 def _apply_loaded_data(data):
     global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db
     data=_restore_special_state(data or {})
+    # Normalize user IDs one more time after every persistence load. Older snapshots can
+    # contain both integer and string user IDs; merge them instead of losing the record.
+    loaded_users = data.get('users_db')
+    if isinstance(loaded_users, dict):
+        merged_users = {}
+        for k, v in loaded_users.items():
+            try: nk = int(k)
+            except Exception: nk = k
+            if isinstance(v, dict):
+                merged_users.setdefault(nk, {}).update(v)
+            else:
+                merged_users[nk] = v
+        data['users_db'] = merged_users
     map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map','pending_referrals',
                'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
                'support_plans_db','user_plans','pending_plans','missed_tasks_db','skip_db','warnings_db','promo_earnings_db',
@@ -3174,7 +3209,7 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         uid = int(context.args[0])
-        user = users_db.get(uid, {})
+        user = get_user_record(uid)
         plan = _get_user_plan_record(uid)
         reward = get_reward_for_user(uid)
         total = get_balance(uid)
@@ -3985,7 +4020,7 @@ async def user_history_cmd(update, context):
     except:
         await update.message.reply_text("❌ Invalid User ID")
         return
-    user=users_db.get(uid,{})
+    user=get_user_record(uid)
     statuses=user_task_status.get(uid,{})
     msg=f"📊 USER HISTORY\n\n🆔 User ID: {uid}\n👤 Name: {user.get('name','Unknown')}\n"
     msg += f"📅 Filter: {date_filter or 'All dates'}\n\n"
@@ -4149,6 +4184,9 @@ def main():
         print(f"V56 Flask setup err {e}")
 
     print("V56 NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding! NameError Fixed!")
+    print(f"PERSISTENCE CHECK: DATABASE_URL configured = {bool(DATABASE_URL)}")
+    if not DATABASE_URL:
+        print("WARNING: DATABASE_URL is NOT configured. Render restarts/redeploys cannot retain user data. Add Render PostgreSQL DATABASE_URL.")
     print("V56 Quick webhook delete 2 times - No long sleep! NameError Fixed!")
     try:
         import urllib.request
@@ -4251,7 +4289,7 @@ def main():
                         "date": str(get_ist_today()),
                         "price": price,
                         "proof_file_id": file_id,
-                        "user_name": users_db.get(uid, {}).get("name", update.effective_user.full_name)
+                        "user_name": get_user_record(uid).get("name", update.effective_user.full_name)
                     }
                     context.user_data.pop("awaiting_plan_payment_proof", None)
                     awaiting_plan_payment_adminless.discard(uid)
@@ -4267,7 +4305,7 @@ def main():
                                 chat_id=admin_id, photo=file_id,
                                 caption=(
                                     f"💎 PLAN PAYMENT PROOF\n"
-                                    f"👤 Name: {users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')}\n"
+                                    f"👤 Name: {get_user_record(uid).get('name', update.effective_user.full_name or 'Unknown')}\n"
                                     f"🆔 User ID: {uid}\n"
                                     f"📦 Plan: {plan_type}\n"
                                     f"💰 Amount: ₹{price}\n"
@@ -4427,7 +4465,7 @@ def main():
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
                         chan = get_screenshot_channel()
-                        user_name = users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')
+                        user_name = get_user_record(uid).get('name', update.effective_user.full_name or 'Unknown')
                         kb_chan = InlineKeyboardMarkup([
                             [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_daily_{uid}"),
                              InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_daily_{uid}")],
