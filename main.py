@@ -37,6 +37,7 @@ MISSED_ENABLED = True
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 PAYMENT_UPI = ADMIN_UPI
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
+CONTACT_USERNAME = SUPPORT_USERNAME
 
 def get_payment_upi():
     return str(globals().get("PAYMENT_UPI") or ADMIN_UPI)
@@ -215,22 +216,22 @@ async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try: await q.answer()
     except Exception: pass
+    uid = q.from_user.id
     normalize_support_plans()
-    active, current_name, expiry = check_plan_active(q.from_user.id)
-    if active:
-        remaining = 'N/A'
-        try: remaining = max(0, (date.fromisoformat(str(expiry)[:10]) - get_ist_today()).days)
-        except: pass
-        msg = (
-            f"💎 SUPPORT PLANS\n\n"
-            f"✅ You already have an active plan: {current_name}\n"
-            f"Expiry: {expiry}\n"
-            f"Days remaining: {remaining}\n\n"
-            "To change, upgrade, renew, or buy another plan, please contact Admin.\n"
-            f"📞 Support: {SUPPORT_USERNAME}"
+    info = _canonical_plan_info(uid)
+    if info["active"]:
+        text = (
+            "💎 SUPPORT PLANS\n\n"
+            f"✅ You already have an active {info['display']} Plan.\n"
+            f"Valid till: {info['expiry']}\n"
+            f"Daily tasks: {info['daily']}\n"
+            f"Earning limit: ₹{info['cap']}\n\n"
+            "🔄 Want to change/upgrade your plan or switch to another plan?\n"
+            "Please contact Admin. No second plan payment is required here."
         )
-        kb = [[InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")], [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
-        await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        kb = [[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],
+              [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+        await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
         return
 
     lines = ["💎 SUPPORT PLANS", "", "Select your plan below:", ""]
@@ -256,15 +257,16 @@ async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     plan = next((p for p in support_plans_db if int(p.get("id", -1)) == pid), None)
     if not plan:
         await q.message.reply_text("❌ Plan not found. Please open Support Plans again."); return
-    uid = q.from_user.id; name = str(plan.get("name", "Plan")); price = int(plan.get("price", 0))
-    active, current_name, current_expiry = check_plan_active(uid)
-    if active:
+    uid = q.from_user.id
+    active_info=_canonical_plan_info(uid)
+    if active_info["active"]:
         await q.message.reply_text(
-            f"✅ Your {current_name} is already active till {current_expiry}.\n\n"
-            f"For upgrade/renewal/another plan, please contact Admin: {SUPPORT_USERNAME}",
-            reply_markup=main_menu()
+            f"✅ You already have an active {active_info['display']} Plan.\n\n"
+            "To change/upgrade/switch plans, please contact Admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
         )
         return
+    name = str(plan.get("name", "Plan")); price = int(plan.get("price", 0))
     duration = int(plan.get("duration", 30)); daily = int(plan.get("daily_limit", 10)); users = int(plan.get("users", 1)); cap = int(plan.get("earnings_limit", 0))
     pending_plans[uid] = {"plan_id": pid, "plan": name.lower(), "date": str(get_ist_today()), "price": price}
     context.user_data["awaiting_plan_payment_proof"] = pid
@@ -284,12 +286,12 @@ async def plan_proof_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     normalize_support_plans(); plan=next((p for p in support_plans_db if int(p.get("id",-1))==pid),None)
     if not plan: await q.message.reply_text("❌ Plan not found."); return
     uid=q.from_user.id; price=int(plan.get("price",0))
-    active, current_name_active, current_expiry = check_plan_active(uid)
-    if active:
+    active_info=_canonical_plan_info(uid)
+    if active_info["active"]:
         await q.message.reply_text(
-            f"✅ You already have {current_name_active} till {current_expiry}.\n\n"
-            f"Please contact Admin for upgrade/renewal: {SUPPORT_USERNAME}",
-            reply_markup=main_menu()
+            f"✅ You already have an active {active_info['display']} Plan.\n\n"
+            "To change/upgrade/switch plans, please contact Admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
         )
         return
     current=_get_user_plan_record(uid)
@@ -351,6 +353,16 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
         price = int(plan.get("price", 0) or 0)
         name = str(plan.get("name", "Plan"))
         expiry = get_ist_today() + timedelta(days=duration)
+
+        # Pay the referrer 10% (or admin-configured percentage) only after successful activation.
+        ref_id = referral_map.get(uid)
+        already_plan_commission = any(
+            str(e.get("type")) == "plan" and e.get("source_uid") == uid and e.get("description", "").endswith(f"Plan {int(plan.get('id',0))} activation")
+            for e in referral_commission_ledger.get(ref_id, [])
+        ) if ref_id else False
+        if ref_id and not already_plan_commission:
+            add_referral_commission(ref_id, price * float(REFERRAL_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 1, uid, f"Plan {int(plan.get('id',0))} activation")
+            save_data()
 
         user_plans[str(uid)] = {
             "plan": name.lower(),
@@ -432,9 +444,12 @@ TASKS_REQUIRED_FOR_WITHDRAW = 1
 DEFAULT_DAILY_TASK_ID = -1
 REFERRAL_BONUS_PER_TASK = 10
 REFERRAL_PLAN_COMMISSION_PERCENT = 10
+L1_TASK_COMMISSION_PERCENT = 2.0
+L2_TASK_COMMISSION_PERCENT = 0.5
 DAILY_TASK_LIMIT_BASIC = 10
 DAILY_TASK_LIMIT_PREMIUM = 20
 DAILY_TASK_LIMIT_FREE = 1
+DAILY_EARNING_CAP_FREE = 0
 DAILY_EARNING_CAP_BASIC = 200
 DAILY_EARNING_CAP_PREMIUM = 500
 TASK_COMPLETION_WINDOW_MINUTES = 15
@@ -461,13 +476,11 @@ pending_plans = {}
 referral_map = {}
 pending_referrals = {}
 referral_earnings = {}
-# Referral task-commission system: L1/L2 rates are configurable.
-L1_TASK_COMMISSION_PERCENT = 2.0
-L2_TASK_COMMISSION_PERCENT = 0.5
-referral_commission_daily = {}  # {referrer_uid: {YYYY-MM-DD: commission}}
-task_earnings_db = {}           # {uid: actual completed-task earnings}
-total_withdrawn_db = {}         # {uid: total approved withdrawals}
+# Detailed referral commission ledger: {referrer_uid: [{date, type, level, source_uid, amount, description}]}
+referral_commission_ledger = {}
+daily_task_earnings = {}  # {uid: {YYYY-MM-DD: amount}}
 withdraw_requests = {}
+withdraw_history = {}  # {uid: [{amount, fee, net, upi, date, status, ...}]}
 withdraw_done_date = {}
 daily_task_count = {}
 missed_tasks_db = {}  # {uid: [missed task dicts]}
@@ -677,83 +690,109 @@ def calculate_age(d):
     today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
 def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
+
+def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
+    """Credit referral commission once and keep a dated ledger for Wallet/My Referrals."""
+    try:
+        amount = float(amount)
+    except Exception:
+        return 0.0
+    if amount <= 0 or not referrer_uid:
+        return 0.0
+    entry = {
+        "date": str(get_ist_today()),
+        "type": str(commission_type),
+        "level": int(level) if level is not None else None,
+        "source_uid": source_uid,
+        "amount": round(amount, 2),
+        "description": description,
+        "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
+    }
+    referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
+    referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    return amount
+
+def get_referral_commission_total(uid, day=None, level=None, commission_type=None):
+    day = str(day or get_ist_today())
+    total = 0.0
+    for e in referral_commission_ledger.get(uid, []):
+        if str(e.get("date", "")) != day:
+            continue
+        if level is not None and e.get("level") != level:
+            continue
+        if commission_type is not None and e.get("type") != commission_type:
+            continue
+        try: total += float(e.get("amount", 0) or 0)
+        except Exception: pass
+    return round(total, 2)
+
+def get_referral_task_earnings(uid, day=None, level=None):
+    day=str(day or get_ist_today())
+    total=0.0
+    for e in referral_commission_ledger.get(uid, []):
+        if str(e.get("date","")) != day or e.get("type") != "task": continue
+        if level is not None and e.get("level") != level: continue
+        try: total += float(e.get("source_amount") or 0)
+        except Exception: pass
+    return round(total,2)
+
+def get_referral_commission_yesterday(uid, level=None):
+    return get_referral_commission_total(uid, get_ist_today() - timedelta(days=1), level=level, commission_type="task")
+
+def get_plan_commission_yesterday(uid):
+    return get_referral_commission_total(uid, get_ist_today() - timedelta(days=1), commission_type="plan")
+
+def get_withdrawn_for_cap(uid):
+    total = 0.0
+    for item in withdraw_history.get(uid, []):
+        if str(item.get("status", "")).lower() == "approved":
+            try: total += float(item.get("amount", 0) or 0)
+            except Exception: pass
+    req = withdraw_requests.get(uid, {})
+    if str(req.get("status", "")).lower() == "approved" and not withdraw_history.get(uid):
+        try: total += float(req.get("amount", 0) or 0)
+        except Exception: pass
+    return round(total, 2)
+
+def get_referral_chain(uid):
+    l1 = []
+    l2 = []
+    for member, parent in referral_map.items():
+        if parent == uid:
+            l1.append(member)
+            for member2, parent2 in referral_map.items():
+                if parent2 == member:
+                    l2.append(member2)
+    return l1, l2
+
+def record_task_referral_commissions(source_uid, task_reward):
+    """Pay configurable L1/L2 percentages from the completed task reward."""
+    try: reward = float(task_reward or 0)
+    except Exception: reward = 0.0
+    if reward <= 0: return
+    l1 = referral_map.get(source_uid)
+    if l1:
+        amount = reward * float(L1_TASK_COMMISSION_PERCENT) / 100.0
+        add_referral_commission(l1, amount, "task", 1, source_uid, f"L1 task commission from {source_uid}", source_amount=reward)
+        l2 = referral_map.get(l1)
+        if l2:
+            amount2 = reward * float(L2_TASK_COMMISSION_PERCENT) / 100.0
+            add_referral_commission(l2, amount2, "task", 2, source_uid, f"L2 task commission from {source_uid}", source_amount=reward)
+
 def get_tasks(uid):
     today = str(get_ist_today())
     return daily_task_count.get(uid, {}).get(today, 0)
 
+def get_today_task_earnings(uid):
+    today=str(get_ist_today())
+    return round(float(daily_task_earnings.get(uid, {}).get(today, 0) or 0), 2)
+
+def add_today_task_earning(uid, amount, day=None):
+    day=str(day or get_ist_today())
+    daily_task_earnings.setdefault(uid, {})[day]=round(float(daily_task_earnings.setdefault(uid, {}).get(day,0) or 0)+float(amount or 0),2)
+
 def get_total_tasks(uid):
     return tasks_db.get(uid,0)
-
-def _as_uid(value):
-    try:
-        return int(value)
-    except Exception:
-        return value
-
-def get_l1_members(uid):
-    uid = _as_uid(uid)
-    return [int(child) for child, parent in referral_map.items()
-            if _as_uid(parent) == uid and _as_uid(child) != uid]
-
-def get_l2_members(uid):
-    l1 = set(get_l1_members(uid))
-    result = []
-    for child, parent in referral_map.items():
-        if _as_uid(parent) in l1 and _as_uid(child) != uid:
-            result.append(int(child))
-    return result
-
-def _record_daily_referral_commission(referrer_uid, amount):
-    if not referrer_uid or amount <= 0:
-        return
-    referrer_uid = int(referrer_uid)
-    day = str(get_ist_today())
-    referral_commission_daily.setdefault(referrer_uid, {})
-    referral_commission_daily[referrer_uid][day] = round(
-        float(referral_commission_daily[referrer_uid].get(day, 0)) + float(amount), 2
-    )
-
-def credit_referral_task_commission(worker_uid, task_reward):
-    """Credit L1/L2 commission once when a worker's task is approved."""
-    try:
-        worker_uid = int(worker_uid)
-        reward = float(task_reward or 0)
-    except Exception:
-        return
-    if reward <= 0:
-        return
-
-    parent = referral_map.get(worker_uid)
-    if parent is None:
-        parent = referral_map.get(str(worker_uid))
-    if parent is not None and int(parent) != worker_uid:
-        l1 = round(reward * L1_TASK_COMMISSION_PERCENT / 100.0, 2)
-        referral_earnings[int(parent)] = round(float(referral_earnings.get(int(parent), 0)) + l1, 2)
-        _record_daily_referral_commission(int(parent), l1)
-
-        grand_parent = referral_map.get(int(parent))
-        if grand_parent is None:
-            grand_parent = referral_map.get(str(int(parent)))
-        if grand_parent is not None and int(grand_parent) not in (worker_uid, int(parent)):
-            l2 = round(reward * L2_TASK_COMMISSION_PERCENT / 100.0, 2)
-            referral_earnings[int(grand_parent)] = round(float(referral_earnings.get(int(grand_parent), 0)) + l2, 2)
-            _record_daily_referral_commission(int(grand_parent), l2)
-
-def record_task_earning(uid, reward):
-    """Persist actual task earnings and apply referral commissions."""
-    try:
-        uid = int(uid); reward = float(reward or 0)
-    except Exception:
-        return
-    task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + reward, 2)
-    credit_referral_task_commission(uid, reward)
-
-def get_yesterday_referral_commission(uid):
-    yesterday = str(get_ist_today() - timedelta(days=1))
-    return round(float(referral_commission_daily.get(int(uid), {}).get(yesterday, 0)), 2)
-
-def get_total_referral_commission(uid):
-    return round(float(referral_earnings.get(int(uid), 0)), 2)
 def _get_user_plan_record(uid):
     # Support both the old dict format and the newer plan-id format.
     plan = user_plans.get(uid)
@@ -766,73 +805,82 @@ def _get_user_plan_record(uid):
             pid = int(plan)
             found = next((p for p in support_plans_db if int(p.get('id', -1)) == pid), None)
             if found:
-                return found
+                return dict(found)
         except Exception:
             pass
     return None
 
-def check_plan_active(uid):
-    plan = _get_user_plan_record(uid)
-    if not plan:
-        return False, "No Plan", None
+def _canonical_plan_info(uid):
+    """Return one consistent plan identity/limits for every screen."""
+    raw = _get_user_plan_record(uid)
+    if not raw:
+        return {"active": False, "type": "free", "display": "No Plan", "expiry": None, "daily": DAILY_TASK_LIMIT_FREE, "cap": DAILY_EARNING_CAP_FREE if "DAILY_EARNING_CAP_FREE" in globals() else 10}
 
-    # Legacy approval records contain only {'plan': 'basic', 'date': ...}.
-    # Treat those as active for 30 days so the daily limit never becomes 0.
-    plan_type = str(plan.get('plan') or plan.get('name') or '').lower()
-    if 'premium' in plan_type or plan.get('price') == 499:
-        plan_type = 'premium'
-    elif 'basic' in plan_type or plan.get('price') == 199:
-        plan_type = 'basic'
+    plan = raw if isinstance(raw, dict) else {}
+    name = str(plan.get("plan_name") or plan.get("name") or plan.get("plan") or "").strip()
+    low = name.lower()
+    price = int(plan.get("price") or 0) if str(plan.get("price") or "0").lstrip('-').isdigit() else 0
+    pid = plan.get("plan_id", plan.get("id"))
+    try: pid = int(pid)
+    except Exception: pid = None
 
-    status = str(plan.get('status', 'active')).lower()
-    if status not in ('active', 'approved'):
-        return False, f"{plan_type.upper()} Pending", None
+    # ID/price/name are normalized so stale daily_limit values cannot make
+    # a Basic user display Family/Pro limits.
+    if pid == 1 or price == 199 or "basic" in low:
+        ptype, display, default_daily, default_cap = "basic", "Basic", DAILY_TASK_LIMIT_BASIC, DAILY_EARNING_CAP_BASIC
+    elif pid == 2 or price == 499 or "premium" in low:
+        ptype, display, default_daily, default_cap = "premium", "Premium", DAILY_TASK_LIMIT_PREMIUM, DAILY_EARNING_CAP_PREMIUM
+    elif pid == 3 or price == 1999 or "family" in low or "pro" in low:
+        ptype, display, default_daily, default_cap = "family", "Pro", 30, 3000
+    else:
+        # Unknown custom plan: use its configured values, but keep a safe default.
+        ptype, display = (low or "custom"), (name or "Custom")
+        default_daily = int(plan.get("daily_limit") or 10)
+        default_cap = int(plan.get("earnings_limit") or 10)
 
-    expiry = plan.get('expiry')
+    status = str(plan.get("status", "active")).lower()
+    if status not in ("active", "approved"):
+        return {"active": False, "type": ptype, "display": f"{display} Pending", "expiry": None, "daily": default_daily, "cap": default_cap}
+
+    expiry = plan.get("expiry") or plan.get("expires_at")
     if expiry:
         try:
-            if isinstance(expiry, str):
-                expiry = date.fromisoformat(expiry)
-            if get_ist_today() > expiry:
-                return False, f"{plan_type.upper()} Expired", expiry
-        except Exception:
-            pass
-    else:
-        base_date = plan.get('date') or plan.get('activated_at')
-        try:
-            if base_date:
-                if isinstance(base_date, str):
-                    base_date = date.fromisoformat(base_date[:10])
-                expiry = base_date + timedelta(days=30)
-            else:
-                expiry = get_ist_today() + timedelta(days=30)
-            plan['expiry'] = expiry
-            plan['status'] = 'active'
-            plan['plan'] = plan_type or 'basic'
+            if isinstance(expiry, datetime): expiry = expiry.date()
+            elif isinstance(expiry, str): expiry = date.fromisoformat(expiry[:10])
         except Exception:
             expiry = None
-    return True, f"{(plan_type or 'basic').upper()} till {expiry}", expiry
+    if expiry is None:
+        base = plan.get("date") or plan.get("activated_at")
+        try:
+            if isinstance(base, datetime): base = base.date()
+            elif isinstance(base, str): base = date.fromisoformat(base[:10])
+            expiry = (base or get_ist_today()) + timedelta(days=int(plan.get("duration", 30) or 30))
+        except Exception:
+            expiry = get_ist_today() + timedelta(days=30)
+
+    if get_ist_today() > expiry:
+        return {"active": False, "type": ptype, "display": f"{display} Expired", "expiry": expiry, "daily": default_daily, "cap": default_cap}
+
+    # Persist canonical values so all later screens use the same plan.
+    if isinstance(plan, dict):
+        plan["plan"] = ptype
+        plan["plan_name"] = display
+        plan["daily_limit"] = default_daily
+        plan["earnings_limit"] = default_cap
+        plan["expiry"] = str(expiry)
+        plan["status"] = "active"
+
+    return {"active": True, "type": ptype, "display": display, "expiry": expiry, "daily": default_daily, "cap": default_cap}
+
+def check_plan_active(uid):
+    info = _canonical_plan_info(uid)
+    if not info["active"]:
+        return False, info["display"], info["expiry"]
+    return True, f"{info['display']} till {info['expiry']}", info["expiry"]
 
 def get_plan_limits(uid):
-    is_active, _, _ = check_plan_active(uid)
-    if not is_active:
-        return DAILY_TASK_LIMIT_FREE, DAILY_EARNING_CAP_FREE if 'DAILY_EARNING_CAP_FREE' in globals() else 10, "free"
-    plan = _get_user_plan_record(uid) or {}
-    plan_type = str(plan.get('plan') or plan.get('name') or '').lower()
-    price = plan.get('price')
-    configured_limit = plan.get('daily_limit')
-    # Dynamic/manual plan limits always win. This also fixes Family 1999.
-    if configured_limit:
-        try: configured_limit = int(configured_limit)
-        except Exception: configured_limit = None
-    if 'family' in plan_type or price == 1999:
-        cap = int(plan.get('earnings_limit') or 3000)
-        return int(configured_limit or 30), cap, "family"
-    if 'premium' in plan_type or price == 499:
-        cap = int(plan.get('earnings_limit') or DAILY_EARNING_CAP_PREMIUM)
-        return int(configured_limit or DAILY_TASK_LIMIT_PREMIUM), cap, "premium"
-    cap = int(plan.get('earnings_limit') or DAILY_EARNING_CAP_BASIC)
-    return int(configured_limit or DAILY_TASK_LIMIT_BASIC), cap, "basic"
+    info = _canonical_plan_info(uid)
+    return int(info["daily"]), int(info["cap"]), info["type"]
 
 def check_daily_limits(uid):
     today = str(get_ist_today())
@@ -840,23 +888,9 @@ def check_daily_limits(uid):
     limit, cap, plan_name = get_plan_limits(uid)
     return count, limit, cap
 def get_today_task_for_user(uid):
-    current, next_task = get_current_scheduled_task_with_interval()
-    if current:
-        return current
-    # Do not create an untracked task that can repeat after approval.
-    # If no scheduled task is active, this fallback has one stable ID so
-    # completion/pending status can be checked and the same task is not shown again.
-    return {
-        "id": DEFAULT_DAILY_TASK_ID,
-        "task_number": 1,
-        "title": "Join Channel @s2edayincome",
-        "link": get_join_channel_link(),
-        "reward": 5,
-        "open_time": "00:00",
-        "close_time": "23:59",
-        "next_time": "00:00",
-        "window_minutes": 1440,
-    }
+    """Return only an admin-created task. Never invent a default daily task."""
+    current, _ = get_current_scheduled_task_with_interval()
+    return current
 
 def admin_panel_keyboard():
     missed_label = "⏰ Missed: ON" if MISSED_ENABLED else "⏰ Missed: OFF"
@@ -876,12 +910,12 @@ def admin_panel_keyboard():
 
 def main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
-        [InlineKeyboardButton("📅 Daily Task", callback_data="daily"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
-        [InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks"), InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop")],
-        [InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled"), InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],
-        [InlineKeyboardButton("👤 My Details", callback_data="my_details"), InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks")],
-        [InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")]
+        [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("🔗 Refer & Earn", callback_data="refer_earn")],
+        [InlineKeyboardButton("💰 Wallet", callback_data="wallet"), InlineKeyboardButton("📅 Daily Task", callback_data="daily")],
+        [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw"), InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks")],
+        [InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop"), InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled")],
+        [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("👤 My Details", callback_data="my_details")],
+        [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
     ])
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -920,26 +954,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
     if uid in users_db:
-        user = users_db.get(uid) or {}
-        changed = False
-        if context.args and args[0].isdigit() and ref_id is not None and ref_id != uid:
-            if referral_map.get(uid) != ref_id:
-                referral_map[uid] = ref_id; changed = True
-        if not user.get('name') and update.effective_user.full_name:
-            user['name'] = update.effective_user.full_name; changed = True
-        if update.effective_user.username and user.get('username') != update.effective_user.username:
-            user['username'] = update.effective_user.username; changed = True
-        users_db[uid] = user
-        missing = [label for key, label in [('name','Name'),('gender','Gender'),('dob','DOB'),('mobile','Mobile'),('upi','UPI'),('pincode','Pincode'),('profession','Profession')] if not user.get(key)]
-        if missing:
-            # Do not display a broken N/A profile. Resume registration from the first missing field.
-            save_data()
-            await update.message.reply_text(f"⚠️ Your profile is incomplete ({', '.join(missing)}).\n\nPlease complete registration so My Details can show your saved information.\n\nWhat is your Name?")
-            return NAME
-        if changed:
-            save_data()
-        limit = check_daily_limits(uid)[1]
-        await update.message.reply_text(f"Welcome back {user.get('name','User')}! Balance Rs{get_balance(uid)}\nTasks today {get_tasks(uid)}/{limit}", reply_markup=main_menu())
+        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -967,8 +982,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(name) < 2:
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
-    users_db.setdefault(uid, {})
-    users_db[uid]['name'] = name
+    users_db[uid] = {'name': name}
     await update.message.reply_text(
         "Select your gender:",
         reply_markup=InlineKeyboardMarkup([
@@ -1073,9 +1087,7 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PROFESSION
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
-    users_db[uid]['reg_date']=str(get_ist_today())
-    # Persist registration immediately so a restart cannot turn the profile into N/A.
-    save_data()
+    users_db[uid]['reg_date']=get_ist_today()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -1204,44 +1216,86 @@ async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await admin_panel(q, context)
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = int(q.from_user.id)
-    l1 = get_l1_members(uid)
-    l2 = get_l2_members(uid)
-    l1_amount = round(sum(float(task_earnings_db.get(x, 0)) for x in l1), 2)
-    l2_amount = round(sum(float(task_earnings_db.get(x, 0)) for x in l2), 2)
-    yesterday = get_yesterday_referral_commission(uid)
-    total_commission = get_total_referral_commission(uid)
-    ref_link = f"https://t.me/{context.bot.username}?start={uid}"
-
-    msg = (
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    l1, l2 = get_referral_chain(uid)
+    today = get_ist_today()
+    yday = today - timedelta(days=1)
+    l1_today = get_referral_commission_total(uid, today, level=1, commission_type="task")
+    l2_today = get_referral_commission_total(uid, today, level=2, commission_type="task")
+    l1_yday = get_referral_commission_total(uid, yday, level=1, commission_type="task")
+    l2_yday = get_referral_commission_total(uid, yday, level=2, commission_type="task")
+    l1_task_yday = get_referral_task_earnings(uid, yday, level=1)
+    l2_task_yday = get_referral_task_earnings(uid, yday, level=2)
+    plan_yday = get_plan_commission_yesterday(uid)
+    total_ref = referral_earnings.get(uid, 0)
+    msg=(
         "👥 MY REFERRALS\n\n"
         f"🟢 L1 Members: {len(l1)}\n"
-        f"💰 L1 Task Earnings: ₹{l1_amount:.2f}\n"
-        f"📈 L1 Task Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n\n"
+        f"📈 L1 Task Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
+        f"💼 Yesterday L1 Task Earnings: ₹{l1_task_yday:.2f}\n💰 Yesterday L1 Commission: ₹{l1_yday:.2f}\n\n"
         f"🔵 L2 Members: {len(l2)}\n"
-        f"💰 L2 Task Earnings: ₹{l2_amount:.2f}\n"
-        f"📈 L2 Task Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n\n"
-        f"🗓️ Yesterday Commission: ₹{yesterday:.2f}\n"
-        f"💵 Total Referral Commission: ₹{total_commission:.2f}\n\n"
-        f"🔗 Referral Link: {ref_link}\n"
-        "Share this link with your friends.\n"
-        "L1 = directly referred member | L2 = your L1 member's referral"
+        f"📈 L2 Task Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
+        f"💼 Yesterday L2 Task Earnings: ₹{l2_task_yday:.2f}\n💰 Yesterday L2 Commission: ₹{l2_yday:.2f}\n\n"
+        f"💎 Plan Activation Commission: {REFERRAL_PLAN_COMMISSION_PERCENT:g}%\n"
+        f"💰 Yesterday Plan Commission: ₹{plan_yday:.2f}\n\n"
+        f"📅 Today: L1 ₹{l1_today:.2f} | L2 ₹{l2_today:.2f}\n"
+        f"💵 Total Referral Commission: ₹{float(total_ref):.2f}"
     )
-    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
+    kb=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Refer & Earn", callback_data="refer_earn")],
+        [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+    ])
+    await q.message.reply_text(msg, reply_markup=kb)
+
+async def refer_earn_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    ref_link=f"https://t.me/{context.bot.username}?start={uid}"
+    msg=(
+        "🔗 REFER & EARN\n\n"
+        "Share your referral link.\n"
+        "When your friend joins and completes tasks, you earn commission from their work.\n\n"
+        f"L1 Task Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
+        f"L2 Task Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
+        f"Plan Activation Commission: {REFERRAL_PLAN_COMMISSION_PERCENT:g}%\n\n"
+        f"Your Referral Link:\n{ref_link}\n\n"
+        "Join → Complete tasks → Earn."
+    )
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
 async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     bal=get_balance(uid)
-    tasks_done=get_tasks(uid)
-    referral_rs=referral_earnings.get(uid,0)
+    direct_today=get_tasks(uid)
+    direct_amount=get_today_task_earnings(uid)
+    l1_today=get_referral_commission_total(uid, level=1, commission_type="task")
+    l2_today=get_referral_commission_total(uid, level=2, commission_type="task")
+    plan_today=get_referral_commission_total(uid, commission_type="plan")
+    referral_today=round(l1_today+l2_today+plan_today,2)
     promo_rs=promo_earnings_db.get(uid,0)
-    is_active, plan_name, expiry = check_plan_active(uid)
-    count, limit, cap = check_daily_limits(uid)
-    msg = f"💰 Wallet\n\nBalance: Rs{bal}\nTasks: {tasks_done}/{TASKS_REQUIRED_FOR_WITHDRAW}\nReferral: Rs{referral_rs}\nPromo: Rs{promo_rs}\nTotal: Rs{bal}\n\n📋 Plan: {plan_name}\nDaily: {count}/{limit} tasks\nCap: Rs{cap}/day\n\nBasic Rs500: {DAILY_TASK_LIMIT_BASIC} tasks/day\nPremium Rs1000: {DAILY_TASK_LIMIT_PREMIUM} tasks/day"
-    await q.message.reply_text(msg, reply_markup=main_menu())
+    info=_canonical_plan_info(uid)
+    withdrawn=get_withdrawn_for_cap(uid)
+    cap=info["cap"]
+    cap_remaining=max(0, cap-withdrawn)
+    msg=(
+        "💰 WALLET\n\n"
+        f"Balance: ₹{bal:.2f}\n"
+        f"Today's Task Earning: ₹{direct_amount:.2f} ({direct_today}/{info['daily']})\n"
+        f"Today's L1 Task Commission: ₹{l1_today:.2f}\n"
+        f"Today's L2 Task Commission: ₹{l2_today:.2f}\n"
+        f"Today's Plan Activation Commission: ₹{plan_today:.2f}\n"
+        f"Today's Referral Commission: ₹{referral_today:.2f}\n"
+        f"Promo: ₹{promo_rs:.2f}\n"
+        f"Total: ₹{bal:.2f}\n\n"
+        f"📋 Plan: {info['display']}\n"
+        f"Daily Tasks: {direct_today}/{info['daily']}\n"
+        f"Plan Cap: ₹{cap}\n"
+        f"Withdrawn: ₹{withdrawn:.2f}/₹{cap}\n"
+        f"Cap Remaining: ₹{cap_remaining:.2f}"
+    )
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Withdraw History", callback_data="withdraw_history")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
 async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1295,29 +1349,15 @@ async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    uid = q.from_user.id
-    today_tasks = get_tasks_for_today()
-    current, next_task = get_current_scheduled_task_with_interval()
-    missed, _ = check_missed_tasks_with_interval(uid)
-    count, limit, cap = check_daily_limits(uid)
-    is_active, plan_name, _ = check_plan_active(uid)
-    msg = f"📋 Scheduled Tasks Today - {get_ist_today()}\nWindow: {TASK_COMPLETION_WINDOW_MINUTES} mins\n\nYour Plan: {plan_name} Daily: {count}/{limit} Cap Rs{cap}\nTotal Tasks Today: {len(today_tasks)}\n\n"
+    uid=q.from_user.id
+    today_tasks=get_tasks_for_today()
     if not today_tasks:
-        msg += "No tasks scheduled today! Admin will add tasks via /add_task\n\nExample: /add_task 12:45PM 15min 1:03PM Join Channel https://t.me/s2edayincome 5"
-    else:
-        for task in today_tasks:
-            task_id = task['id']
-            status_data = user_task_status.get(uid, {}).get(task_id, {})
-            status = status_data.get('status') if isinstance(status_data, dict) else status_data
-            if not status:
-                skip_data = skip_db.get(uid, {}).get(task_id, {})
-                if (skip_data.get('status') if isinstance(skip_data, dict) else skip_data) == 'skipped':
-                    status = 'skipped'
-                else:
-                    status = 'pending'
-            icon = "✅" if status == 'completed' else "❌" if status == 'missed' else "⏭️" if status == 'skipped' else "🔴 LIVE NOW" if current and current['id'] == task_id else "⏰"
-            has_img = "🖼️" if task.get('image_file_id') or task['id'] in task_images_db else ""
-            msg += f"{icon}{has_img} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {status}\n"
+        await q.message.reply_text(f"📋 SCHEDULED TASKS — {get_ist_today()}\n\nNo tasks scheduled today. Admin will add tasks when needed.", reply_markup=main_menu())
+        return
+    msg=f"📋 SCHEDULED TASKS — {get_ist_today()}\n\nToday's task timings:\n\n"
+    for task in today_tasks:
+        msg += f"🕐 {task.get('open_time','')} → {task.get('close_time','')}  |  Task {task.get('task_number','?')}\n{task.get('title','')}\n\n"
+    msg += "Only today's admin-scheduled tasks are shown here. If a task window is missed, it will appear in Missed Tasks when that feature is enabled."
     await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
 def get_current_task_for_user(uid):
@@ -1453,13 +1493,18 @@ async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAU
     await q.answer()
     uid = q.from_user.id
     current, next_task = get_current_scheduled_task_with_interval()
-    # Mark that this user explicitly requested the screenshot upload flow.
+    missed_id=context.user_data.get('missed_reopened_task_id') or context.user_data.get('daily_screenshot_task_id')
+    missed_task=None
+    if missed_id is not None:
+        try: missed_task=next((t for t in missed_tasks_db.get(uid,[]) if int(t.get('id',-999999))==int(missed_id)),None)
+        except Exception: missed_task=None
+    task_for_upload=missed_task or current
     context.user_data['awaiting_daily_screenshot'] = True
-    context.user_data['daily_screenshot_task_id'] = current.get('id') if current else None
-    if current:
+    context.user_data['daily_screenshot_task_id'] = task_for_upload.get('id') if task_for_upload else None
+    if task_for_upload:
         await q.message.reply_text(
-            f"📤 Send screenshot for Task {current['task_number']}!\n\n"
-            f"Open {current['open_time']} Close {current['close_time']} ({current['window_minutes']} mins)\n\n"
+            f"📤 Send screenshot for Task {task_for_upload['task_number']}!\n\n"
+            f"Open {task_for_upload.get('open_time','')} Close {task_for_upload.get('close_time','')}\n\n"
             "Send as PHOTO, not file!"
         )
     else:
@@ -1568,15 +1613,15 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text("Screenshot received for Promo Campaign! Now type views count Example 150 V56")
             return PROMO_DETAILS
         current, next_task = get_current_scheduled_task_with_interval()
-        task_to_use = current
-        if not current:
-            default_task = get_today_task_for_user(uid)
-            if not default_task and scheduled_tasks_db:
-                default_task = scheduled_tasks_db[-1]
-            if not default_task:
-                default_task = {'id': 0, 'title': 'Daily Task', 'reward': 5, 'task_number': 1, 'open_time': '00:00', 'close_time': '23:59'}
-            task_to_use = default_task
-            print(f"V56 handle_screenshot_upload: No current task, using default {task_to_use.get('id')} for user {uid}")
+        requested_id=context.user_data.get('daily_screenshot_task_id')
+        task_to_use=current
+        if requested_id is not None:
+            task_to_use=next((t for t in get_tasks_for_today() if int(t.get('id',-999999))==int(requested_id)), None)
+        if not task_to_use:
+            await update.message.reply_text("❌ No active scheduled task is available right now. Please open Daily Task during the task time.", reply_markup=main_menu())
+            context.user_data.pop('awaiting_daily_screenshot', None)
+            context.user_data.pop('daily_screenshot_task_id', None)
+            return ConversationHandler.END
         task_id_for_status = task_to_use.get('id', DEFAULT_DAILY_TASK_ID) if task_to_use else DEFAULT_DAILY_TASK_ID
         existing_status_data = user_task_status.get(uid, {}).get(task_id_for_status, {})
         existing_status = existing_status_data.get('status') if isinstance(existing_status_data, dict) else existing_status_data
@@ -1889,10 +1934,9 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reward=get_reward_for_user(target_id, base_reward)
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
-        task_earnings_db[target_id] = round(float(task_earnings_db.get(target_id, 0)) + float(reward), 2)
-        credit_referral_task_commission(target_id, reward)
         if target_id not in daily_task_count: daily_task_count[target_id]={}
         daily_task_count[target_id][today]=daily_task_count[target_id].get(today,0)+1
+        add_today_task_earning(target_id, reward, today)
         if reward!=5: bonus_balance[target_id]=bonus_balance.get(target_id,0)+(reward-5)
         del pending_daily[target_id]
         task_open_time.pop(target_id, None)
@@ -1903,7 +1947,8 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_id=referral_map.get(target_id)
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
-            referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
+            add_referral_commission(ref_id, REFERRAL_BONUS_PER_TASK, "bonus", 1, target_id, "First approved task referral bonus")
+        record_task_referral_commissions(target_id, reward)
         await update.message.reply_text(f"✅ Approved {target_id} +Rs{reward}")
         try:
             _, daily_limit, _ = check_daily_limits(target_id)
@@ -2148,49 +2193,63 @@ async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+def get_contact_username():
+    return str(globals().get("CONTACT_USERNAME") or SUPPORT_USERNAME).strip()
+
+def get_contact_url():
+    username=get_contact_username().lstrip("@")
+    return f"https://t.me/{username}" if username else CHANNEL_LINK
+
+async def set_contact_username_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    global CONTACT_USERNAME
+    if not context.args:
+        await update.message.reply_text(f"Current Contact Username: {get_contact_username()}\nUsage: /set_contact_username @username")
+        return
+    username=context.args[0].strip()
+    if not re.fullmatch(r"@?[A-Za-z0-9_]{5,32}", username):
+        await update.message.reply_text("❌ Invalid Telegram username. Example: /set_contact_username @yourusername")
+        return
+    CONTACT_USERNAME = "@" + username.lstrip("@")
+    save_data()
+    await update.message.reply_text(f"✅ Contact Us updated to {CONTACT_USERNAME}\nUsers will now be sent directly to this Telegram chat.")
+
 async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    await q.message.reply_text(f"📞 Contact Us\n\nSupport: {SUPPORT_USERNAME}\nChannel: {get_join_channel_link()}\nUPI: {ADMIN_UPI}\n\nFor any issues, contact admin!", reply_markup=main_menu())
+    username=get_contact_username()
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Message Admin", url=get_contact_url())],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+    await q.message.reply_text(f"📞 CONTACT US\n\nAdmin: {username}\n\nTap below to send a private message directly to Admin.", reply_markup=kb)
 
 async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+    q=update.callback_query
     try: await q.answer()
     except: pass
-    uid = int(q.from_user.id)
-    user = users_db.get(uid, {}) or users_db.get(str(uid), {}) or {}
-    # Fill harmless Telegram profile fields without overwriting registered data.
-    tg = q.from_user
-    if isinstance(user, dict):
-        changed = False
-        if not user.get('name') and tg.full_name:
-            user['name'] = tg.full_name; changed = True
-        if tg.username and not user.get('username'):
-            user['username'] = tg.username; changed = True
-        if changed:
-            users_db[uid] = user
-            save_data()
-
-    plan = _get_user_plan_record(uid)
-    total_earned = get_balance(uid)
-    total_withdrawn = round(float(total_withdrawn_db.get(uid, 0)), 2)
-    joined = user.get('joined') or user.get('reg_date') or 'N/A'
-    plan_name = plan.get('plan_name', plan.get('name', plan.get('plan', 'No Plan'))) if plan else 'No Plan'
-    expiry = plan.get('expires_at', plan.get('expiry', 'N/A')) if plan else 'N/A'
-    remaining = 'N/A'
-    if expiry not in (None, 'N/A'):
-        try: remaining = max(0, (date.fromisoformat(str(expiry)[:10]) - get_ist_today()).days)
+    uid=q.from_user.id
+    user=users_db.get(uid,{})
+    plan=_get_user_plan_record(uid)
+    total_earned=get_balance(uid)
+    joined=user.get('joined') or user.get('reg_date') or 'N/A'
+    plan_name=plan.get('plan_name',plan.get('name',plan.get('plan','No Plan'))) if plan else 'No Plan'
+    expiry=plan.get('expires_at',plan.get('expiry','N/A')) if plan else 'N/A'
+    remaining='N/A'
+    if expiry not in (None,'N/A'):
+        try: remaining=max(0,(date.fromisoformat(str(expiry)[:10])-get_ist_today()).days)
         except: pass
-    count, limit, cap = check_daily_limits(uid)
-    msg = (
-        f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
-        f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
-        f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
-        f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
-        f"📋 Today's tasks: {count}/{limit}\n"
-        f"💰 Total earning: ₹{total_earned:.2f}\n"
-        f"💸 Total withdrawn: ₹{total_withdrawn:.2f}"
-    )
-    await q.message.reply_text(msg, reply_markup=main_menu())
+    count,limit,cap=check_daily_limits(uid)
+    approved_withdrawn=sum(int(x.get('amount',0) or 0) for x in withdraw_history.get(uid,[]) if str(x.get('status','')).lower()=='approved')
+    # Backward compatibility: if history was not present, include the current approved request.
+    current_req=withdraw_requests.get(uid,{})
+    if approved_withdrawn==0 and str(current_req.get('status','')).lower()=='approved':
+        approved_withdrawn=int(current_req.get('amount',0) or 0)
+    cap_remaining=max(0, cap-approved_withdrawn)
+    msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
+         f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
+         f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
+         f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
+         f"📋 Today's tasks: {count}/{limit}\n💰 Total earning: ₹{total_earned}\n"
+         f"🎯 Plan withdrawal cap: ₹{cap}\n💸 Total withdrawn: ₹{approved_withdrawn}\n📉 Withdrawal cap remaining: ₹{cap_remaining}")
+    await q.message.reply_text(msg,reply_markup=main_menu())
 
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -2257,35 +2316,52 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Only amounts affordable from the CURRENT balance are selectable.
-    # Example: balance Rs643 -> Rs200, Rs300, Rs500 are shown; Rs1000 is not selectable.
-    available = [opt for opt in WITHDRAW_OPTIONS if opt <= bal]
-    unavailable = [opt for opt in WITHDRAW_OPTIONS if opt > bal]
+    # Only amounts within both current balance and the active plan withdrawal cap are selectable.
+    info=_canonical_plan_info(uid)
+    withdrawn=get_withdrawn_for_cap(uid)
+    cap_remaining=max(0, float(info.get("cap", 0))-withdrawn)
+    effective_available=min(float(bal), cap_remaining) if info.get("cap", 0) else float(bal)
+    available = [opt for opt in WITHDRAW_OPTIONS if opt <= effective_available]
+    unavailable = [opt for opt in WITHDRAW_OPTIONS if opt > effective_available]
 
     if not available:
         await q.message.reply_text(f"Balance Rs{bal} is below the minimum withdrawal amount Rs{WITHDRAW_MIN}.", reply_markup=main_menu())
         return
 
-    # Only affordable amounts are rendered as selectable/highlighted buttons.
-    rows = [[InlineKeyboardButton(f"💰 Rs{opt} ✅ Available", callback_data=f"wd_select_{opt}")]
-            for opt in available]
+    rows = [[InlineKeyboardButton(f"💰 Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in available]
     rows.append([InlineKeyboardButton("↩️ Menu", callback_data="back_menu")])
 
     disabled_text = ""
     if unavailable:
-        disabled_text = "\n\n🔒 Not available with current balance: " + ", ".join(f"Rs{o}" for o in unavailable)
+        disabled_text = "\n\nUnavailable with current balance: " + ", ".join(f"Rs{o}" for o in unavailable)
 
     msg = (
         f"💸 WITHDRAW\n\n"
-        f"Wallet Balance: Rs{bal:.2f}\n"
+        f"Balance: Rs{bal}\n"
         f"Minimum: Rs{WITHDRAW_MIN}\n"
-        f"Platform deduction: {PLATFORM_FEE_PERCENT}%\n\n"
-        "Select an available withdrawal amount:"
-        f"{disabled_text}\n\n"
-        "⏰ Only 1 withdrawal is allowed per day."
+        f"Plan withdrawal cap used: ₹{withdrawn:.2f}/₹{info.get('cap',0)}\n"
+        f"Cap remaining: ₹{cap_remaining:.2f}\n\n"
+        "7% deduction will be shown before confirmation.\n\n"
+        "Select withdrawal amount:"
+        f"{disabled_text}"
     )
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
 
+
+async def withdraw_history_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    history=withdraw_history.get(uid, [])
+    if not history:
+        await q.message.reply_text("📜 WITHDRAWAL HISTORY\n\nNo completed withdrawals yet.", reply_markup=main_menu())
+        return
+    msg="📜 WITHDRAWAL HISTORY\n\n"
+    for h in history[-10:][::-1]:
+        msg += (f"📅 {h.get('date','N/A')}\n"
+                f"Amount: ₹{h.get('amount',0)} | Fee: ₹{h.get('fee',0)} (7%)\n"
+                f"You received: ₹{h.get('net',0)}\n"
+                f"Status: {h.get('status','N/A')}\n\n")
+    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
 async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -2305,11 +2381,11 @@ async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"💸 Withdrawal Details\n\n"
-        f"Withdrawal Amount: Rs{amount}\n"
-        f"Platform Deduction: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
+        f"Amount: Rs{amount}\n"
+        f"Platform Fee: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
         f"You Receive: Rs{net}\n"
-        f"Current Wallet Balance: Rs{bal:.2f}\n"
-        f"Balance After Withdrawal: Rs{bal - amount:.2f}\n\n"
+        f"Current Balance: Rs{bal}\n"
+        f"Remaining Balance: Rs{bal - amount}\n\n"
         f"UPI ID: {upi}\n\n"
         "Is this UPI correct?"
     )
@@ -2406,13 +2482,8 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.message.reply_text(
         f"✅ Withdrawal Request Submitted!\n\n"
-        f"Withdrawal Amount: Rs{amount}\n"
-        f"Platform Deduction: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
-        f"You Receive: Rs{net}\n"
-        f"Current Wallet Balance: Rs{bal:.2f}\n"
-        f"Balance After Withdrawal: Rs{bal - amount:.2f}\n"
-        f"UPI: {upi}\n\n"
-        "Your request has been sent to Admin. Once processed, the withdrawal amount will be deducted from your wallet.\n\n"
+        f"Amount: Rs{amount}\nFee: Rs{fee}\nYou Receive: Rs{net}\nUPI: {upi}\n\n"
+        "Your request has been sent to Admin. Once processed, you will receive the approval message.\n\n"
         "⏰ One withdrawal per day only. You can withdraw again tomorrow.",
         reply_markup=main_menu()
     )
@@ -2451,10 +2522,9 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         reward=pending_daily[uid].get('task',{}).get('reward',5)
         today=pending_daily[uid].get('date')
         tasks_db[uid]=tasks_db.get(uid,0)+1
-        task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + float(reward), 2)
-        credit_referral_task_commission(uid, reward)
         if uid not in daily_task_count: daily_task_count[uid]={}
         daily_task_count[uid][today]=daily_task_count[uid].get(today,0)+1
+        add_today_task_earning(uid, reward, today)
         if reward!=5: bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-5)
         del pending_daily[uid]
         task_open_time.pop(uid, None)
@@ -2465,7 +2535,8 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         ref_id=referral_map.get(uid)
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
-            referral_earnings[ref_id]=referral_earnings.get(ref_id,0)+REFERRAL_BONUS_PER_TASK
+            add_referral_commission(ref_id, REFERRAL_BONUS_PER_TASK, "bonus", 1, uid, "First approved task referral bonus")
+        record_task_referral_commissions(uid, reward)
         save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
         try:
@@ -2578,17 +2649,13 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     new_bal = get_balance(uid)
     req['status'] = 'approved'
     req['approved_at'] = str(get_ist_now())
-    total_withdrawn_db[uid] = round(float(total_withdrawn_db.get(uid, 0)) + float(amount), 2)
+    req['remaining_balance'] = new_bal
+    withdraw_history.setdefault(uid, []).append(dict(req))
     last_withdraw_date_db[uid] = str(get_ist_today())
     save_data()
 
     await q.message.reply_text(
-        f"✅ WITHDRAWAL APPROVED\n"
-        f"User: {uid}\n"
-        f"Withdrawal Amount: Rs{amount}\n"
-        f"Platform Deduction: Rs{req['fee']} ({PLATFORM_FEE_PERCENT}%)\n"
-        f"Net Paid: Rs{req['net']}\n"
-        f"Remaining Wallet Balance: Rs{new_bal:.2f}"
+        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
     )
     try:
         await context.bot.send_message(
@@ -2701,52 +2768,111 @@ async def test_withdraw_setup_cmd(update: Update, context: ContextTypes.DEFAULT_
 
 
 
+def _missed_snapshot(task):
+    snap=dict(task)
+    # Keep only JSON-friendly / stable task data. Datetime time objects are restored from strings.
+    snap.pop('open_time_obj', None); snap.pop('close_time_obj', None); snap.pop('next_time_obj', None)
+    snap['missed_snapshot']=True
+    return snap
+
 def track_missed_tasks_for_user(uid):
     if not MISSED_ENABLED:
         return missed_tasks_db.get(uid, [])
-    # Check which tasks user missed today (time passed without completing)
     today = str(get_ist_today())
     now = get_ist_time()
-    today_tasks = [t for t in scheduled_tasks_db if t['date'] == today]
-    missed = []
-    user_status = user_task_status.get(uid, {})
-    skip_status = skip_db.get(uid, {})
+    today_tasks = [t for t in scheduled_tasks_db if t.get('date') == today]
+    missed=[]
+    user_status=user_task_status.get(uid,{})
+    skip_status=skip_db.get(uid,{})
+    missed_tasks_db.setdefault(uid,[])
+    existing={int(t.get('id')):t for t in missed_tasks_db[uid] if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
     for task in today_tasks:
-        if now > task['close_time_obj']:
-            tid = task['id']
-            # If not completed and not skipped, it's missed
-            status = user_status.get(tid, {}).get('status') if isinstance(user_status.get(tid, {}), dict) else user_status.get(tid)
-            skip = skip_status.get(tid, {}).get('status') if isinstance(skip_status.get(tid, {}), dict) else skip_status.get(tid)
-            if status != 'completed' and skip != 'skipped':
-                missed.append(task)
-    if uid not in missed_tasks_db:
-        missed_tasks_db[uid] = []
-    # Merge without duplicates
-    existing_ids = {t['id'] for t in missed_tasks_db[uid]}
-    for t in missed:
-        if t['id'] not in existing_ids:
-            missed_tasks_db[uid].append(t)
-    return missed_tasks_db[uid]
+        close_obj=task.get('close_time_obj')
+        if not close_obj:
+            close_obj=parse_time_str(str(task.get('close_time','23:59')))
+        if not close_obj or now <= close_obj:
+            continue
+        tid=task.get('id')
+        status=user_status.get(tid,{})
+        status=status.get('status') if isinstance(status,dict) else status
+        sk=skip_status.get(tid,{})
+        sk=sk.get('status') if isinstance(sk,dict) else sk
+        if status in ('completed','pending_verification') or sk=='skipped':
+            continue
+        if tid not in existing:
+            snap=_missed_snapshot(task)
+            missed_tasks_db[uid].append(snap); existing[tid]=snap
+        missed.append(existing[tid])
+    # Return only today's snapshots that have not been completed after reopening.
+    result=[]
+    for t in missed_tasks_db.get(uid,[]):
+        if str(t.get('date')) != today: continue
+        tid=t.get('id')
+        st=user_task_status.get(uid,{}).get(tid,{})
+        st=st.get('status') if isinstance(st,dict) else st
+        if st not in ('completed',): result.append(t)
+    return result
 
 async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
     if not MISSED_ENABLED:
-        await q.message.reply_text(
-            "⏰ Missed Tasks are currently OFF by Admin.",
-            reply_markup=main_menu()
-        )
-        return
-    missed = track_missed_tasks_for_user(uid)
-    # Also check newly missed
+        await q.message.reply_text("⏰ Missed Tasks are currently OFF by Admin.", reply_markup=main_menu()); return
+    missed=track_missed_tasks_for_user(uid)
     if not missed:
-        await q.message.reply_text("✅ No missed tasks today! Good job! All tasks completed or skipped properly.", reply_markup=main_menu())
-        return
-    msg = f"❌ Missed Tasks Today - Total {len(missed)}:\n\n"
+        await q.message.reply_text("✅ No missed tasks today!", reply_markup=main_menu()); return
+    msg=f"❌ MISSED TASKS TODAY - Total {len(missed)}:\n\n"
+    kb=[]
     for t in missed:
-        msg += f"Task {t['task_number']}: {t['title']}\nTime: {t['open_time']}→{t['close_time']} Reward: Rs{t['reward']}\nLink: {t['link']}\n\n"
-    msg += "\nTasks time over! You cannot complete now. Next tasks will come tomorrow!"
-    await q.message.reply_text(msg, reply_markup=main_menu())
+        msg += (f"Task {t.get('task_number','?')}: {t.get('title','')}\n"
+                f"Time: {t.get('open_time','')} → {t.get('close_time','')} | Reward: ₹{t.get('reward',5)}\n"
+                f"Link: {t.get('link','')}\n\n")
+        tid=t.get('id')
+        st=user_task_status.get(uid,{}).get(tid,{})
+        st=st.get('status') if isinstance(st,dict) else st
+        if st not in ('pending_verification','completed'):
+            kb.append([InlineKeyboardButton(f"🔄 Do Missed Task {t.get('task_number','?')}", callback_data=f"missed_reopen_{tid}")])
+    msg += "You can reopen a missed task and submit proof once. Admin approval is required."
+    kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+    await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
+
+async def missed_reopen_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    try: tid=int(q.data.replace('missed_reopen_','',1))
+    except Exception: return
+    track_missed_tasks_for_user(uid)
+    task=next((t for t in missed_tasks_db.get(uid,[]) if int(t.get('id',-999999))==tid),None)
+    if not task:
+        await q.message.reply_text("❌ This missed task is no longer available.", reply_markup=main_menu()); return
+    status_data=user_task_status.get(uid,{}).get(tid,{})
+    status=status_data.get('status') if isinstance(status_data,dict) else status_data
+    if isinstance(status_data,dict) and status_data.get('missed_submission_used'):
+        await q.message.reply_text("❌ This missed task proof has already been submitted once. Please wait for Admin approval.", reply_markup=main_menu()); return
+    if status in ('completed','pending_verification'):
+        await q.message.reply_text("⏳ This missed task is already submitted or completed.", reply_markup=main_menu()); return
+    context.user_data['awaiting_daily_screenshot']=False
+    context.user_data['daily_screenshot_task_id']=tid
+    context.user_data['missed_reopened_task_id']=tid
+    task_id=tid
+    text=(f"🔄 MISSED TASK {task.get('task_number','?')} REOPENED\n\n"
+          f"Title: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
+          "Complete the task using the link above, then tap Upload Screenshot.")
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data=f"missed_upload_{task_id}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+    await q.message.reply_text(text, reply_markup=kb)
+
+async def missed_upload_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    try: tid=int(q.data.replace('missed_upload_','',1))
+    except Exception: return
+    task=next((t for t in missed_tasks_db.get(uid,[]) if int(t.get('id',-999999))==tid),None)
+    if not task:
+        await q.message.reply_text("❌ Missed task not found.", reply_markup=main_menu()); return
+    context.user_data['awaiting_daily_screenshot']=True
+    context.user_data['daily_screenshot_task_id']=tid
+    context.user_data['missed_reopened_task_id']=tid
+    await q.message.reply_text(f"📤 Send screenshot for missed Task {task.get('task_number','?')} as PHOTO now.")
 
 async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
@@ -3116,8 +3242,8 @@ def _json_safe(value):
 def _restore_special_state(data):
     # Keys saved by JSON become strings; convert user-keyed maps back to int keys.
     int_key_maps = [
-        'users_db','tasks_db','task_earnings_db','bonus_balance','referrals_db','referral_earnings','referral_commission_daily','referral_map','total_withdrawn_db',
-        'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count',
+        'users_db','tasks_db','bonus_balance','referrals_db','referral_earnings','referral_map',
+        'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count',
         'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
         'promo_views_db','promo_pending','pending_plans'
     ]
@@ -3166,9 +3292,9 @@ def save_data():
     """
     try:
         data = {
-            'users_db': users_db, 'tasks_db': tasks_db, 'task_earnings_db': task_earnings_db, 'bonus_balance': bonus_balance,
-            'referral_earnings': referral_earnings, 'referral_commission_daily': referral_commission_daily, 'referrals_db': referrals_db, 'referral_map': referral_map, 'total_withdrawn_db': total_withdrawn_db,
-            'pending_referrals': pending_referrals, 'withdraw_requests': withdraw_requests,
+            'users_db': users_db, 'tasks_db': tasks_db, 'bonus_balance': bonus_balance,
+            'referral_earnings': referral_earnings, 'referral_commission_ledger': referral_commission_ledger, 'daily_task_earnings': daily_task_earnings, 'referrals_db': referrals_db, 'referral_map': referral_map,
+            'pending_referrals': pending_referrals, 'withdraw_requests': withdraw_requests, 'withdraw_history': withdraw_history,
             'withdraw_done_date': withdraw_done_date, 'last_withdraw_date_db': last_withdraw_date_db,
             'daily_task_count': daily_task_count, 'user_task_status': user_task_status,
             'scheduled_tasks_db': scheduled_tasks_db, 'scheduled_task_counter': scheduled_task_counter,
@@ -3176,9 +3302,9 @@ def save_data():
             'missed_tasks_db': missed_tasks_db, 'skip_db': skip_db, 'warnings_db': warnings_db,
             'banned_users': banned_users, 'task_images_db': task_images_db, 'screenshot_hashes': screenshot_hashes,
             'promo_campaigns_db': promo_campaigns_db, 'promo_campaign_counter': promo_campaign_counter,
-            'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'promo_pending': promo_pending,
+            'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'REFERRAL_PLAN_COMMISSION_PERCENT': REFERRAL_PLAN_COMMISSION_PERCENT, 'L1_TASK_COMMISSION_PERCENT': L1_TASK_COMMISSION_PERCENT, 'L2_TASK_COMMISSION_PERCENT': L2_TASK_COMMISSION_PERCENT, 'promo_pending': promo_pending,
             'pending_daily': pending_daily, 'ADMIN_ID_LIST': ADMIN_ID_LIST, 'ADMIN_NAMES_DB': admin_names_db, 'MISSED_ENABLED': MISSED_ENABLED,
-            'PAYMENT_UPI': get_payment_upi(),
+            'PAYMENT_UPI': get_payment_upi(), 'CONTACT_USERNAME': get_contact_username(),
         }
         safe=_json_safe(data)
         # Always keep a local backup too.
@@ -3191,10 +3317,10 @@ def save_data():
         print(f"Save error {e}")
 
 def _apply_loaded_data(data):
-    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db
+    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db, CONTACT_USERNAME, REFERRAL_PLAN_COMMISSION_PERCENT, L1_TASK_COMMISSION_PERCENT, L2_TASK_COMMISSION_PERCENT
     data=_restore_special_state(data or {})
-    map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map','pending_referrals',
-               'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
+    map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referral_commission_ledger','daily_task_earnings','referrals_db','referral_map','pending_referrals',
+               'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
                'support_plans_db','user_plans','pending_plans','missed_tasks_db','skip_db','warnings_db','promo_earnings_db',
                'promo_views_db','promo_pending','pending_daily','task_images_db','promo_campaigns_db']
     for name in map_names:
@@ -3228,6 +3354,13 @@ def _apply_loaded_data(data):
     if isinstance(data.get('awaiting_plan_payment_adminless'),list):
         awaiting_plan_payment_adminless.clear(); awaiting_plan_payment_adminless.update(data['awaiting_plan_payment_adminless'])
     if data.get('PAYMENT_UPI'): PAYMENT_UPI=str(data['PAYMENT_UPI'])
+    if data.get('CONTACT_USERNAME'): CONTACT_USERNAME=str(data['CONTACT_USERNAME'])
+    try: REFERRAL_PLAN_COMMISSION_PERCENT=float(data.get("REFERRAL_PLAN_COMMISSION_PERCENT", REFERRAL_PLAN_COMMISSION_PERCENT))
+    except: pass
+    try: L1_TASK_COMMISSION_PERCENT=float(data.get("L1_TASK_COMMISSION_PERCENT", L1_TASK_COMMISSION_PERCENT))
+    except: pass
+    try: L2_TASK_COMMISSION_PERCENT=float(data.get("L2_TASK_COMMISSION_PERCENT", L2_TASK_COMMISSION_PERCENT))
+    except: pass
     try: scheduled_task_counter=max(int(data.get('scheduled_task_counter',1)), max([int(t.get('id',0)) for t in scheduled_tasks_db if isinstance(t,dict)],default=0)+1)
     except: pass
     try: promo_campaign_counter=max(int(data.get('promo_campaign_counter',1)), max([int(c.get('id',0)) for c in promo_campaigns_db if isinstance(c,dict)],default=0)+1)
@@ -3246,10 +3379,6 @@ def load_data():
         if data:
             _apply_loaded_data(data)
             normalize_support_plans()
-            # Backfill new task-earnings ledger from historical completed tasks.
-            for _uid, _count in list(tasks_db.items()):
-                if int(_uid) not in task_earnings_db:
-                    task_earnings_db[int(_uid)] = round(float(_count or 0) * 5, 2)
             print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
             if source=='bot_data.json' and DATABASE_URL:
                 save_data()  # migrate legacy local data to PostgreSQL
@@ -3289,7 +3418,13 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not plan:
             await update.message.reply_text(f"Plan ID {pid} not found!")
             return
-        user_plans[str(uid)] = pid
+        expiry=get_ist_today()+timedelta(days=int(plan.get('duration',30) or 30))
+        user_plans[str(uid)] = {
+            'plan_id': pid, 'plan': str(plan.get('name','Plan')).lower(), 'plan_name': str(plan.get('name','Plan')),
+            'price': int(plan.get('price',0) or 0), 'daily_limit': int(plan.get('daily_limit',10) or 10),
+            'earnings_limit': int(plan.get('earnings_limit',0) or 0), 'date': str(get_ist_today()),
+            'expiry': str(expiry), 'status': 'active'
+        }
         save_data()
         reward = get_reward_for_user(uid, 5)
         await update.message.reply_text(f"Assigned! User {uid} -> {plan['name']} Rs{plan['price']} = Rs{reward}/task")
@@ -3374,15 +3509,16 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
             reward=get_reward_for_user(uid,base_reward)
             tasks_db[uid]=tasks_db.get(uid,0)+1
-            task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + float(reward), 2)
-            credit_referral_task_commission(uid, reward)
             today=str(get_ist_today())
             daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
+            add_today_task_earning(uid, reward, today)
             for tid,st in list(user_task_status.get(uid,{}).items()):
                 if isinstance(st,dict) and st.get('status')=='pending_verification':
                     user_task_status[uid][tid]={'status':'completed','completed_at':get_ist_now()}; break
             if reward!=base_reward:
                 bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-base_reward)
+            # Bulk approvals also generate the same L1/L2 referral commissions.
+            record_task_referral_commissions(uid, reward)
             pending_daily.pop(uid,None); approved+=1
             try: await context.bot.send_message(chat_id=uid,text=f"✅ Task Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
             except: pass
@@ -3860,8 +3996,10 @@ async def admin_referral_cb(update, context):
         await update.callback_query.answer()
         await update.effective_message.reply_text(
             "🔗 REFERRAL SETTINGS\n\n"
-            "L1: 10% plan commission + task referral bonus\n"
-            "L2: Current configured referral system"
+            f"Plan activation: {REFERRAL_PLAN_COMMISSION_PERCENT:g}%\n"
+            f"L1 task commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
+            f"L2 task commission: {L2_TASK_COMMISSION_PERCENT:g}%\n\n"
+            "Admin change: /set_referral_commission plan 10 | l1 2 | l2 0.5"
         )
     except:
         pass
@@ -3884,9 +4022,39 @@ async def admin_missed_toggle_cb(update, context):
              "Missed task tracking is now DISABLED."),
             reply_markup=admin_panel_keyboard()
         )
+        if MISSED_ENABLED:
+            for member_id in list(users_db.keys()):
+                try:
+                    await context.bot.send_message(
+                        chat_id=member_id,
+                        text=("⏰ Missed Tasks option is now ENABLED by Admin.\n\n"
+                              "If you miss a scheduled task after its time window closes, it will appear in your Missed Tasks option."),
+                        reply_markup=main_menu()
+                    )
+                except Exception:
+                    pass
     except Exception as e:
         print(f"missed toggle error: {e}")
 
+
+async def set_referral_commission_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    global REFERRAL_PLAN_COMMISSION_PERCENT, L1_TASK_COMMISSION_PERCENT, L2_TASK_COMMISSION_PERCENT
+    if len(context.args) < 2 or context.args[0].lower() not in ("plan","l1","l2"):
+        await update.message.reply_text(
+            f"Current Referral Commission\nPlan activation: {REFERRAL_PLAN_COMMISSION_PERCENT:g}%\n"
+            f"L1 task: {L1_TASK_COMMISSION_PERCENT:g}%\nL2 task: {L2_TASK_COMMISSION_PERCENT:g}%\n\n"
+            "Change: /set_referral_commission plan 10\n/set_referral_commission l1 2\n/set_referral_commission l2 0.5")
+        return
+    try: value=float(context.args[1])
+    except: await update.message.reply_text("Enter a valid percentage."); return
+    if value < 0 or value > 100: await update.message.reply_text("Percentage must be 0-100."); return
+    key=context.args[0].lower()
+    if key=="plan": REFERRAL_PLAN_COMMISSION_PERCENT=value
+    elif key=="l1": L1_TASK_COMMISSION_PERCENT=value
+    else: L2_TASK_COMMISSION_PERCENT=value
+    save_data()
+    await update.message.reply_text(f"✅ {key.upper()} commission updated to {value:g}%")
 
 async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -4446,29 +4614,34 @@ def main():
                     if requested_task_id is not None:
                         try:
                             requested_task_id = int(requested_task_id)
-                            requested_task = next((t for t in get_tasks_for_today(uid) if int(t.get('id', -1)) == requested_task_id), None)
+                            requested_task = next((t for t in get_tasks_for_today() if int(t.get('id', -1)) == requested_task_id), None)
+                            if not requested_task:
+                                requested_task = next((t for t in missed_tasks_db.get(uid, []) if int(t.get('id', -1)) == requested_task_id), None)
                             if requested_task:
                                 task_to_use = requested_task
                         except Exception:
                             pass
-                    if not current:
-                        default_task = get_today_task_for_user(uid)
-                        if not default_task and scheduled_tasks_db:
-                            default_task = scheduled_tasks_db[-1]
-                        if not default_task:
-                            default_task = {'id': 0, 'title': 'Daily Task', 'reward': 5, 'task_number': 1, 'open_time': '00:00', 'close_time': '23:59'}
-                        task_to_use = default_task
+                    if not task_to_use:
+                        missed_id=context.user_data.get('missed_reopened_task_id')
+                        if missed_id is not None:
+                            task_to_use=next((t for t in missed_tasks_db.get(uid, []) if int(t.get('id',-999999))==int(missed_id)),None)
+                    if not task_to_use:
+                        await update.message.reply_text("❌ No scheduled task is available for this screenshot. Please use Upload Screenshot only for an active or reopened task.", reply_markup=main_menu())
+                        context.user_data.pop('awaiting_daily_screenshot', None)
+                        context.user_data.pop('daily_screenshot_task_id', None)
+                        return
                     if file_unique_id and file_unique_id in screenshot_hashes:
                         await update.message.reply_text("WARNING Same Screenshot! V56")
                         return
                     if file_unique_id:
                         screenshot_hashes.add(file_unique_id)
                     today = str(get_ist_today())
-                    pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
+                    pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id, 'is_missed_reopen': bool(context.user_data.get('missed_reopened_task_id'))}
                     if uid not in user_task_status:
                         user_task_status[uid] = {}
                     task_id_for_status = task_to_use.get('id', 0)
-                    user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
+                    missed_reopen_id=context.user_data.get('missed_reopened_task_id')
+                    user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now(), 'missed_submission_used': bool(missed_reopen_id)}
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
                         chan = get_screenshot_channel()
@@ -4557,6 +4730,7 @@ def main():
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
             app.add_handler(CommandHandler("set_payment_upi", set_payment_upi_cmd))
+            app.add_handler(CommandHandler("set_contact_username", set_contact_username_cmd))
             app.add_handler(CommandHandler("add_promo", add_promo_campaign_cmd))
             app.add_handler(CommandHandler("list_promos", list_promo_campaigns_cmd))
             app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
@@ -4575,7 +4749,25 @@ def main():
                 group=-10
             )
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+            app.add_handler(CallbackQueryHandler(refer_earn_cb, pattern="^refer_earn$"))
+            app.add_handler(CallbackQueryHandler(withdraw_history_cb, pattern="^withdraw_history$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            
+            async def daily_open_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                q=update.callback_query; await q.answer()
+                uid=q.from_user.id
+                try: tid=int(q.data.replace("daily_open_","",1))
+                except Exception: return
+                task=next((t for t in get_tasks_for_today() if int(t.get('id',-1))==tid),None)
+                if not task:
+                    await q.message.reply_text("❌ Task is no longer scheduled today.", reply_markup=main_menu()); return
+                context.user_data['awaiting_daily_screenshot']=False
+                context.user_data['daily_screenshot_task_id']=tid
+                context.user_data.pop('missed_reopened_task_id',None)
+                text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\nAfter completing, tap Upload Screenshot.")
+                kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+                await q.message.reply_text(text, reply_markup=kb)
+            app.add_handler(CallbackQueryHandler(daily_open_cb, pattern=r"^daily_open_-?\d+$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
@@ -4590,6 +4782,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
             app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
             app.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
+            app.add_handler(CallbackQueryHandler(missed_reopen_cb, pattern=r"^missed_reopen_-?\d+$"))
+            app.add_handler(CallbackQueryHandler(missed_upload_cb, pattern=r"^missed_upload_-?\d+$"))
             app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
             app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
@@ -4644,6 +4838,7 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
             app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
             app.add_handler(CallbackQueryHandler(admin_missed_toggle_cb, pattern='^admin_missed_toggle$'))
+            app.add_handler(CommandHandler("set_referral_commission", set_referral_commission_cmd))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
 
