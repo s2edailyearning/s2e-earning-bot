@@ -38,6 +38,8 @@ ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 PAYMENT_UPI = ADMIN_UPI
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
 CONTACT_USERNAME = SUPPORT_USERNAME
+# Contact Us opens the admin directly by Telegram user ID, so it does not depend on a public username.
+CONTACT_ADMIN_ID = int(os.getenv("CONTACT_ADMIN_ID", "7256515560")) if str(os.getenv("CONTACT_ADMIN_ID", "")).lstrip("-").isdigit() else 7256515560
 
 def get_payment_upi():
     return str(globals().get("PAYMENT_UPI") or ADMIN_UPI)
@@ -139,31 +141,44 @@ async def _show_plan_purchase(update, context, plan_type):
     q = update.callback_query
     try:
         await q.answer()
-    except:
+    except Exception:
         pass
     uid = q.from_user.id
-    is_active, plan_name, expiry = check_plan_active(uid)
+    info = _canonical_plan_info(uid)
     plan_type = "premium" if plan_type == "premium" else "basic"
     price = 499 if plan_type == "premium" else 199
     limit = DAILY_TASK_LIMIT_PREMIUM if plan_type == "premium" else DAILY_TASK_LIMIT_BASIC
-    if is_active and plan_name.lower().startswith(plan_type):
-        text = f"✅ {plan_type.capitalize()} plan is already active.\\nValid till: {expiry}\\nDaily tasks: {limit}"
-        kb = [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
-    else:
-        upi = get_payment_upi()
-        pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
+
+    # Any active plan blocks all self-service plan purchases. Only Admin can change it.
+    if info["active"]:
         text = (
-            f"💎 {plan_type.capitalize()} Plan — ₹{price}\\n\\n"
-            f"Daily Tasks: {limit}\\n"
-            f"Validity: 30 days\\n\\n"
-            f"💳 Pay manually to UPI:\\n{upi}\\n\\n"
-            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\\n"
-            "No payment link is required."
+            "💎 SUPPORT PLANS\n\n"
+            f"✅ You already have an active {info['display']} Plan.\n"
+            f"Valid till: {info['expiry']}\n"
+            f"Daily tasks: {info['daily']}\n"
+            f"Earning limit: ₹{info['cap']}\n\n"
+            "🔄 To change, upgrade or switch your plan, please contact Admin.\n"
+            "Only Admin can change the plan."
         )
-        kb = [
-            [InlineKeyboardButton("📤 I Paid - Send Proof", callback_data=f"plan_proof_{plan_type}")],
-            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
-        ]
+        kb = [[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],
+              [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+        await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    upi = get_payment_upi()
+    pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
+    text = (
+        f"💎 {plan_type.capitalize()} Plan — ₹{price}\n\n"
+        f"Daily Tasks: {limit}\n"
+        "Validity: 30 days\n\n"
+        f"💳 Pay manually to UPI:\n{upi}\n\n"
+        "After payment, click “I Paid - Send Proof” and send the payment screenshot.\n"
+        "No payment link is required."
+    )
+    kb = [
+        [InlineKeyboardButton("📤 I Paid - Send Proof", callback_data=f"plan_proof_{plan_type}")],
+        [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+    ]
     await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def plan_basic_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,6 +197,15 @@ async def plan_basic_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
+    active_info = _canonical_plan_info(uid)
+    if active_info["active"]:
+        await q.message.reply_text(
+            f"✅ You already have an active {active_info['display']} Plan.\n\n"
+            "To change/upgrade/switch plans, please contact Admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],
+                                                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+        )
+        return
     pending_plans[uid] = {"plan": "basic", "date": str(get_ist_today()), "price": 199}
     context.user_data["awaiting_plan_payment_proof"] = "basic"
     awaiting_plan_payment_adminless.add(uid)
@@ -191,6 +215,15 @@ async def plan_premium_proof_cb(update: Update, context: ContextTypes.DEFAULT_TY
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
+    active_info = _canonical_plan_info(uid)
+    if active_info["active"]:
+        await q.message.reply_text(
+            f"✅ You already have an active {active_info['display']} Plan.\n\n"
+            "To change/upgrade/switch plans, please contact Admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],
+                                                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+        )
+        return
     pending_plans[uid] = {"plan": "premium", "date": str(get_ist_today()), "price": 499}
     context.user_data["awaiting_plan_payment_proof"] = "premium"
     awaiting_plan_payment_adminless.add(uid)
@@ -203,6 +236,15 @@ async def plan_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if plan_type not in ("basic", "premium"):
         return
     uid = q.from_user.id
+    active_info = _canonical_plan_info(uid)
+    if active_info["active"]:
+        await q.message.reply_text(
+            f"✅ You already have an active {active_info['display']} Plan.\n\n"
+            "To change/upgrade/switch plans, please contact Admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📞 Contact Admin", url=get_contact_url())],
+                                                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+        )
+        return
     price = 199 if plan_type == "basic" else 499
     pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
     context.user_data["awaiting_plan_payment_proof"] = plan_type
@@ -2197,8 +2239,12 @@ def get_contact_username():
     return str(globals().get("CONTACT_USERNAME") or SUPPORT_USERNAME).strip()
 
 def get_contact_url():
-    username=get_contact_username().lstrip("@")
-    return f"https://t.me/{username}" if username else CHANNEL_LINK
+    # Telegram user-ID deep link opens the admin directly and avoids "Username not found".
+    try:
+        return f"tg://user?id={int(CONTACT_ADMIN_ID)}"
+    except Exception:
+        username=get_contact_username().lstrip("@")
+        return f"https://t.me/{username}" if username else CHANNEL_LINK
 
 async def set_contact_username_cmd(update, context):
     if not is_admin(update.effective_user.id):
@@ -2226,7 +2272,7 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except: pass
     uid=q.from_user.id
-    user=users_db.get(uid,{})
+    user=users_db.get(uid) or users_db.get(str(uid)) or {}
     plan=_get_user_plan_record(uid)
     total_earned=get_balance(uid)
     joined=user.get('joined') or user.get('reg_date') or 'N/A'
@@ -2265,26 +2311,25 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     today = str(get_ist_today())
 
-    # One withdrawal request per day. A submitted/pending request also counts for today.
-    if withdraw_done_date.get(uid) == today or last_withdraw_date_db.get(uid) == today:
-        req = withdraw_requests.get(uid, {})
-        status = req.get('status')
+    # One withdrawal per day. Only a real request for TODAY blocks a new request.
+    # Old/stale withdraw_done_date values are ignored when there is no matching request.
+    req = withdraw_requests.get(uid, {}) or {}
+    req_date = str(req.get('date', ''))
+    status = str(req.get('status', '')).lower()
+    blocked_today = (req_date == today and status in ('processing', 'approved')) or (last_withdraw_date_db.get(uid) == today)
+    if blocked_today:
         if status == 'processing':
             text = ("⏳ Withdrawal already submitted today!\n\n"
                     f"Amount: Rs{req.get('amount', 0)}\n"
                     "Status: Pending Admin Processing\n\n"
                     "You can make another withdrawal tomorrow.")
-        elif status == 'approved':
-            text = "✅ You have already withdrawn once today!\n\nYou can withdraw again tomorrow."
-        elif status == 'rejected':
-            text = "❌ Today's withdrawal request was rejected.\n\nYou can submit another withdrawal tomorrow."
         else:
-            text = "⏰ You can withdraw only once per day.\n\nPlease try again tomorrow."
+            text = "✅ You have already withdrawn once today!\n\nYou can withdraw again tomorrow."
         await q.message.reply_text(text, reply_markup=main_menu())
         return
 
     bal = get_balance(uid)
-    tasks_done = get_tasks(uid)
+    tasks_done = check_daily_limits(uid)[0]
 
     # Keep existing membership check behavior, but do not block withdrawals if Telegram check fails.
     try:
@@ -2452,8 +2497,11 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     amount = int(q.data.split("_")[-1])
     today = str(get_ist_today())
 
-    # Prevent duplicate confirmations on the same day.
-    if withdraw_done_date.get(uid) == today or last_withdraw_date_db.get(uid) == today:
+    # Prevent duplicate confirmations on the same day. Ignore stale legacy marker by itself.
+    existing = withdraw_requests.get(uid, {}) or {}
+    existing_status = str(existing.get('status', '')).lower()
+    existing_date = str(existing.get('date', ''))
+    if (existing_date == today and existing_status in ('processing', 'approved')) or last_withdraw_date_db.get(uid) == today:
         await q.message.reply_text("⏰ You can withdraw only once per day. You can withdraw again tomorrow.", reply_markup=main_menu())
         return
 
@@ -3304,7 +3352,7 @@ def save_data():
             'promo_campaigns_db': promo_campaigns_db, 'promo_campaign_counter': promo_campaign_counter,
             'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'REFERRAL_PLAN_COMMISSION_PERCENT': REFERRAL_PLAN_COMMISSION_PERCENT, 'L1_TASK_COMMISSION_PERCENT': L1_TASK_COMMISSION_PERCENT, 'L2_TASK_COMMISSION_PERCENT': L2_TASK_COMMISSION_PERCENT, 'promo_pending': promo_pending,
             'pending_daily': pending_daily, 'ADMIN_ID_LIST': ADMIN_ID_LIST, 'ADMIN_NAMES_DB': admin_names_db, 'MISSED_ENABLED': MISSED_ENABLED,
-            'PAYMENT_UPI': get_payment_upi(), 'CONTACT_USERNAME': get_contact_username(),
+            'PAYMENT_UPI': get_payment_upi(), 'CONTACT_USERNAME': get_contact_username(), 'CONTACT_ADMIN_ID': CONTACT_ADMIN_ID,
         }
         safe=_json_safe(data)
         # Always keep a local backup too.
@@ -3317,7 +3365,7 @@ def save_data():
         print(f"Save error {e}")
 
 def _apply_loaded_data(data):
-    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db, CONTACT_USERNAME, REFERRAL_PLAN_COMMISSION_PERCENT, L1_TASK_COMMISSION_PERCENT, L2_TASK_COMMISSION_PERCENT
+    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db, CONTACT_USERNAME, CONTACT_ADMIN_ID, REFERRAL_PLAN_COMMISSION_PERCENT, L1_TASK_COMMISSION_PERCENT, L2_TASK_COMMISSION_PERCENT
     data=_restore_special_state(data or {})
     map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referral_commission_ledger','daily_task_earnings','referrals_db','referral_map','pending_referrals',
                'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
@@ -3355,6 +3403,9 @@ def _apply_loaded_data(data):
         awaiting_plan_payment_adminless.clear(); awaiting_plan_payment_adminless.update(data['awaiting_plan_payment_adminless'])
     if data.get('PAYMENT_UPI'): PAYMENT_UPI=str(data['PAYMENT_UPI'])
     if data.get('CONTACT_USERNAME'): CONTACT_USERNAME=str(data['CONTACT_USERNAME'])
+    try:
+        if data.get('CONTACT_ADMIN_ID') is not None: CONTACT_ADMIN_ID=int(data['CONTACT_ADMIN_ID'])
+    except Exception: pass
     try: REFERRAL_PLAN_COMMISSION_PERCENT=float(data.get("REFERRAL_PLAN_COMMISSION_PERCENT", REFERRAL_PLAN_COMMISSION_PERCENT))
     except: pass
     try: L1_TASK_COMMISSION_PERCENT=float(data.get("L1_TASK_COMMISSION_PERCENT", L1_TASK_COMMISSION_PERCENT))
@@ -3546,8 +3597,17 @@ def _load_channel_config():
         print(f"Channel config load error: {e}")
     return {}
 
+DEFAULT_TASK_SCREENSHOT_CHANNEL_ID = -1004428587527
+LEGACY_TASK_SCREENSHOT_CHANNEL_IDS = {-1004295034675, -1004295034675}
+
 def get_screenshot_channel():
-    return _load_channel_config().get('screenshot_channel') or SCREENSHOT_CHANNEL_ID or SCREENSHOT_CHANNEL
+    stored = _load_channel_config().get('screenshot_channel')
+    try:
+        if stored is not None and int(stored) in LEGACY_TASK_SCREENSHOT_CHANNEL_IDS:
+            return DEFAULT_TASK_SCREENSHOT_CHANNEL_ID
+    except Exception:
+        pass
+    return stored or SCREENSHOT_CHANNEL_ID or DEFAULT_TASK_SCREENSHOT_CHANNEL_ID or SCREENSHOT_CHANNEL
 
 def get_withdraw_channel():
     return _load_channel_config().get('withdraw_channel') or WITHDRAW_CHANNEL_ID or WITHDRAW_CHANNEL
