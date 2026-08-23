@@ -1041,14 +1041,46 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(name) < 2:
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
-    users_db[uid] = {'name': name}
-    await update.message.reply_text("Gender? Male/Female/Other:")
+    users_db.setdefault(uid, {})['name'] = name
+    await update.message.reply_text(
+        "Select your gender:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨 Male", callback_data="reg_gender_male"),
+             InlineKeyboardButton("👩 Female", callback_data="reg_gender_female")],
+            [InlineKeyboardButton("⚪ Other", callback_data="reg_gender_other")],
+        ]),
+    )
     return GENDER
 
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Text fallback; normal registration uses the inline buttons.
     uid = update.effective_user.id
-    users_db[uid]['gender'] = update.message.text.strip()
+    gender = update.message.text.strip().title()
+    if gender not in ("Male", "Female", "Other"):
+        await update.message.reply_text(
+            "Please select one of the options:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👨 Male", callback_data="reg_gender_male"),
+                 InlineKeyboardButton("👩 Female", callback_data="reg_gender_female")],
+                [InlineKeyboardButton("⚪ Other", callback_data="reg_gender_other")],
+            ]),
+        )
+        return GENDER
+    users_db.setdefault(uid, {})['gender'] = gender
+    save_data()
     await update.message.reply_text("Date of Birth? DD/MM/YYYY:")
+    return DOB
+
+async def reg_gender_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    gender = str(q.data).replace("reg_gender_", "").title()
+    if gender not in ("Male", "Female", "Other"):
+        return GENDER
+    users_db.setdefault(uid, {})['gender'] = gender
+    save_data()
+    await q.message.edit_text(f"✅ Gender: {gender}\n\nDate of Birth? DD/MM/YYYY:")
     return DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1100,18 +1132,56 @@ async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
     pincode=update.message.text.strip()
     if not pincode.isdigit() or len(pincode)!=6:
-        await update.message.reply_text("Invalid Pincode! 6 digits:")
+        await update.message.reply_text("Invalid Pincode! 6 digits only:")
         return PINCODE
-    users_db[uid]['pincode']=pincode
-    await update.message.reply_text("Profession? Student/Employee/Business/Other:")
+    users_db.setdefault(uid, {})['pincode']=pincode
+    await update.message.reply_text(
+        "Select your profession:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎓 Student", callback_data="reg_prof_student"),
+             InlineKeyboardButton("💼 Employee", callback_data="reg_prof_employee")],
+            [InlineKeyboardButton("🏪 Business", callback_data="reg_prof_business"),
+             InlineKeyboardButton("🔧 Self-employed", callback_data="reg_prof_self_employed")],
+            [InlineKeyboardButton("⚪ Other", callback_data="reg_prof_other")],
+        ]),
+    )
     return PROFESSION
 
 async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
-    users_db[uid]['profession']=update.message.text.strip()
+    profession=update.message.text.strip().title()
+    allowed={"Student", "Employee", "Business", "Self-Employed", "Other"}
+    if profession not in allowed:
+        await update.message.reply_text("Please select one of the profession options.")
+        return PROFESSION
+    users_db.setdefault(uid, {})['profession']=profession
     users_db[uid]['joined']=str(get_ist_today())
     users_db[uid]['reg_date']=get_ist_today()
+    save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
+    return ConversationHandler.END
+
+async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    value = str(q.data).replace("reg_prof_", "").replace("_", " ").title()
+    if value not in ("Student", "Employee", "Business", "Self Employed", "Other"):
+        return PROFESSION
+    if value == "Self Employed":
+        value = "Self-Employed"
+    users_db.setdefault(uid, {})['profession'] = value
+    users_db[uid]['joined']=str(get_ist_today())
+    users_db[uid]['reg_date']=get_ist_today()
+    save_data()
+    await q.message.edit_text(
+        f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n"
+        f"Gender: {users_db[uid].get('gender','-')}\nProfession: {value}\n\n"
+        "💰 Earn: Rs10 per referral + 10% plan commission\n"
+        "🏪 Promo: Earn Rs10 per 100 status views!\n"
+        "📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!",
+        reply_markup=main_menu(),
+    )
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4364,12 +4434,18 @@ def main():
                 entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
                 states={
                     NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-                    GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+                    GENDER:[
+                        CallbackQueryHandler(reg_gender_cb, pattern=r"^reg_gender_(male|female|other)$"),
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender),
+                    ],
                     DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
                     MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
                     UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
                     PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
-                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+                    PROFESSION:[
+                        CallbackQueryHandler(reg_profession_cb, pattern=r"^reg_prof_(student|employee|business|self_employed|other)$"),
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession),
+                    ],
                 },
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
@@ -4650,16 +4726,8 @@ def main():
                 ),
                 group=-10
             )
-            # JOIN VERIFICATION FIX: the callback handler was missing from the
-            # application registration, so tapping "I Joined - Check Again"
-            # produced no response even when the user had joined.
-            app.add_handler(
-                CallbackQueryHandler(
-                    check_joined_cb,
-                    pattern=r"^check_joined$"
-                ),
-                group=-9
-            )
+            # JOIN VERIFICATION: check_joined_cb is already the ConversationHandler entry point.
+            # Do NOT register it globally as well, otherwise one tap runs twice and sends duplicate responses.
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
