@@ -216,6 +216,23 @@ async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except Exception: pass
     normalize_support_plans()
+    active, current_name, expiry = check_plan_active(q.from_user.id)
+    if active:
+        remaining = 'N/A'
+        try: remaining = max(0, (date.fromisoformat(str(expiry)[:10]) - get_ist_today()).days)
+        except: pass
+        msg = (
+            f"💎 SUPPORT PLANS\n\n"
+            f"✅ You already have an active plan: {current_name}\n"
+            f"Expiry: {expiry}\n"
+            f"Days remaining: {remaining}\n\n"
+            "To change, upgrade, renew, or buy another plan, please contact Admin.\n"
+            f"📞 Support: {SUPPORT_USERNAME}"
+        )
+        kb = [[InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")], [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+        await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
     lines = ["💎 SUPPORT PLANS", "", "Select your plan below:", ""]
     buttons = []
     for p in support_plans_db:
@@ -240,6 +257,14 @@ async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not plan:
         await q.message.reply_text("❌ Plan not found. Please open Support Plans again."); return
     uid = q.from_user.id; name = str(plan.get("name", "Plan")); price = int(plan.get("price", 0))
+    active, current_name, current_expiry = check_plan_active(uid)
+    if active:
+        await q.message.reply_text(
+            f"✅ Your {current_name} is already active till {current_expiry}.\n\n"
+            f"For upgrade/renewal/another plan, please contact Admin: {SUPPORT_USERNAME}",
+            reply_markup=main_menu()
+        )
+        return
     duration = int(plan.get("duration", 30)); daily = int(plan.get("daily_limit", 10)); users = int(plan.get("users", 1)); cap = int(plan.get("earnings_limit", 0))
     pending_plans[uid] = {"plan_id": pid, "plan": name.lower(), "date": str(get_ist_today()), "price": price}
     context.user_data["awaiting_plan_payment_proof"] = pid
@@ -259,6 +284,14 @@ async def plan_proof_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     normalize_support_plans(); plan=next((p for p in support_plans_db if int(p.get("id",-1))==pid),None)
     if not plan: await q.message.reply_text("❌ Plan not found."); return
     uid=q.from_user.id; price=int(plan.get("price",0))
+    active, current_name_active, current_expiry = check_plan_active(uid)
+    if active:
+        await q.message.reply_text(
+            f"✅ You already have {current_name_active} till {current_expiry}.\n\n"
+            f"Please contact Admin for upgrade/renewal: {SUPPORT_USERNAME}",
+            reply_markup=main_menu()
+        )
+        return
     current=_get_user_plan_record(uid)
     current_name=current.get("plan_name",current.get("name",current.get("plan","No Plan"))) if current else "No Plan"
     request_type="upgrade" if current and str(current.get("status","active")).lower() in ("active","approved") and int(current.get("plan_id",current.get("id",0)) or 0)!=pid else "new"
@@ -428,6 +461,12 @@ pending_plans = {}
 referral_map = {}
 pending_referrals = {}
 referral_earnings = {}
+# Referral task-commission system: L1/L2 rates are configurable.
+L1_TASK_COMMISSION_PERCENT = 2.0
+L2_TASK_COMMISSION_PERCENT = 0.5
+referral_commission_daily = {}  # {referrer_uid: {YYYY-MM-DD: commission}}
+task_earnings_db = {}           # {uid: actual completed-task earnings}
+total_withdrawn_db = {}         # {uid: total approved withdrawals}
 withdraw_requests = {}
 withdraw_done_date = {}
 daily_task_count = {}
@@ -644,6 +683,77 @@ def get_tasks(uid):
 
 def get_total_tasks(uid):
     return tasks_db.get(uid,0)
+
+def _as_uid(value):
+    try:
+        return int(value)
+    except Exception:
+        return value
+
+def get_l1_members(uid):
+    uid = _as_uid(uid)
+    return [int(child) for child, parent in referral_map.items()
+            if _as_uid(parent) == uid and _as_uid(child) != uid]
+
+def get_l2_members(uid):
+    l1 = set(get_l1_members(uid))
+    result = []
+    for child, parent in referral_map.items():
+        if _as_uid(parent) in l1 and _as_uid(child) != uid:
+            result.append(int(child))
+    return result
+
+def _record_daily_referral_commission(referrer_uid, amount):
+    if not referrer_uid or amount <= 0:
+        return
+    referrer_uid = int(referrer_uid)
+    day = str(get_ist_today())
+    referral_commission_daily.setdefault(referrer_uid, {})
+    referral_commission_daily[referrer_uid][day] = round(
+        float(referral_commission_daily[referrer_uid].get(day, 0)) + float(amount), 2
+    )
+
+def credit_referral_task_commission(worker_uid, task_reward):
+    """Credit L1/L2 commission once when a worker's task is approved."""
+    try:
+        worker_uid = int(worker_uid)
+        reward = float(task_reward or 0)
+    except Exception:
+        return
+    if reward <= 0:
+        return
+
+    parent = referral_map.get(worker_uid)
+    if parent is None:
+        parent = referral_map.get(str(worker_uid))
+    if parent is not None and int(parent) != worker_uid:
+        l1 = round(reward * L1_TASK_COMMISSION_PERCENT / 100.0, 2)
+        referral_earnings[int(parent)] = round(float(referral_earnings.get(int(parent), 0)) + l1, 2)
+        _record_daily_referral_commission(int(parent), l1)
+
+        grand_parent = referral_map.get(int(parent))
+        if grand_parent is None:
+            grand_parent = referral_map.get(str(int(parent)))
+        if grand_parent is not None and int(grand_parent) not in (worker_uid, int(parent)):
+            l2 = round(reward * L2_TASK_COMMISSION_PERCENT / 100.0, 2)
+            referral_earnings[int(grand_parent)] = round(float(referral_earnings.get(int(grand_parent), 0)) + l2, 2)
+            _record_daily_referral_commission(int(grand_parent), l2)
+
+def record_task_earning(uid, reward):
+    """Persist actual task earnings and apply referral commissions."""
+    try:
+        uid = int(uid); reward = float(reward or 0)
+    except Exception:
+        return
+    task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + reward, 2)
+    credit_referral_task_commission(uid, reward)
+
+def get_yesterday_referral_commission(uid):
+    yesterday = str(get_ist_today() - timedelta(days=1))
+    return round(float(referral_commission_daily.get(int(uid), {}).get(yesterday, 0)), 2)
+
+def get_total_referral_commission(uid):
+    return round(float(referral_earnings.get(int(uid), 0)), 2)
 def _get_user_plan_record(uid):
     # Support both the old dict format and the newer plan-id format.
     plan = user_plans.get(uid)
@@ -810,7 +920,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
     if uid in users_db:
-        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
+        user = users_db.get(uid) or {}
+        changed = False
+        if context.args and args[0].isdigit() and ref_id is not None and ref_id != uid:
+            if referral_map.get(uid) != ref_id:
+                referral_map[uid] = ref_id; changed = True
+        if not user.get('name') and update.effective_user.full_name:
+            user['name'] = update.effective_user.full_name; changed = True
+        if update.effective_user.username and user.get('username') != update.effective_user.username:
+            user['username'] = update.effective_user.username; changed = True
+        users_db[uid] = user
+        missing = [label for key, label in [('name','Name'),('gender','Gender'),('dob','DOB'),('mobile','Mobile'),('upi','UPI'),('pincode','Pincode'),('profession','Profession')] if not user.get(key)]
+        if missing:
+            # Do not display a broken N/A profile. Resume registration from the first missing field.
+            save_data()
+            await update.message.reply_text(f"⚠️ Your profile is incomplete ({', '.join(missing)}).\n\nPlease complete registration so My Details can show your saved information.\n\nWhat is your Name?")
+            return NAME
+        if changed:
+            save_data()
+        limit = check_daily_limits(uid)[1]
+        await update.message.reply_text(f"Welcome back {user.get('name','User')}! Balance Rs{get_balance(uid)}\nTasks today {get_tasks(uid)}/{limit}", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -838,7 +967,8 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(name) < 2:
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
-    users_db[uid] = {'name': name}
+    users_db.setdefault(uid, {})
+    users_db[uid]['name'] = name
     await update.message.reply_text(
         "Select your gender:",
         reply_markup=InlineKeyboardMarkup([
@@ -943,7 +1073,9 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PROFESSION
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
-    users_db[uid]['reg_date']=get_ist_today()
+    users_db[uid]['reg_date']=str(get_ist_today())
+    # Persist registration immediately so a restart cannot turn the profile into N/A.
+    save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -1072,13 +1204,32 @@ async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await admin_panel(q, context)
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid = q.from_user.id
-    cnt=referrals_db.get(uid,0)
-    earnings = referral_earnings.get(uid,0)
+    q = update.callback_query
+    await q.answer()
+    uid = int(q.from_user.id)
+    l1 = get_l1_members(uid)
+    l2 = get_l2_members(uid)
+    l1_amount = round(sum(float(task_earnings_db.get(x, 0)) for x in l1), 2)
+    l2_amount = round(sum(float(task_earnings_db.get(x, 0)) for x in l2), 2)
+    yesterday = get_yesterday_referral_commission(uid)
+    total_commission = get_total_referral_commission(uid)
     ref_link = f"https://t.me/{context.bot.username}?start={uid}"
-    msg = f"👥 My Referrals\n\nActive: {cnt}\nEarnings: Rs{earnings}\n\n💰 Bonus Rs10 per task + 10% plan commission\n\n🔗 Your Referral Link:\n{ref_link}\n\nShare this link - When friend joins and completes task, you get Rs10!"
-    await q.message.reply_text(msg, reply_markup=main_menu())
+
+    msg = (
+        "👥 MY REFERRALS\n\n"
+        f"🟢 L1 Members: {len(l1)}\n"
+        f"💰 L1 Task Earnings: ₹{l1_amount:.2f}\n"
+        f"📈 L1 Task Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n\n"
+        f"🔵 L2 Members: {len(l2)}\n"
+        f"💰 L2 Task Earnings: ₹{l2_amount:.2f}\n"
+        f"📈 L2 Task Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n\n"
+        f"🗓️ Yesterday Commission: ₹{yesterday:.2f}\n"
+        f"💵 Total Referral Commission: ₹{total_commission:.2f}\n\n"
+        f"🔗 Referral Link: {ref_link}\n"
+        "Share this link with your friends.\n"
+        "L1 = directly referred member | L2 = your L1 member's referral"
+    )
+    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
 
 async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1738,6 +1889,8 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reward=get_reward_for_user(target_id, base_reward)
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
+        task_earnings_db[target_id] = round(float(task_earnings_db.get(target_id, 0)) + float(reward), 2)
+        credit_referral_task_commission(target_id, reward)
         if target_id not in daily_task_count: daily_task_count[target_id]={}
         daily_task_count[target_id][today]=daily_task_count[target_id].get(today,0)+1
         if reward!=5: bonus_balance[target_id]=bonus_balance.get(target_id,0)+(reward-5)
@@ -2000,27 +2153,44 @@ async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(f"📞 Contact Us\n\nSupport: {SUPPORT_USERNAME}\nChannel: {get_join_channel_link()}\nUPI: {ADMIN_UPI}\n\nFor any issues, contact admin!", reply_markup=main_menu())
 
 async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query
+    q = update.callback_query
     try: await q.answer()
     except: pass
-    uid=q.from_user.id
-    user=users_db.get(uid,{})
-    plan=_get_user_plan_record(uid)
-    total_earned=get_balance(uid)
-    joined=user.get('joined') or user.get('reg_date') or 'N/A'
-    plan_name=plan.get('plan_name',plan.get('name',plan.get('plan','No Plan'))) if plan else 'No Plan'
-    expiry=plan.get('expires_at',plan.get('expiry','N/A')) if plan else 'N/A'
-    remaining='N/A'
-    if expiry not in (None,'N/A'):
-        try: remaining=max(0,(date.fromisoformat(str(expiry)[:10])-get_ist_today()).days)
+    uid = int(q.from_user.id)
+    user = users_db.get(uid, {}) or users_db.get(str(uid), {}) or {}
+    # Fill harmless Telegram profile fields without overwriting registered data.
+    tg = q.from_user
+    if isinstance(user, dict):
+        changed = False
+        if not user.get('name') and tg.full_name:
+            user['name'] = tg.full_name; changed = True
+        if tg.username and not user.get('username'):
+            user['username'] = tg.username; changed = True
+        if changed:
+            users_db[uid] = user
+            save_data()
+
+    plan = _get_user_plan_record(uid)
+    total_earned = get_balance(uid)
+    total_withdrawn = round(float(total_withdrawn_db.get(uid, 0)), 2)
+    joined = user.get('joined') or user.get('reg_date') or 'N/A'
+    plan_name = plan.get('plan_name', plan.get('name', plan.get('plan', 'No Plan'))) if plan else 'No Plan'
+    expiry = plan.get('expires_at', plan.get('expiry', 'N/A')) if plan else 'N/A'
+    remaining = 'N/A'
+    if expiry not in (None, 'N/A'):
+        try: remaining = max(0, (date.fromisoformat(str(expiry)[:10]) - get_ist_today()).days)
         except: pass
-    count,limit,cap=check_daily_limits(uid)
-    msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
-         f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
-         f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
-         f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
-         f"📋 Today's tasks: {count}/{limit}\n💰 Total earning: ₹{total_earned}")
-    await q.message.reply_text(msg,reply_markup=main_menu())
+    count, limit, cap = check_daily_limits(uid)
+    msg = (
+        f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
+        f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
+        f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
+        f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
+        f"📋 Today's tasks: {count}/{limit}\n"
+        f"💰 Total earning: ₹{total_earned:.2f}\n"
+        f"💸 Total withdrawn: ₹{total_withdrawn:.2f}"
+    )
+    await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -2087,7 +2257,8 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Only amounts that are <= current balance are selectable.
+    # Only amounts affordable from the CURRENT balance are selectable.
+    # Example: balance Rs643 -> Rs200, Rs300, Rs500 are shown; Rs1000 is not selectable.
     available = [opt for opt in WITHDRAW_OPTIONS if opt <= bal]
     unavailable = [opt for opt in WITHDRAW_OPTIONS if opt > bal]
 
@@ -2095,19 +2266,23 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(f"Balance Rs{bal} is below the minimum withdrawal amount Rs{WITHDRAW_MIN}.", reply_markup=main_menu())
         return
 
-    rows = [[InlineKeyboardButton(f"💰 Rs{opt}", callback_data=f"wd_select_{opt}")] for opt in available]
+    # Only affordable amounts are rendered as selectable/highlighted buttons.
+    rows = [[InlineKeyboardButton(f"💰 Rs{opt} ✅ Available", callback_data=f"wd_select_{opt}")]
+            for opt in available]
     rows.append([InlineKeyboardButton("↩️ Menu", callback_data="back_menu")])
 
     disabled_text = ""
     if unavailable:
-        disabled_text = "\n\nUnavailable with current balance: " + ", ".join(f"Rs{o}" for o in unavailable)
+        disabled_text = "\n\n🔒 Not available with current balance: " + ", ".join(f"Rs{o}" for o in unavailable)
 
     msg = (
         f"💸 WITHDRAW\n\n"
-        f"Balance: Rs{bal}\n"
-        f"Minimum: Rs{WITHDRAW_MIN}\n\n"
-        "Select withdrawal amount:"
-        f"{disabled_text}"
+        f"Wallet Balance: Rs{bal:.2f}\n"
+        f"Minimum: Rs{WITHDRAW_MIN}\n"
+        f"Platform deduction: {PLATFORM_FEE_PERCENT}%\n\n"
+        "Select an available withdrawal amount:"
+        f"{disabled_text}\n\n"
+        "⏰ Only 1 withdrawal is allowed per day."
     )
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows))
 
@@ -2130,11 +2305,11 @@ async def wd_select_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"💸 Withdrawal Details\n\n"
-        f"Amount: Rs{amount}\n"
-        f"Platform Fee: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
+        f"Withdrawal Amount: Rs{amount}\n"
+        f"Platform Deduction: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
         f"You Receive: Rs{net}\n"
-        f"Current Balance: Rs{bal}\n"
-        f"Remaining Balance: Rs{bal - amount}\n\n"
+        f"Current Wallet Balance: Rs{bal:.2f}\n"
+        f"Balance After Withdrawal: Rs{bal - amount:.2f}\n\n"
         f"UPI ID: {upi}\n\n"
         "Is this UPI correct?"
     )
@@ -2231,8 +2406,13 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.message.reply_text(
         f"✅ Withdrawal Request Submitted!\n\n"
-        f"Amount: Rs{amount}\nFee: Rs{fee}\nYou Receive: Rs{net}\nUPI: {upi}\n\n"
-        "Your request has been sent to Admin. Once processed, you will receive the approval message.\n\n"
+        f"Withdrawal Amount: Rs{amount}\n"
+        f"Platform Deduction: Rs{fee} ({PLATFORM_FEE_PERCENT}%)\n"
+        f"You Receive: Rs{net}\n"
+        f"Current Wallet Balance: Rs{bal:.2f}\n"
+        f"Balance After Withdrawal: Rs{bal - amount:.2f}\n"
+        f"UPI: {upi}\n\n"
+        "Your request has been sent to Admin. Once processed, the withdrawal amount will be deducted from your wallet.\n\n"
         "⏰ One withdrawal per day only. You can withdraw again tomorrow.",
         reply_markup=main_menu()
     )
@@ -2271,6 +2451,8 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         reward=pending_daily[uid].get('task',{}).get('reward',5)
         today=pending_daily[uid].get('date')
         tasks_db[uid]=tasks_db.get(uid,0)+1
+        task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + float(reward), 2)
+        credit_referral_task_commission(uid, reward)
         if uid not in daily_task_count: daily_task_count[uid]={}
         daily_task_count[uid][today]=daily_task_count[uid].get(today,0)+1
         if reward!=5: bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-5)
@@ -2396,11 +2578,17 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     new_bal = get_balance(uid)
     req['status'] = 'approved'
     req['approved_at'] = str(get_ist_now())
+    total_withdrawn_db[uid] = round(float(total_withdrawn_db.get(uid, 0)) + float(amount), 2)
     last_withdraw_date_db[uid] = str(get_ist_today())
     save_data()
 
     await q.message.reply_text(
-        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
+        f"✅ WITHDRAWAL APPROVED\n"
+        f"User: {uid}\n"
+        f"Withdrawal Amount: Rs{amount}\n"
+        f"Platform Deduction: Rs{req['fee']} ({PLATFORM_FEE_PERCENT}%)\n"
+        f"Net Paid: Rs{req['net']}\n"
+        f"Remaining Wallet Balance: Rs{new_bal:.2f}"
     )
     try:
         await context.bot.send_message(
@@ -2928,7 +3116,7 @@ def _json_safe(value):
 def _restore_special_state(data):
     # Keys saved by JSON become strings; convert user-keyed maps back to int keys.
     int_key_maps = [
-        'users_db','tasks_db','bonus_balance','referrals_db','referral_earnings','referral_map',
+        'users_db','tasks_db','task_earnings_db','bonus_balance','referrals_db','referral_earnings','referral_commission_daily','referral_map','total_withdrawn_db',
         'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count',
         'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
         'promo_views_db','promo_pending','pending_plans'
@@ -2978,8 +3166,8 @@ def save_data():
     """
     try:
         data = {
-            'users_db': users_db, 'tasks_db': tasks_db, 'bonus_balance': bonus_balance,
-            'referral_earnings': referral_earnings, 'referrals_db': referrals_db, 'referral_map': referral_map,
+            'users_db': users_db, 'tasks_db': tasks_db, 'task_earnings_db': task_earnings_db, 'bonus_balance': bonus_balance,
+            'referral_earnings': referral_earnings, 'referral_commission_daily': referral_commission_daily, 'referrals_db': referrals_db, 'referral_map': referral_map, 'total_withdrawn_db': total_withdrawn_db,
             'pending_referrals': pending_referrals, 'withdraw_requests': withdraw_requests,
             'withdraw_done_date': withdraw_done_date, 'last_withdraw_date_db': last_withdraw_date_db,
             'daily_task_count': daily_task_count, 'user_task_status': user_task_status,
@@ -3058,6 +3246,10 @@ def load_data():
         if data:
             _apply_loaded_data(data)
             normalize_support_plans()
+            # Backfill new task-earnings ledger from historical completed tasks.
+            for _uid, _count in list(tasks_db.items()):
+                if int(_uid) not in task_earnings_db:
+                    task_earnings_db[int(_uid)] = round(float(_count or 0) * 5, 2)
             print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
             if source=='bot_data.json' and DATABASE_URL:
                 save_data()  # migrate legacy local data to PostgreSQL
@@ -3182,6 +3374,8 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
             reward=get_reward_for_user(uid,base_reward)
             tasks_db[uid]=tasks_db.get(uid,0)+1
+            task_earnings_db[uid] = round(float(task_earnings_db.get(uid, 0)) + float(reward), 2)
+            credit_referral_task_commission(uid, reward)
             today=str(get_ist_today())
             daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
             for tid,st in list(user_task_status.get(uid,{}).items()):
