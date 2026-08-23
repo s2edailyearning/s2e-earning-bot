@@ -856,8 +856,8 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
 async def check_user_in_channel(user_id, context):
-    """Return True only when the user is currently a member of JOIN_CHANNEL.
-    The bot must be an administrator in the channel for get_chat_member() to work.
+    """Return True only when the user is currently a member of the configured join channel.
+    The channel ID saved by /set_join_channel is used here. The bot must be an administrator in the channel for get_chat_member() to work.
     Main/support admins bypass this check. On API errors we fail closed so a user
     cannot continue with the menu while membership cannot be verified.
     """
@@ -865,7 +865,8 @@ async def check_user_in_channel(user_id, context):
         uid = int(user_id)
         if is_any_admin(uid):
             return True
-        member = await context.bot.get_chat_member(chat_id=JOIN_CHANNEL, user_id=uid)
+        join_chat = get_join_channel()
+        member = await context.bot.get_chat_member(chat_id=join_chat, user_id=uid)
         status = getattr(member, "status", "")
         if status in ("member", "administrator", "creator"):
             return True
@@ -873,7 +874,7 @@ async def check_user_in_channel(user_id, context):
             return True
         return False
     except Exception as e:
-        print(f"Membership check failed for {user_id} in {JOIN_CHANNEL}: {e}")
+        print(f"Membership check failed for {user_id} in {get_join_channel()}: {e}")
         return False
 
 def join_required_markup():
