@@ -1471,34 +1471,65 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(msg, reply_markup=main_menu())
             return
         else:
-            task = get_today_task_for_user(uid)
-            task_id = task.get('id', DEFAULT_DAILY_TASK_ID)
-            status_data = user_task_status.get(uid, {}).get(task_id, {})
-            status = status_data.get('status') if isinstance(status_data, dict) else status_data
-            if status == 'completed':
+            # No active/next task. The old code called get_today_task_for_user(),
+            # which can return None after all today's task windows are closed, and
+            # then crashed on task.get(...). That made the Daily Task button appear
+            # to do nothing. Handle this state explicitly.
+            today_tasks = get_tasks_for_today()
+            if not today_tasks:
                 await q.message.reply_text(
-                    f"✅ Today's task is already completed!\n\n"
-                    f"Tasks today: {count}/{limit}\n"
-                    f"No new task is available right now. Admin can add/update the next task.",
+                    "📅 DAILY TASK\n\n"
+                    "❌ No task has been scheduled for today yet.\n\n"
+                    "Please check again later or contact Admin.",
                     reply_markup=main_menu()
                 )
                 return
-            if status == 'pending_verification':
+
+            # Check whether all today's tasks are already finished/skipped/missed.
+            pending_task = None
+            pending_status = None
+            for t in today_tasks:
+                tid = t.get('id')
+                status_data = user_task_status.get(uid, {}).get(tid, {})
+                status = status_data.get('status') if isinstance(status_data, dict) else status_data
+                if status == 'pending_verification':
+                    pending_task = t
+                    pending_status = status
+                    break
+                if status not in ('completed', 'skipped', 'missed'):
+                    pending_task = t
+                    pending_status = status
+                    break
+
+            if pending_task is None:
                 await q.message.reply_text(
-                    f"⏳ Today's task screenshot is already pending admin verification.\n\n"
+                    "📅 DAILY TASK\n\n"
+                    f"✅ All of today's {len(today_tasks)} task(s) are already completed, skipped, or missed.\n\n"
+                    f"Tasks today: {count}/{limit}\n"
+                    "New tasks will appear when Admin schedules them.",
+                    reply_markup=main_menu()
+                )
+                return
+
+            task = pending_task
+            task_id = task.get('id')
+            if pending_status == 'pending_verification':
+                await q.message.reply_text(
+                    f"⏳ Task {task.get('task_number', '?')} screenshot is already pending Admin verification.\n\n"
                     f"Tasks today: {count}/{limit}",
                     reply_markup=main_menu()
                 )
                 return
-            if status == 'skipped':
-                await q.message.reply_text(
-                    f"⏭️ Today's task was skipped.\n\nTasks today: {count}/{limit}",
-                    reply_markup=main_menu()
-                )
-                return
+
             await q.message.reply_text(
-                f"📅 Today's Task:\n\nTitle: {task['title']}\nReward: Rs{task['reward']}\nLink: {task['link']}\n\n"
-                f"Tasks today: {count}/{limit}\n\nClick Upload Screenshot after completing!",
+                f"📅 Today's Task:\n\n"
+                f"Task {task.get('task_number', '?')}\n"
+                f"Open: {task.get('open_time', '')}  Close: {task.get('close_time', '')}\n"
+                f"Title: {task.get('title', '')}\n"
+                f"Reward: ₹{task.get('reward', 5)}\n"
+                f"Link: {task.get('link', '')}\n\n"
+                f"Tasks today: {count}/{limit}\n\n"
+                "Click Upload Screenshot after completing!",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"),
                     InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task_id}")
