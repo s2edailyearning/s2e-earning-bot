@@ -845,12 +845,14 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
     users_db[uid] = {'name': name}
+    save_data()
     await update.message.reply_text("Gender? Male/Female/Other:")
     return GENDER
 
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     users_db[uid]['gender'] = update.message.text.strip()
+    save_data()
     await update.message.reply_text("Date of Birth? DD/MM/YYYY:")
     return DOB
 
@@ -865,6 +867,7 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return DOB
         users_db[uid]['dob'] = str(dob)
         users_db[uid]['age'] = age
+        save_data()
     except:
         await update.message.reply_text("Invalid format! Use DD/MM/YYYY:")
         return DOB
@@ -878,6 +881,7 @@ async def get_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid! 10 digits only:")
         return MOBILE
     users_db[uid]['mobile'] = mobile
+    save_data()
     await update.message.reply_text("UPI ID? Example: yourname@upi")
     return UPI
 
@@ -896,6 +900,7 @@ async def get_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Invalid UPI! {msg} Try again:")
         return UPI
     users_db[uid]['upi']=upi
+    save_data()
     await update.message.reply_text("Pincode? 6 digits:")
     return PINCODE
 
@@ -906,6 +911,7 @@ async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid Pincode! 6 digits:")
         return PINCODE
     users_db[uid]['pincode']=pincode
+    save_data()
     await update.message.reply_text("Profession? Student/Employee/Business/Other:")
     return PROFESSION
 
@@ -914,6 +920,7 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['profession']=update.message.text.strip()
     users_db[uid]['joined']=str(get_ist_today())
     users_db[uid]['reg_date']=get_ist_today()
+    save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -2761,111 +2768,185 @@ async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-# === PERSISTENT STORAGE - FIX DATA LOSS ===
+# === PERSISTENT STORAGE - RENDER POSTGRES + LOCAL JSON FALLBACK ===
 import json, os
 DATA_FILE = "bot_data.json"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_DB_WARNED = False
+
+def _db_connect():
+    if not DATABASE_URL:
+        return None
+    try:
+        import psycopg
+        return psycopg.connect(DATABASE_URL, connect_timeout=10)
+    except Exception as e:
+        global _DB_WARNED
+        if not _DB_WARNED:
+            print(f"Persistent PostgreSQL unavailable: {e}")
+            _DB_WARNED = True
+        return None
+
+def _db_init():
+    conn = _db_connect()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS s2e_state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())")
+        conn.commit()
+        conn.close()
+        print("Persistent PostgreSQL storage ready")
+    except Exception as e:
+        print(f"DB init error: {e}")
+        try: conn.close()
+        except: pass
+
+def _db_load_snapshot():
+    conn = _db_connect()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payload FROM s2e_state WHERE id=1")
+            row = cur.fetchone()
+        conn.close()
+        return json.loads(row[0]) if row else None
+    except Exception as e:
+        print(f"DB load error: {e}")
+        try: conn.close()
+        except: pass
+        return None
+
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, set):
+        return [_json_safe(v) for v in sorted(value, key=lambda x: str(x))]
+    try:
+        from datetime import datetime, date, time
+        if isinstance(value, (datetime, date, time)):
+            return value.isoformat()
+    except Exception:
+        pass
+    return value
+
+def _db_save_snapshot(payload):
+    conn = _db_connect()
+    if not conn:
+        return False
+    try:
+        payload_text = json.dumps(_json_safe(payload), ensure_ascii=False)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO s2e_state(id,payload,updated_at) VALUES(1,%s,NOW()) "
+                "ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, updated_at=NOW()",
+                (payload_text,)
+            )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"DB save error: {e}")
+        try:
+            conn.rollback(); conn.close()
+        except: pass
+        return False
+
+def _restore_user_keys(data):
+    # JSON/PostgreSQL payload keys are strings; restore Telegram user IDs as ints.
+    int_key_maps = [
+        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
+        'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count',
+        'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
+        'promo_views_db','promo_pending','pending_plans'
+    ]
+    for name in int_key_maps:
+        obj = data.get(name)
+        if isinstance(obj, dict):
+            fixed = {}
+            for k, v in obj.items():
+                try: nk = int(k)
+                except: nk = k
+                fixed[nk] = v
+            data[name] = fixed
+    return data
+
+def _apply_loaded_data(data):
+    global PAYMENT_UPI, support_plan_banner_file_id
+    data = _restore_user_keys(data or {})
+    map_names = [
+        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
+        'scheduled_tasks_db','support_plans_db','user_plans','withdraw_requests','withdraw_done_date',
+        'last_withdraw_date_db','daily_task_count','user_task_status'
+    ]
+    for name in map_names:
+        obj = data.get(name)
+        if obj is None or name not in globals():
+            continue
+        target = globals()[name]
+        if isinstance(target, dict) and isinstance(obj, dict):
+            target.clear(); target.update(obj)
+        elif isinstance(target, list) and isinstance(obj, list):
+            target.clear(); target.extend(obj)
+    if data.get('payment_upi'):
+        PAYMENT_UPI = str(data['payment_upi'])
+    if 'support_plan_banner_file_id' in data:
+        support_plan_banner_file_id = data.get('support_plan_banner_file_id')
 
 def save_data():
     try:
-        data = {}
-        # Save important dicts
-        try:
-            data['users_db'] = users_db
-            data['tasks_db'] = tasks_db
-            data['bonus_balance'] = bonus_balance
-            data['referral_earnings'] = referral_earnings
-            data['referrals_db'] = referrals_db
-            data['referral_map'] = referral_map
-            data['scheduled_tasks_db'] = scheduled_tasks_db
-            data['support_plans_db'] = support_plans_db
-            data['support_plan_banner_file_id'] = support_plan_banner_file_id
-            data['user_plans'] = user_plans
-            data['withdraw_requests'] = withdraw_requests
-            data['withdraw_done_date'] = withdraw_done_date
-            data['last_withdraw_date_db'] = last_withdraw_date_db
-            data['daily_task_count'] = daily_task_count
-            data['user_task_status'] = user_task_status
-            data['payment_upi'] = get_payment_upi()
-        except:
-            pass
-        with open(DATA_FILE, 'w') as f:
-            json.dump(data, f, default=str)
-        print("Data saved OK")
+        data = {
+            'users_db': users_db,
+            'tasks_db': tasks_db,
+            'bonus_balance': bonus_balance,
+            'referral_earnings': referral_earnings,
+            'referrals_db': referrals_db,
+            'referral_map': referral_map,
+            'scheduled_tasks_db': scheduled_tasks_db,
+            'support_plans_db': support_plans_db,
+            'support_plan_banner_file_id': support_plan_banner_file_id,
+            'user_plans': user_plans,
+            'withdraw_requests': withdraw_requests,
+            'withdraw_done_date': withdraw_done_date,
+            'last_withdraw_date_db': last_withdraw_date_db,
+            'daily_task_count': daily_task_count,
+            'user_task_status': user_task_status,
+            'payment_upi': get_payment_upi(),
+        }
+        safe = _json_safe(data)
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(safe, f, ensure_ascii=False)
+        if DATABASE_URL:
+            _db_save_snapshot(safe)
+        print(f"Data saved OK - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(user_plans)}")
     except Exception as e:
         print(f"Save error {e}")
 
 def load_data():
     try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r') as f:
+        _db_init()
+        data = _db_load_snapshot() if DATABASE_URL else None
+        source = 'PostgreSQL' if data else None
+        if data is None and os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
-            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db, daily_task_count, user_task_status, PAYMENT_UPI, support_plan_banner_file_id
-            if 'users_db' in data:
-                # Convert keys to int where possible
-                loaded_users = data['users_db']
-                users_db.clear()
-                for k,v in loaded_users.items():
-                    try:
-                        users_db[int(k)] = v
-                    except:
-                        users_db[k] = v
-            if 'tasks_db' in data:
-                tasks_db.clear()
-                for k,v in data['tasks_db'].items():
-                    try:
-                        tasks_db[int(k)] = v
-                    except:
-                        tasks_db[k] = v
-            if 'bonus_balance' in data:
-                bonus_balance.clear()
-                for k,v in data['bonus_balance'].items():
-                    try:
-                        bonus_balance[int(k)] = v
-                    except:
-                        bonus_balance[k] = v
-            if 'scheduled_tasks_db' in data:
-                scheduled_tasks_db.clear()
-                scheduled_tasks_db.extend(data['scheduled_tasks_db'])
-            if 'support_plans_db' in data:
-                support_plans_db.clear()
-                support_plans_db.extend(data['support_plans_db'])
-            if 'support_plan_banner_file_id' in data:
-                support_plan_banner_file_id = data.get('support_plan_banner_file_id')
-            if 'user_plans' in data:
-                user_plans.clear()
-                user_plans.update(data['user_plans'])
-            if 'withdraw_requests' in data:
-                withdraw_requests.clear()
-                for k, v in data['withdraw_requests'].items():
-                    try: withdraw_requests[int(k)] = v
-                    except: withdraw_requests[k] = v
-            if 'withdraw_done_date' in data:
-                withdraw_done_date.clear()
-                for k, v in data['withdraw_done_date'].items():
-                    try: withdraw_done_date[int(k)] = v
-                    except: withdraw_done_date[k] = v
-            if 'last_withdraw_date_db' in data:
-                last_withdraw_date_db.clear()
-                for k, v in data['last_withdraw_date_db'].items():
-                    try: last_withdraw_date_db[int(k)] = v
-                    except: last_withdraw_date_db[k] = v
-            if 'daily_task_count' in data:
-                daily_task_count.clear()
-                for k, v in data['daily_task_count'].items():
-                    try: daily_task_count[int(k)] = v
-                    except: daily_task_count[k] = v
-            if 'user_task_status' in data:
-                user_task_status.clear()
-                for k, v in data['user_task_status'].items():
-                    try: user_task_status[int(k)] = v
-                    except: user_task_status[k] = v
-            if 'payment_upi' in data and data['payment_upi']:
-                PAYMENT_UPI = str(data['payment_upi'])
-            print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
+            source = 'bot_data.json'
+        if data:
+            _apply_loaded_data(data)
+            normalize_support_plans()
+            print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
+            # If an old local JSON was found and PostgreSQL is configured, migrate it once.
+            if source == 'bot_data.json' and DATABASE_URL:
+                save_data()
+        else:
+            print('No saved data found - starting with empty state')
     except Exception as e:
         print(f"Load error {e}")
         import traceback; traceback.print_exc()
+
 
 # User Plans - which user bought which plan
 if 'user_plans' not in globals():
