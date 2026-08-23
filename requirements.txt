@@ -1,4 +1,4 @@
-python-telegram-bot[webhooks]==20.7
-Flask==3.0.0
-pytz
+# Telegram bot - Python 3.13/3.14 compatible
+python-telegram-bot==22.6
+Flask>=3.1,<4
 psycopg[binary]>=3.2,<4
