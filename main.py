@@ -220,10 +220,11 @@ async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = []
     for p in support_plans_db:
         name = str(p.get("name", "Plan")); price = int(p.get("price", 0))
-        duration = int(p.get("duration", 30)); daily = int(p.get("daily_limit", 10))
+        duration = int(p.get("duration", 0)); daily = int(p.get("daily_limit", 10))
         users = int(p.get("users", 1)); cap = int(p.get("earnings_limit", 0))
-        desc = p.get("desc") or p.get("description") or f"{users} User(s) | {duration} Days | {daily} tasks/day"
-        lines += [f"{name} ₹{price}", str(desc), f"Users: {users} | Validity: {duration} days | Daily: {daily} | Earning limit: ₹{cap}", ""]
+        desc = p.get("desc") or p.get("description") or f"{daily} tasks/day"
+        validity = f"{duration} days" if duration > 0 else "All remaining validity"
+        lines += [f"{name} ₹{price}", str(desc), f"Days: {validity} | Daily tasks: {daily} | Maximum earning: ₹{cap}", ""]
         buttons.append([InlineKeyboardButton(f"{name} ₹{price}", callback_data=f"buy_support_{int(p['id'])}")])
     lines += [f"💳 Payment UPI: {get_payment_upi()}", "", "Pay manually to the UPI above, then send the payment screenshot. No payment link is required."]
     buttons.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
@@ -2573,15 +2574,51 @@ async def my_missed_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
-# === SUPPORT PLANS DB - DYNAMIC / 3 PLANS ===
+# === SUPPORT PLANS DB - FINAL 4 PLANS ===
+# Only these four plans are shown to members.
 support_plans_db = [
-    {"id": 1, "name": "Basic", "price": 199, "duration": 30, "daily_limit": 10, "users": 1, "earnings_limit": 500, "desc": "1 User | 30 Days | 10 tasks/day | Up to Rs500 earnings"},
-    {"id": 2, "name": "Premium", "price": 499, "duration": 30, "daily_limit": 20, "users": 2, "earnings_limit": 1000, "desc": "2 Users | 30 Days | 20 tasks/day | Up to Rs1000 earnings"},
-    {"id": 3, "name": "Family", "price": 1999, "duration": 30, "daily_limit": 30, "users": 4, "earnings_limit": 3000, "desc": "Family 4 Users | 30 Days | 30 tasks/day | Up to Rs3000 earnings"}
+    {"id": 1, "name": "Starter", "price": 499, "duration": 15, "daily_limit": 5, "users": 1,
+     "earnings_limit": 900, "desc": "15 Days | 5 tasks/day | ₹30-₹60/day | Up to ₹900",
+     "daily_earning": "₹30-₹60", "priority_access": False, "bonus_tasks": False,
+     "missing_tasks": False, "referral_commission": False},
+    {"id": 2, "name": "Growth", "price": 1999, "duration": 60, "daily_limit": 10, "users": 1,
+     "earnings_limit": 4400, "desc": "60 Days | 10 tasks/day | ₹50-₹80/day | Up to ₹4,400 | Referral commission",
+     "daily_earning": "₹50-₹80", "priority_access": False, "bonus_tasks": False,
+     "missing_tasks": False, "referral_commission": True},
+    {"id": 3, "name": "Premium", "price": 4999, "duration": 0, "daily_limit": 15, "users": 1,
+     "earnings_limit": 15000, "desc": "All remaining validity | 15 tasks/day | ₹200-₹400/day | Up to ₹15,000 | Priority early task access | Bonus tasks | Missed tasks option",
+     "daily_earning": "₹200-₹400", "priority_access": True, "bonus_tasks": True,
+     "missing_tasks": True, "referral_commission": True},
+    {"id": 4, "name": "Elite", "price": 9999, "duration": 0, "daily_limit": 20, "users": 1,
+     "earnings_limit": 35000, "desc": "All remaining validity | 20 tasks/day | ₹500-₹700/day | Up to ₹35,000 | Priority early task access | Bonus tasks | Missed tasks option",
+     "daily_earning": "₹500-₹700", "priority_access": True, "bonus_tasks": True,
+     "missing_tasks": True, "referral_commission": True},
 ]
 
 awaiting_plan_image_admins = set()
 awaiting_plan_payment_adminless = set()
+
+def normalize_support_plans():
+    """Force the final four plans every startup; old persisted plans are ignored."""
+    global support_plans_db
+    support_plans_db = [
+        {"id": 1, "name": "Starter", "price": 499, "duration": 15, "daily_limit": 5, "users": 1,
+         "earnings_limit": 900, "desc": "15 Days | 5 tasks/day | ₹30-₹60/day | Up to ₹900",
+         "daily_earning": "₹30-₹60", "priority_access": False, "bonus_tasks": False,
+         "missing_tasks": False, "referral_commission": False},
+        {"id": 2, "name": "Growth", "price": 1999, "duration": 60, "daily_limit": 10, "users": 1,
+         "earnings_limit": 4400, "desc": "60 Days | 10 tasks/day | ₹50-₹80/day | Up to ₹4,400 | Referral commission",
+         "daily_earning": "₹50-₹80", "priority_access": False, "bonus_tasks": False,
+         "missing_tasks": False, "referral_commission": True},
+        {"id": 3, "name": "Premium", "price": 4999, "duration": 0, "daily_limit": 15, "users": 1,
+         "earnings_limit": 15000, "desc": "All remaining validity | 15 tasks/day | ₹200-₹400/day | Up to ₹15,000 | Priority early task access | Bonus tasks | Missed tasks option",
+         "daily_earning": "₹200-₹400", "priority_access": True, "bonus_tasks": True,
+         "missing_tasks": True, "referral_commission": True},
+        {"id": 4, "name": "Elite", "price": 9999, "duration": 0, "daily_limit": 20, "users": 1,
+         "earnings_limit": 35000, "desc": "All remaining validity | 20 tasks/day | ₹500-₹700/day | Up to ₹35,000 | Priority early task access | Bonus tasks | Missed tasks option",
+         "daily_earning": "₹500-₹700", "priority_access": True, "bonus_tasks": True,
+         "missing_tasks": True, "referral_commission": True},
+    ]
 
 def normalize_support_plans():
     global support_plans_db
@@ -3059,13 +3096,15 @@ def load_data():
             _apply_loaded_data(data)
             normalize_support_plans()
             print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
-            if source=='bot_data.json' and DATABASE_URL:
-                save_data()  # migrate legacy local data to PostgreSQL
+            # Save the normalized plans so old PostgreSQL/local snapshots cannot restore ₹199/old plans.
+            save_data()
         else:
             print('No saved data found - starting with empty state')
     except Exception as e:
         print(f"Load error {e}")
         import traceback; traceback.print_exc()
+    # Also normalize when there is no saved data.
+    normalize_support_plans()
 
 # User Plans - which user bought which plan
 if 'user_plans' not in globals():
