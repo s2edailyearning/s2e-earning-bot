@@ -132,27 +132,25 @@ async def _show_plan_purchase(update, context, plan_type):
     plan_type = "premium" if plan_type == "premium" else "basic"
     price = 499 if plan_type == "premium" else 199
     limit = DAILY_TASK_LIMIT_PREMIUM if plan_type == "premium" else DAILY_TASK_LIMIT_BASIC
-    if is_active:
+    if is_active and plan_name.lower().startswith(plan_type):
         text = (
-            f"⚠️ You are already in one active plan.\n\n"
-            f"Current Plan: {plan_name}\n"
-            f"Valid till: {expiry}\n\n"
-            "You cannot select another plan while this plan is active.\n"
-            "📞 Please contact admin if you want to change your plan."
+            f"⚠️ You already have an active {plan_type.capitalize()} plan.\n\n"
+            f"Current Plan: {plan_name.upper()}\n"
+            f"Valid till: {expiry}\n"
+            f"Daily tasks: {limit}\n\n"
+            "📞 If you want to change your plan, please contact admin.\n"
+            "You cannot activate another plan while your current plan is active."
         )
-        kb = [
-            [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_us")],
-            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
-        ]
+        kb = [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
     else:
         upi = get_payment_upi()
         pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
         text = (
-            f"💎 {plan_type.capitalize()} Plan — ₹{price}\\n\\n"
-            f"Daily Tasks: {limit}\\n"
-            f"Validity: 30 days\\n\\n"
-            f"💳 Pay manually to UPI:\\n{upi}\\n\\n"
-            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\\n"
+            f"💎 {plan_type.capitalize()} Plan — ₹{price}\n\n"
+            f"Daily Tasks: {limit}\n"
+            f"Validity: 30 days\n\n"
+            f"💳 Pay manually to UPI:\n{upi}\n\n"
+            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\n"
             "No payment link is required."
         )
         kb = [
@@ -223,15 +221,7 @@ async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons.append([InlineKeyboardButton(f"{name} ₹{price}", callback_data=f"buy_support_{int(p['id'])}")])
     lines += [f"💳 Payment UPI: {get_payment_upi()}", "", "Pay manually to the UPI above, then send the payment screenshot. No payment link is required."]
     buttons.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
-    markup = InlineKeyboardMarkup(buttons)
-    banner = globals().get("support_plan_banner_file_id")
-    if banner:
-        try:
-            await q.message.reply_photo(photo=banner, caption="\n".join(lines), reply_markup=markup)
-            return
-        except Exception as e:
-            print(f"support plan banner send error: {e}")
-    await q.message.reply_text("\n".join(lines), reply_markup=markup)
+    await q.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
 
 async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -245,19 +235,6 @@ async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.message.reply_text("❌ Plan not found. Please open Support Plans again."); return
     uid = q.from_user.id; name = str(plan.get("name", "Plan")); price = int(plan.get("price", 0))
     duration = int(plan.get("duration", 30)); daily = int(plan.get("daily_limit", 10)); users = int(plan.get("users", 1)); cap = int(plan.get("earnings_limit", 0))
-    is_active, current_plan_name, current_expiry = check_plan_active(uid)
-    if is_active:
-        await q.message.reply_text(
-            f"⚠️ You are already in one active plan.\\n\\n"
-            f"Current Plan: {current_plan_name}\\nValid till: {current_expiry}\\n\\n"
-            "You cannot select another plan right now.\\n"
-            "📞 Please contact admin if you want to change your plan.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_us")],
-                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
-            ])
-        )
-        return
     pending_plans[uid] = {"plan_id": pid, "plan": name.lower(), "date": str(get_ist_today()), "price": price}
     context.user_data["awaiting_plan_payment_proof"] = pid
     awaiting_plan_payment_adminless.add(uid)
@@ -276,16 +253,6 @@ async def plan_proof_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     normalize_support_plans(); plan=next((p for p in support_plans_db if int(p.get("id",-1))==pid),None)
     if not plan: await q.message.reply_text("❌ Plan not found."); return
     uid=q.from_user.id; price=int(plan.get("price",0))
-    is_active, current_plan_name, current_expiry = check_plan_active(uid)
-    if is_active:
-        await q.message.reply_text(
-            f"⚠️ You are already in one active plan.\\n\\nCurrent Plan: {current_plan_name}\\nValid till: {current_expiry}\\n\\n📞 Contact admin to change your plan.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📞 Contact Admin", callback_data="contact_us")],
-                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
-            ])
-        )
-        return
     pending_plans[uid]={"plan_id":pid,"plan":str(plan.get("name","plan")).lower(),"date":str(get_ist_today()),"price":price}
     context.user_data["awaiting_plan_payment_proof"]=pid
     await q.message.reply_text(f"📤 Send your ₹{price} payment screenshot as a PHOTO now.\nAdmin will verify it manually.")
@@ -777,8 +744,84 @@ def main_menu():
         [InlineKeyboardButton("📅 Daily Task", callback_data="daily"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
         [InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks"), InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop")],
         [InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled"), InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],
+        [InlineKeyboardButton("👤 My Details", callback_data="my_details"), InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks")],
         [InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")]
     ])
+
+def _user_plan_text(uid):
+    plan = user_plans.get(str(uid), user_plans.get(uid))
+    if not isinstance(plan, dict) or str(plan.get("status", "active")).lower() != "active":
+        return "🆓 Plan: Free"
+    name = plan.get("plan", "Plan")
+    expiry = plan.get("expiry", "-")
+    return f"💎 Plan: {str(name).title()}\n📅 Expiry: {expiry}"
+
+def format_user_details(uid):
+    data = users_db.get(uid) or users_db.get(str(uid)) or {}
+    if not isinstance(data, dict):
+        data = {}
+    return (
+        "👤 MY DETAILS\n\n"
+        f"🆔 User ID: {uid}\n"
+        f"👤 Name: {data.get('name', '-') }\n"
+        f"⚧ Gender: {data.get('gender', '-') }\n"
+        f"🎂 DOB: {data.get('dob', '-') }\n"
+        f"📱 Mobile: {data.get('mobile', '-') }\n"
+        f"💳 UPI: {data.get('upi', '-') }\n"
+        f"📍 Pincode: {data.get('pincode', '-') }\n"
+        f"💼 Profession: {data.get('profession', '-') }\n"
+        f"📅 Joined: {data.get('joined', data.get('reg_date', '-'))}\n\n"
+        f"{_user_plan_text(uid)}\n"
+        f"📋 Today's tasks: {get_tasks(uid)}/15\n"
+        f"💰 Balance: Rs{get_balance(uid)}"
+    )
+
+async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    uid = q.from_user.id
+    if uid not in users_db and str(uid) not in users_db:
+        await q.message.reply_text("❌ Your registration details were not found. Please use /start to register.")
+        return
+    await q.message.reply_text(format_user_details(uid), reply_markup=main_menu())
+
+async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    users = list(users_db.items())
+    if not users:
+        await update.message.reply_text("👥 USER LIST\n\nNo registered users found in the loaded database.")
+        return
+    try:
+        page = max(1, int(context.args[0])) if context.args else 1
+    except Exception:
+        page = 1
+    per_page = 10
+    total_pages = (len(users) + per_page - 1) // per_page
+    page = min(page, total_pages)
+    start_i = (page - 1) * per_page
+    chunk = users[start_i:start_i + per_page]
+    lines = [f"👥 S2E USER LIST — Page {page}/{total_pages}", f"Total users: {len(users)}", ""]
+    for i, (uid, data) in enumerate(chunk, start=start_i + 1):
+        if not isinstance(data, dict):
+            data = {}
+        plan = user_plans.get(str(uid), user_plans.get(uid))
+        plan_name = str(plan.get("plan", "Free")).title() if isinstance(plan, dict) else "Free"
+        lines.append(
+            f"{i}. 👤 {data.get('name', 'Unknown')}\n"
+            f"   🆔 {uid} | ⚧ {data.get('gender', '-')} | 💼 {data.get('profession', '-')}\n"
+            f"   📱 {data.get('mobile', '-')} | 💎 {plan_name}\n"
+            f"   📅 Joined: {data.get('joined', data.get('reg_date', '-'))}"
+        )
+    if page < total_pages:
+        lines.append(f"\n➡️ Next page: /userlist {page + 1}")
+    if page > 1:
+        lines.append(f"⬅️ Previous page: /userlist {page - 1}")
+    await update.message.reply_text("\n\n".join(lines))
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
@@ -815,8 +858,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_id = int(args[0])
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
-    if uid in users_db:
-        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
+    if uid in users_db or str(uid) in users_db:
+        data = users_db.get(uid) or users_db.get(str(uid)) or {}
+        name = data.get("name", "User") if isinstance(data, dict) else "User"
+        await update.message.reply_text(
+            f"Welcome back {name}!\n\n{format_user_details(uid)}",
+            reply_markup=main_menu()
+        )
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -845,14 +893,12 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
     users_db[uid] = {'name': name}
-    save_data()
     await update.message.reply_text("Gender? Male/Female/Other:")
     return GENDER
 
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     users_db[uid]['gender'] = update.message.text.strip()
-    save_data()
     await update.message.reply_text("Date of Birth? DD/MM/YYYY:")
     return DOB
 
@@ -867,7 +913,6 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return DOB
         users_db[uid]['dob'] = str(dob)
         users_db[uid]['age'] = age
-        save_data()
     except:
         await update.message.reply_text("Invalid format! Use DD/MM/YYYY:")
         return DOB
@@ -881,7 +926,6 @@ async def get_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid! 10 digits only:")
         return MOBILE
     users_db[uid]['mobile'] = mobile
-    save_data()
     await update.message.reply_text("UPI ID? Example: yourname@upi")
     return UPI
 
@@ -900,7 +944,6 @@ async def get_upi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Invalid UPI! {msg} Try again:")
         return UPI
     users_db[uid]['upi']=upi
-    save_data()
     await update.message.reply_text("Pincode? 6 digits:")
     return PINCODE
 
@@ -911,7 +954,6 @@ async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Invalid Pincode! 6 digits:")
         return PINCODE
     users_db[uid]['pincode']=pincode
-    save_data()
     await update.message.reply_text("Profession? Student/Employee/Business/Other:")
     return PROFESSION
 
@@ -919,9 +961,11 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=update.effective_user.id
     users_db[uid]['profession']=update.message.text.strip()
     users_db[uid]['joined']=str(get_ist_today())
-    users_db[uid]['reg_date']=get_ist_today()
+    users_db[uid]['reg_date']=str(get_ist_today())
+    # Persist the completed registration immediately so /start and /userlist
+    # continue to see the member after a Render restart/redeploy.
     save_data()
-    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
+    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n{format_user_details(uid)}", reply_markup=main_menu())
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1504,8 +1548,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
                 # Create approve buttons for channel
                 kb = [
                     [InlineKeyboardButton(f"✅ Approve {uid}", callback_data=f"approve_{uid}"), InlineKeyboardButton(f"❌ Reject {uid}", callback_data=f"reject_{uid}")],
-                    [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")],
-                    [InlineKeyboardButton("✅ Approve ALL Pending", callback_data="bulk_approve_all")]
+                    [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")]
                 ]
                 mk = InlineKeyboardMarkup(kb)
                 cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
@@ -2498,8 +2541,6 @@ support_plans_db = [
 
 awaiting_plan_image_admins = set()
 awaiting_plan_payment_adminless = set()
-awaiting_support_banner_admins = set()
-support_plan_banner_file_id = None
 
 def normalize_support_plans():
     global support_plans_db
@@ -2768,185 +2809,108 @@ async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-# === PERSISTENT STORAGE - RENDER POSTGRES + LOCAL JSON FALLBACK ===
+# === PERSISTENT STORAGE - FIX DATA LOSS ===
 import json, os
 DATA_FILE = "bot_data.json"
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-_DB_WARNED = False
-
-def _db_connect():
-    if not DATABASE_URL:
-        return None
-    try:
-        import psycopg
-        return psycopg.connect(DATABASE_URL, connect_timeout=10)
-    except Exception as e:
-        global _DB_WARNED
-        if not _DB_WARNED:
-            print(f"Persistent PostgreSQL unavailable: {e}")
-            _DB_WARNED = True
-        return None
-
-def _db_init():
-    conn = _db_connect()
-    if not conn:
-        return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS s2e_state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())")
-        conn.commit()
-        conn.close()
-        print("Persistent PostgreSQL storage ready")
-    except Exception as e:
-        print(f"DB init error: {e}")
-        try: conn.close()
-        except: pass
-
-def _db_load_snapshot():
-    conn = _db_connect()
-    if not conn:
-        return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT payload FROM s2e_state WHERE id=1")
-            row = cur.fetchone()
-        conn.close()
-        return json.loads(row[0]) if row else None
-    except Exception as e:
-        print(f"DB load error: {e}")
-        try: conn.close()
-        except: pass
-        return None
-
-def _json_safe(value):
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, set):
-        return [_json_safe(v) for v in sorted(value, key=lambda x: str(x))]
-    try:
-        from datetime import datetime, date, time
-        if isinstance(value, (datetime, date, time)):
-            return value.isoformat()
-    except Exception:
-        pass
-    return value
-
-def _db_save_snapshot(payload):
-    conn = _db_connect()
-    if not conn:
-        return False
-    try:
-        payload_text = json.dumps(_json_safe(payload), ensure_ascii=False)
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO s2e_state(id,payload,updated_at) VALUES(1,%s,NOW()) "
-                "ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, updated_at=NOW()",
-                (payload_text,)
-            )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"DB save error: {e}")
-        try:
-            conn.rollback(); conn.close()
-        except: pass
-        return False
-
-def _restore_user_keys(data):
-    # JSON/PostgreSQL payload keys are strings; restore Telegram user IDs as ints.
-    int_key_maps = [
-        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
-        'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count',
-        'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
-        'promo_views_db','promo_pending','pending_plans'
-    ]
-    for name in int_key_maps:
-        obj = data.get(name)
-        if isinstance(obj, dict):
-            fixed = {}
-            for k, v in obj.items():
-                try: nk = int(k)
-                except: nk = k
-                fixed[nk] = v
-            data[name] = fixed
-    return data
-
-def _apply_loaded_data(data):
-    global PAYMENT_UPI, support_plan_banner_file_id
-    data = _restore_user_keys(data or {})
-    map_names = [
-        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
-        'scheduled_tasks_db','support_plans_db','user_plans','withdraw_requests','withdraw_done_date',
-        'last_withdraw_date_db','daily_task_count','user_task_status'
-    ]
-    for name in map_names:
-        obj = data.get(name)
-        if obj is None or name not in globals():
-            continue
-        target = globals()[name]
-        if isinstance(target, dict) and isinstance(obj, dict):
-            target.clear(); target.update(obj)
-        elif isinstance(target, list) and isinstance(obj, list):
-            target.clear(); target.extend(obj)
-    if data.get('payment_upi'):
-        PAYMENT_UPI = str(data['payment_upi'])
-    if 'support_plan_banner_file_id' in data:
-        support_plan_banner_file_id = data.get('support_plan_banner_file_id')
 
 def save_data():
     try:
-        data = {
-            'users_db': users_db,
-            'tasks_db': tasks_db,
-            'bonus_balance': bonus_balance,
-            'referral_earnings': referral_earnings,
-            'referrals_db': referrals_db,
-            'referral_map': referral_map,
-            'scheduled_tasks_db': scheduled_tasks_db,
-            'support_plans_db': support_plans_db,
-            'support_plan_banner_file_id': support_plan_banner_file_id,
-            'user_plans': user_plans,
-            'withdraw_requests': withdraw_requests,
-            'withdraw_done_date': withdraw_done_date,
-            'last_withdraw_date_db': last_withdraw_date_db,
-            'daily_task_count': daily_task_count,
-            'user_task_status': user_task_status,
-            'payment_upi': get_payment_upi(),
-        }
-        safe = _json_safe(data)
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(safe, f, ensure_ascii=False)
-        if DATABASE_URL:
-            _db_save_snapshot(safe)
-        print(f"Data saved OK - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(user_plans)}")
+        data = {}
+        # Save important dicts
+        try:
+            data['users_db'] = users_db
+            data['tasks_db'] = tasks_db
+            data['bonus_balance'] = bonus_balance
+            data['referral_earnings'] = referral_earnings
+            data['referrals_db'] = referrals_db
+            data['referral_map'] = referral_map
+            data['scheduled_tasks_db'] = scheduled_tasks_db
+            data['support_plans_db'] = support_plans_db
+            data['user_plans'] = user_plans
+            data['withdraw_requests'] = withdraw_requests
+            data['withdraw_done_date'] = withdraw_done_date
+            data['last_withdraw_date_db'] = last_withdraw_date_db
+            data['daily_task_count'] = daily_task_count
+            data['user_task_status'] = user_task_status
+            data['payment_upi'] = get_payment_upi()
+        except:
+            pass
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, default=str)
+        print("Data saved OK")
     except Exception as e:
         print(f"Save error {e}")
 
 def load_data():
     try:
-        _db_init()
-        data = _db_load_snapshot() if DATABASE_URL else None
-        source = 'PostgreSQL' if data else None
-        if data is None and os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
-            source = 'bot_data.json'
-        if data:
-            _apply_loaded_data(data)
-            normalize_support_plans()
-            print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
-            # If an old local JSON was found and PostgreSQL is configured, migrate it once.
-            if source == 'bot_data.json' and DATABASE_URL:
-                save_data()
-        else:
-            print('No saved data found - starting with empty state')
+            global users_db, tasks_db, bonus_balance, referral_earnings, referrals_db, referral_map
+            global scheduled_tasks_db, support_plans_db, user_plans, withdraw_requests, withdraw_done_date, last_withdraw_date_db, daily_task_count, user_task_status, PAYMENT_UPI
+            if 'users_db' in data:
+                # Convert keys to int where possible
+                loaded_users = data['users_db']
+                users_db.clear()
+                for k,v in loaded_users.items():
+                    try:
+                        users_db[int(k)] = v
+                    except:
+                        users_db[k] = v
+            if 'tasks_db' in data:
+                tasks_db.clear()
+                for k,v in data['tasks_db'].items():
+                    try:
+                        tasks_db[int(k)] = v
+                    except:
+                        tasks_db[k] = v
+            if 'bonus_balance' in data:
+                bonus_balance.clear()
+                for k,v in data['bonus_balance'].items():
+                    try:
+                        bonus_balance[int(k)] = v
+                    except:
+                        bonus_balance[k] = v
+            if 'scheduled_tasks_db' in data:
+                scheduled_tasks_db.clear()
+                scheduled_tasks_db.extend(data['scheduled_tasks_db'])
+            if 'support_plans_db' in data:
+                support_plans_db.clear()
+                support_plans_db.extend(data['support_plans_db'])
+            if 'user_plans' in data:
+                user_plans.clear()
+                user_plans.update(data['user_plans'])
+            if 'withdraw_requests' in data:
+                withdraw_requests.clear()
+                for k, v in data['withdraw_requests'].items():
+                    try: withdraw_requests[int(k)] = v
+                    except: withdraw_requests[k] = v
+            if 'withdraw_done_date' in data:
+                withdraw_done_date.clear()
+                for k, v in data['withdraw_done_date'].items():
+                    try: withdraw_done_date[int(k)] = v
+                    except: withdraw_done_date[k] = v
+            if 'last_withdraw_date_db' in data:
+                last_withdraw_date_db.clear()
+                for k, v in data['last_withdraw_date_db'].items():
+                    try: last_withdraw_date_db[int(k)] = v
+                    except: last_withdraw_date_db[k] = v
+            if 'daily_task_count' in data:
+                daily_task_count.clear()
+                for k, v in data['daily_task_count'].items():
+                    try: daily_task_count[int(k)] = v
+                    except: daily_task_count[k] = v
+            if 'user_task_status' in data:
+                user_task_status.clear()
+                for k, v in data['user_task_status'].items():
+                    try: user_task_status[int(k)] = v
+                    except: user_task_status[k] = v
+            if 'payment_upi' in data and data['payment_upi']:
+                PAYMENT_UPI = str(data['payment_upi'])
+            print(f"Data loaded - Users: {len(users_db)} Tasks: {len(scheduled_tasks_db)} Plans: {len(support_plans_db)} UserPlans: {len(user_plans)}")
     except Exception as e:
         print(f"Load error {e}")
         import traceback; traceback.print_exc()
-
 
 # User Plans - which user bought which plan
 if 'user_plans' not in globals():
@@ -2954,13 +2918,10 @@ if 'user_plans' not in globals():
 
 def get_reward_for_user(uid, base_reward=5):
     try:
-        stored = user_plans.get(str(uid)) or user_plans.get(int(uid))
-        if not stored:
+        pid = user_plans.get(str(uid)) or user_plans.get(int(uid))
+        if not pid:
             return base_reward
-        pid = stored.get("plan_id") if isinstance(stored, dict) else stored
-        if pid is None:
-            return base_reward
-        plan = next((p for p in support_plans_db if int(p.get('id', -1)) == int(pid)), None)
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
         if not plan:
             return base_reward
         price = plan['price']
@@ -2999,40 +2960,6 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
-async def change_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin-only manual plan change. Usage: /change_plan USER_ID PLAN_ID"""
-    if not is_admin(update.effective_user.id):
-        return
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: /change_plan <user_id> <plan_id>\nExample: /change_plan 8709635130 3\nUse /list_plans to see plan IDs.")
-        return
-    try:
-        uid = int(context.args[0]); pid = int(context.args[1])
-        normalize_support_plans()
-        plan = next((p for p in support_plans_db if int(p.get("id", -1)) == pid), None)
-        if not plan:
-            await update.message.reply_text(f"❌ Plan ID {pid} not found. Use /list_plans")
-            return
-        duration = int(plan.get("duration", 30) or 30)
-        daily = int(plan.get("daily_limit", 10) or 10)
-        price = int(plan.get("price", 0) or 0)
-        name = str(plan.get("name", "Plan"))
-        expiry = get_ist_today() + timedelta(days=duration)
-        user_plans[str(uid)] = {
-            "plan": name.lower(), "plan_id": pid, "status": "active",
-            "price": price, "daily_limit": daily, "date": str(get_ist_today()),
-            "expiry": str(expiry), "changed_by_admin": update.effective_user.id
-        }
-        pending_plans.pop(uid, None); pending_plans.pop(str(uid), None)
-        save_data()
-        await update.message.reply_text(f"✅ Plan changed\nUser: {uid}\nPlan: {name} ₹{price}\nValid till: {expiry}")
-        try:
-            await context.bot.send_message(chat_id=uid, text=f"🔄 Your plan was changed by admin.\n\nPlan: {name} ₹{price}\nValid till: {expiry}\nDaily tasks: {daily}", reply_markup=main_menu())
-        except Exception:
-            pass
-    except Exception as e:
-        await update.message.reply_text(f"❌ Change plan error: {e}")
-
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -3040,9 +2967,8 @@ async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No user plans yet!")
         return
     msg = f"USER PLANS - {len(user_plans)} Users:\n\n"
-    for uid, stored in list(user_plans.items())[:30]:
-        pid = stored.get('plan_id') if isinstance(stored, dict) else stored
-        plan = next((p for p in support_plans_db if int(p.get('id', -1)) == int(pid)), None) if pid is not None else None
+    for uid, pid in list(user_plans.items())[:30]:
+        plan = next((p for p in support_plans_db if p['id'] == pid), None)
         name = users_db.get(int(uid), {}).get('name', 'Unknown') if str(uid).isdigit() else 'Unknown'
         msg += f"{uid} {name} -> Plan {pid} {plan['name'] if plan else ''} = Rs{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
     await update.message.reply_text(msg)
@@ -3055,8 +2981,7 @@ async def new_members_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_list = list(users_db.items())[-20:]
     for uid, data in user_list:
         name = data.get('name', 'Unknown')
-        stored_plan = user_plans.get(str(uid), 'No Plan')
-        plan_id = stored_plan.get('plan_id') if isinstance(stored_plan, dict) else stored_plan
+        plan_id = user_plans.get(str(uid), 'No Plan')
         reward = get_reward_for_user(uid)
         msg += f"ID {uid} {name} Plan {plan_id} Rs{reward}/task\n"
     await update.message.reply_text(msg)
@@ -3070,9 +2995,8 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(context.args[0])
         user = users_db.get(uid, {})
-        stored_plan = user_plans.get(str(uid))
-        plan_id = stored_plan.get('plan_id') if isinstance(stored_plan, dict) else stored_plan
-        plan = next((p for p in support_plans_db if int(p.get('id', -1)) == int(plan_id)), None) if plan_id is not None else None
+        plan_id = user_plans.get(str(uid))
+        plan = next((p for p in support_plans_db if p['id'] == plan_id), None) if plan_id else None
         reward = get_reward_for_user(uid)
         msg = f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\nEarnings: {bonus_balance.get(uid,0)}\nPlan: {plan['name'] if plan else 'No Plan'} Rs{plan['price'] if plan else 0}\nReward: Rs{reward}/task"
         await update.message.reply_text(msg)
@@ -3096,7 +3020,7 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 context.args = [task_num]
                 await approve_task_all_cmd(update, context)
             try:
-                await update.callback_query.answer("Bulk approval processed")
+                await update.callback_query.answer(f"Approved Task {task_num}")
             except:
                 pass
     except Exception as e:
@@ -3583,37 +3507,28 @@ async def set_task_count_cmd(update, context):
         await update.message.reply_text(f"Error {e}")
 
 async def approve_all_pending_cmd(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    if not pending_daily:
-        await update.effective_message.reply_text("No pending tasks!")
-        return
-    approved = 0
-    for uid, data in list(pending_daily.items()):
-        try:
-            task = data.get('task', {}) if isinstance(data, dict) else {}
-            base_reward = int(task.get('reward', 5) or 5)
-            reward = int(get_reward_for_user(uid, base_reward))
-            tasks_db[uid] = tasks_db.get(uid, 0) + 1
-            today = str(get_ist_today())
-            daily_task_count.setdefault(uid, {})
-            daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
-            task_id = task.get('id')
-            if task_id is not None:
-                user_task_status.setdefault(uid, {})
-                user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
-            if reward != base_reward:
-                bonus_balance[uid] = bonus_balance.get(uid, 0) + (reward - base_reward)
-            pending_daily.pop(uid, None)
-            approved += 1
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        if not pending_daily:
+            await update.message.reply_text("No pending")
+            return
+        approved=0
+        for tid in list(pending_daily.keys())[:50]:
             try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Your Task Approved!\nReward added: ₹{reward}")
-            except Exception:
+                tasks_db[tid]=tasks_db.get(tid,0)+1
+                today=str(get_ist_today())
+                if tid not in daily_task_count:
+                    daily_task_count[tid]={}
+                daily_task_count[tid][today]=daily_task_count[tid].get(today,0)+1
+                del pending_daily[tid]
+                approved+=1
+            except:
                 pass
-        except Exception as e:
-            print(f"Approve ALL error for {uid}: {e}")
-    save_data()
-    await update.effective_message.reply_text(f"✅ APPROVED ALL PENDING!\n\nApproved: {approved} members")
+        save_data()
+        await update.message.reply_text(f"Approved {approved}")
+    except Exception as e:
+        await update.message.reply_text(f"Error {e}")
 
 async def list_pending_cmd(update, context):
     try:
@@ -3713,40 +3628,6 @@ async def remove_plan_cmd(update, context):
         await update.message.reply_text(f"Plan {pid} removed")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
-
-async def set_support_banner_cmd(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    awaiting_support_banner_admins.add(update.effective_user.id)
-    context.user_data["awaiting_support_banner"] = True
-    await update.message.reply_text(
-        "🖼️ Send the MAIN Support Plans banner as a PHOTO now.\n\n"
-        "It will appear at the top when users open 💎 Support Plans."
-    )
-
-async def handle_support_banner_upload(update, context):
-    try:
-        uid = update.effective_user.id
-        if uid not in awaiting_support_banner_admins or not update.message.photo:
-            return False
-        global support_plan_banner_file_id
-        support_plan_banner_file_id = update.message.photo[-1].file_id
-        awaiting_support_banner_admins.discard(uid)
-        context.user_data.pop("awaiting_support_banner", None)
-        save_data()
-        await update.message.reply_text("✅ Support Plans MAIN banner updated successfully.")
-        return True
-    except Exception as e:
-        print(f"support banner upload error: {e}")
-        return False
-
-class SupportBannerUploadFilter(filters.BaseFilter):
-    name = "SupportBannerUploadFilter"
-    def filter(self, update):
-        try:
-            return bool(update.effective_user and update.effective_user.id in awaiting_support_banner_admins and update.message and update.message.photo)
-        except Exception:
-            return False
 
 async def set_plan_image_cmd(update, context):
     try:
@@ -3909,7 +3790,6 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
-            app.add_handler(MessageHandler(SupportBannerUploadFilter(), handle_support_banner_upload), group=-4)
             app.add_handler(MessageHandler(PlanImageUploadFilter(), handle_plan_image_upload), group=-3)
             # IMPORTANT: Do not register a catch-all PHOTO handler here.
             # It would consume member screenshots before the dedicated
@@ -4097,12 +3977,7 @@ def main():
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
                         chan = get_screenshot_channel()
-                        task_no = task_to_use.get('task_number', 1)
-                        kb_chan = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_daily_{uid}")],
-                            [InlineKeyboardButton(f"✅ Approve ALL Task {task_no}", callback_data=f"bulk_approve_{task_no}")],
-                            [InlineKeyboardButton("✅ Approve ALL Pending", callback_data="bulk_approve_all")]
-                        ])
+                        kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
                         await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
                         print(f"V58 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY!")
                         context.user_data.pop('awaiting_daily_screenshot', None)
@@ -4163,6 +4038,8 @@ def main():
             print("V56 Catch-all photo fallback disabled - dedicated upload handlers active!")
 
             app.add_handler(CommandHandler("menu", menu))
+            app.add_handler(CommandHandler("userlist", userlist_cmd))
+            app.add_handler(CommandHandler("users", userlist_cmd))
             app.add_handler(CommandHandler("admin", admin_panel))
             app.add_handler(CommandHandler("pending", pending_cmd))
             app.add_handler(CommandHandler("approve", approve_cmd))
@@ -4188,6 +4065,7 @@ def main():
                 group=-10
             )
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
+            app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
@@ -4246,8 +4124,6 @@ def main():
             app.add_handler(CommandHandler("list_plans", list_plans_cmd))
             app.add_handler(CommandHandler("remove_plan", remove_plan_cmd))
             app.add_handler(CommandHandler("set_plan_image", set_plan_image_cmd))
-            app.add_handler(CommandHandler("set_support_banner", set_support_banner_cmd))
-            app.add_handler(CommandHandler("change_plan", change_plan_cmd))
             app.add_handler(CommandHandler("bacup", backup_cmd))
             app.add_handler(CommandHandler("add_admin", add_admin_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
