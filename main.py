@@ -57,6 +57,10 @@ async def set_payment_upi_cmd(update, context):
 
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
+# Readable admin names, persisted with the bot data.
+admin_names_db = {}
+notification_thread_started = False
+bot_event_loop = None
 _env = os.getenv("ADMIN_IDS") or ""
 if _env:
     for x in _env.replace(",", " ").split():
@@ -87,38 +91,47 @@ def keep_alive_pinger():
             time.sleep(60)
 
 def notification_thread_func():
-    import asyncio
+    """Send a reliable 1-minute-before task notification from the live polling loop."""
+    import time as t2
     while True:
         try:
-            import time as t2
-            t2.sleep(30)
-            if not bot_application:
+            t2.sleep(10)
+            if not bot_application or not bot_event_loop or bot_event_loop.is_closed():
                 continue
             now = get_ist_now()
             for task in get_tasks_for_today():
                 try:
                     open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
-                except:
+                except Exception:
                     continue
                 diff = (open_dt - now).total_seconds()
-                if 0 < diff <= 65 and task['id'] not in notified_tasks_30sec:
-                    notified_tasks_30sec.add(task['id'])
-                    msg = f"⏰ TASK IN 30 SEC! Task {task['task_number']}: {task.get('title','')}"
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        for uid in list(users_db.keys())[:300]:
+                notify_key = f"{get_ist_today()}:{task.get('id')}"
+                if 50 <= diff <= 75 and notify_key not in notified_tasks_30sec:
+                    notified_tasks_30sec.add(notify_key)
+                    msg = (
+                        f"⏰ TASK STARTING IN 1 MINUTE!\n\n"
+                        f"Task {task.get('task_number', '?')}: {task.get('title', '')}\n"
+                        f"🕐 Opens: {task.get('open_time', '')}\n"
+                        f"💰 Reward: ₹{task.get('reward', 5)}\n\n"
+                        "Get ready and complete the task within the available time."
+                    )
+                    async def send_notifications():
+                        sent = 0
+                        for uid in list(users_db.keys()):
                             try:
-                                loop.run_until_complete(bot_application.bot.send_message(chat_id=uid, text=msg))
-                            except:
-                                pass
-                        loop.close()
-                    except:
-                        pass
-        except:
-            import time as t2
-            t2.sleep(10)
-
+                                await bot_application.bot.send_message(chat_id=int(uid), text=msg)
+                                sent += 1
+                            except Exception as e:
+                                print(f"1-min notification failed for {uid}: {e}")
+                        print(f"1-min task notification sent for task {task.get('id')} to {sent} users")
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(send_notifications(), bot_event_loop)
+                        future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+                    except Exception as e:
+                        print(f"1-min notification scheduling error: {e}")
+        except Exception as e:
+            print(f"Notification thread error: {e}")
+            t2.sleep(5)
 
 
 async def _show_plan_purchase(update, context, plan_type):
@@ -133,24 +146,17 @@ async def _show_plan_purchase(update, context, plan_type):
     price = 499 if plan_type == "premium" else 199
     limit = DAILY_TASK_LIMIT_PREMIUM if plan_type == "premium" else DAILY_TASK_LIMIT_BASIC
     if is_active and plan_name.lower().startswith(plan_type):
-        text = (
-            f"⚠️ You already have an active {plan_type.capitalize()} plan.\n\n"
-            f"Current Plan: {plan_name.upper()}\n"
-            f"Valid till: {expiry}\n"
-            f"Daily tasks: {limit}\n\n"
-            "📞 If you want to change your plan, please contact admin.\n"
-            "You cannot activate another plan while your current plan is active."
-        )
+        text = f"✅ {plan_type.capitalize()} plan is already active.\\nValid till: {expiry}\\nDaily tasks: {limit}"
         kb = [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
     else:
         upi = get_payment_upi()
         pending_plans[uid] = {"plan": plan_type, "date": str(get_ist_today()), "price": price}
         text = (
-            f"💎 {plan_type.capitalize()} Plan — ₹{price}\n\n"
-            f"Daily Tasks: {limit}\n"
-            f"Validity: 30 days\n\n"
-            f"💳 Pay manually to UPI:\n{upi}\n\n"
-            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\n"
+            f"💎 {plan_type.capitalize()} Plan — ₹{price}\\n\\n"
+            f"Daily Tasks: {limit}\\n"
+            f"Validity: 30 days\\n\\n"
+            f"💳 Pay manually to UPI:\\n{upi}\\n\\n"
+            "After payment, click “I Paid - Send Proof” and send the payment screenshot.\\n"
             "No payment link is required."
         )
         kb = [
@@ -253,9 +259,13 @@ async def plan_proof_id_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     normalize_support_plans(); plan=next((p for p in support_plans_db if int(p.get("id",-1))==pid),None)
     if not plan: await q.message.reply_text("❌ Plan not found."); return
     uid=q.from_user.id; price=int(plan.get("price",0))
-    pending_plans[uid]={"plan_id":pid,"plan":str(plan.get("name","plan")).lower(),"date":str(get_ist_today()),"price":price}
+    current=_get_user_plan_record(uid)
+    current_name=current.get("plan_name",current.get("name",current.get("plan","No Plan"))) if current else "No Plan"
+    request_type="upgrade" if current and str(current.get("status","active")).lower() in ("active","approved") and int(current.get("plan_id",current.get("id",0)) or 0)!=pid else "new"
+    pending_plans[uid]={"plan_id":pid,"plan":str(plan.get("name","plan")).lower(),"date":str(get_ist_today()),"price":price,"request_type":request_type,"current_plan":current_name}
     context.user_data["awaiting_plan_payment_proof"]=pid
-    await q.message.reply_text(f"📤 Send your ₹{price} payment screenshot as a PHOTO now.\nAdmin will verify it manually.")
+    prefix=f"🔄 Upgrade request from {current_name} → {plan.get('name','Plan')}\n\n" if request_type=="upgrade" else ""
+    await q.message.reply_text(prefix+f"📤 Send your ₹{price} payment screenshot as a PHOTO now.\nAdmin will verify and approve it manually.")
 
 async def admin_view_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -437,6 +447,8 @@ promo_earnings_db = {}
 promo_views_db = {}
 promo_pending = {}
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
+holidays_db = {}  # {YYYY-MM-DD: reason}
+withdraw_history_db = {}  # {uid: [withdrawal records]}
 
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
     global promo_campaign_counter
@@ -576,7 +588,14 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
     return True, task
 
 def get_tasks_for_today():
-    return [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
+    today = str(get_ist_today())
+    if today in holidays_db:
+        return []
+    return [t for t in scheduled_tasks_db if t['date'] == today]
+
+def is_holiday(day=None):
+    day = str(day or get_ist_today())
+    return day in holidays_db
 
 def get_current_scheduled_task_with_interval():
     now = get_ist_time()
@@ -714,12 +733,23 @@ def get_plan_limits(uid):
     cap = int(plan.get('earnings_limit') or DAILY_EARNING_CAP_BASIC)
     return int(configured_limit or DAILY_TASK_LIMIT_BASIC), cap, "basic"
 
+def get_daily_task_earned(uid, day=None):
+    day = str(day or get_ist_today())
+    total = 0
+    for st in user_task_status.get(uid, {}).values():
+        if isinstance(st, dict) and st.get('status') == 'completed' and str(st.get('completed_at',''))[:10] == day:
+            try: total += int(st.get('reward', 0) or 0)
+            except Exception: pass
+    return total
+
 def check_daily_limits(uid):
     today = str(get_ist_today())
     count = daily_task_count.get(uid, {}).get(today, 0)
     limit, cap, plan_name = get_plan_limits(uid)
     return count, limit, cap
 def get_today_task_for_user(uid):
+    if is_holiday():
+        return None
     current, next_task = get_current_scheduled_task_with_interval()
     if current:
         return current
@@ -738,103 +768,32 @@ def get_today_task_for_user(uid):
         "window_minutes": 1440,
     }
 
+def admin_panel_keyboard():
+    missed_label = "⏰ Missed: ON" if MISSED_ENABLED else "⏰ Missed: OFF"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"),
+         InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
+        [InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"),
+         InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"),
+         InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
+        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"),
+         InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"),
+         InlineKeyboardButton(missed_label, callback_data="admin_missed_toggle")],
+        [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
+    ])
+
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
         [InlineKeyboardButton("📅 Daily Task", callback_data="daily"), InlineKeyboardButton("💸 Withdraw", callback_data="withdraw")],
+        [InlineKeyboardButton("🧾 Withdraw History", callback_data="withdraw_history"), InlineKeyboardButton("💰 Wallet", callback_data="wallet")],
         [InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks"), InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop")],
         [InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled"), InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],
         [InlineKeyboardButton("👤 My Details", callback_data="my_details"), InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks")],
         [InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")]
     ])
-
-def _user_plan_text(uid):
-    plan = user_plans.get(str(uid), user_plans.get(uid))
-    if not isinstance(plan, dict) or str(plan.get("status", "active")).lower() != "active":
-        return "🆓 Plan: Free"
-    name = plan.get("plan", "Plan")
-    expiry = plan.get("expiry", "-")
-    return f"💎 Plan: {str(name).title()}\n📅 Expiry: {expiry}"
-
-def format_user_details(uid):
-    data = users_db.get(uid) or users_db.get(str(uid)) or {}
-    if not isinstance(data, dict):
-        data = {}
-    return (
-        "👤 MY DETAILS\n\n"
-        f"🆔 User ID: {uid}\n"
-        f"👤 Name: {data.get('name', '-') }\n"
-        f"⚧ Gender: {data.get('gender', '-') }\n"
-        f"🎂 DOB: {data.get('dob', '-') }\n"
-        f"📱 Mobile: {data.get('mobile', '-') }\n"
-        f"💳 UPI: {data.get('upi', '-') }\n"
-        f"📍 Pincode: {data.get('pincode', '-') }\n"
-        f"💼 Profession: {data.get('profession', '-') }\n"
-        f"📅 Joined: {data.get('joined', data.get('reg_date', '-'))}\n\n"
-        f"{_user_plan_text(uid)}\n"
-        f"📋 Today's tasks: {get_tasks(uid)}/15\n"
-        f"💰 Balance: Rs{get_balance(uid)}"
-    )
-
-async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try:
-        await q.answer()
-    except Exception:
-        pass
-    uid = q.from_user.id
-    if uid not in users_db and str(uid) not in users_db:
-        await q.message.reply_text("❌ Your registration details were not found. Please use /start to register.")
-        return
-    await q.message.reply_text(format_user_details(uid), reply_markup=main_menu())
-
-async def dbstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin diagnostic: verify persistent storage and currently loaded user count."""
-    if not is_admin(update.effective_user.id):
-        return
-    db_configured = bool(os.getenv("DATABASE_URL", "").strip())
-    await update.message.reply_text(
-        f"🗄️ DATABASE STATUS\n\n"
-        f"PostgreSQL configured: {'YES' if db_configured else 'NO'}\n"
-        f"Users loaded: {len(users_db)}\n"
-        f"Plans loaded: {len(user_plans)}\n\n"
-        "Use /userlist to view registered members."
-    )
-
-async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin only!")
-        return
-    users = list(users_db.items())
-    if not users:
-        await update.message.reply_text("👥 USER LIST\n\nNo registered users found in the loaded database.")
-        return
-    try:
-        page = max(1, int(context.args[0])) if context.args else 1
-    except Exception:
-        page = 1
-    per_page = 10
-    total_pages = (len(users) + per_page - 1) // per_page
-    page = min(page, total_pages)
-    start_i = (page - 1) * per_page
-    chunk = users[start_i:start_i + per_page]
-    lines = [f"👥 S2E USER LIST — Page {page}/{total_pages}", f"Total users: {len(users)}", ""]
-    for i, (uid, data) in enumerate(chunk, start=start_i + 1):
-        if not isinstance(data, dict):
-            data = {}
-        plan = user_plans.get(str(uid), user_plans.get(uid))
-        plan_name = str(plan.get("plan", "Free")).title() if isinstance(plan, dict) else "Free"
-        lines.append(
-            f"{i}. 👤 {data.get('name', 'Unknown')}\n"
-            f"   🆔 {uid} | ⚧ {data.get('gender', '-')} | 💼 {data.get('profession', '-')}\n"
-            f"   📱 {data.get('mobile', '-')} | 💎 {plan_name}\n"
-            f"   📅 Joined: {data.get('joined', data.get('reg_date', '-'))}"
-        )
-    if page < total_pages:
-        lines.append(f"\n➡️ Next page: /userlist {page + 1}")
-    if page > 1:
-        lines.append(f"⬅️ Previous page: /userlist {page - 1}")
-    await update.message.reply_text("\n\n".join(lines))
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
@@ -871,13 +830,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ref_id = int(args[0])
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
-    if uid in users_db or str(uid) in users_db:
-        data = users_db.get(uid) or users_db.get(str(uid)) or {}
-        name = data.get("name", "User") if isinstance(data, dict) else "User"
-        await update.message.reply_text(
-            f"Welcome back {name}!\n\n{format_user_details(uid)}",
-            reply_markup=main_menu()
-        )
+    if uid in users_db:
+        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -906,13 +860,35 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
     users_db[uid] = {'name': name}
-    await update.message.reply_text("Gender? Male/Female/Other:")
+    await update.message.reply_text(
+        "Select your gender:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👨 Male", callback_data="reg_gender_male"),
+             InlineKeyboardButton("👩 Female", callback_data="reg_gender_female")],
+            [InlineKeyboardButton("⚪ Other", callback_data="reg_gender_other")]
+        ])
+    )
     return GENDER
 
 async def get_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    users_db[uid]['gender'] = update.message.text.strip()
+    gender = update.message.text.strip().title()
+    if gender not in ("Male", "Female", "Other"):
+        await update.message.reply_text("Please select Male, Female or Other.")
+        return GENDER
+    users_db[uid]['gender'] = gender
     await update.message.reply_text("Date of Birth? DD/MM/YYYY:")
+    return DOB
+
+async def reg_gender_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    gender = q.data.replace("reg_gender_", "").title()
+    if gender not in ("Male", "Female", "Other"):
+        return GENDER
+    users_db.setdefault(uid, {})['gender'] = gender
+    await q.message.reply_text(f"✅ Gender: {gender}\n\nDate of Birth? DD/MM/YYYY:")
     return DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -966,19 +942,53 @@ async def get_pincode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not pincode.isdigit() or len(pincode)!=6:
         await update.message.reply_text("Invalid Pincode! 6 digits:")
         return PINCODE
-    users_db[uid]['pincode']=pincode
-    await update.message.reply_text("Profession? Student/Employee/Business/Other:")
+    users_db[uid]['pincode'] = pincode
+    await update.message.reply_text(
+        "Select your profession:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎓 Student", callback_data="reg_prof_student"),
+             InlineKeyboardButton("💼 Employee", callback_data="reg_prof_employee")],
+            [InlineKeyboardButton("🏪 Business", callback_data="reg_prof_business"),
+             InlineKeyboardButton("🔧 Self-employed", callback_data="reg_prof_self_employed")],
+            [InlineKeyboardButton("⚪ Other", callback_data="reg_prof_other")]
+        ])
+    )
     return PROFESSION
 
 async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid=update.effective_user.id
-    users_db[uid]['profession']=update.message.text.strip()
+    uid = update.effective_user.id
+    profession = update.message.text.strip().title()
+    allowed = {"Student", "Employee", "Business", "Self-Employed", "Other"}
+    if profession not in allowed:
+        await update.message.reply_text("Please select one of the profession options.")
+        return PROFESSION
+    users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
-    users_db[uid]['reg_date']=str(get_ist_today())
-    # Persist the completed registration immediately so /start and /userlist
-    # continue to see the member after a Render restart/redeploy.
+    users_db[uid]['reg_date']=get_ist_today()
+    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
+    return ConversationHandler.END
+
+async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    value = q.data.replace("reg_prof_", "").replace("_", " ").title()
+    if value not in ("Student", "Employee", "Business", "Self Employed", "Other"):
+        return PROFESSION
+    if value == "Self Employed":
+        value = "Self-Employed"
+    users_db.setdefault(uid, {})['profession'] = value
+    users_db[uid]['joined'] = str(get_ist_today())
+    users_db[uid]['reg_date'] = get_ist_today()
     save_data()
-    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n{format_user_details(uid)}", reply_markup=main_menu())
+    await q.message.reply_text(
+        f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n"
+        f"Gender: {users_db[uid].get('gender','-')}\nProfession: {value}\n\n"
+        "💰 Earn: Rs10 per referral + 10% plan commission\n"
+        "🏪 Promo: Earn Rs10 per 100 status views!\n"
+        "📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!",
+        reply_markup=main_menu()
+    )
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1008,16 +1018,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += f"Example: /add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\nThen /set_task_image 1 + send TASK 3 poster!\n\n"
     msg += f"/list_tasks /list_promos /skipped all /warnings /banned"
     
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"), InlineKeyboardButton(f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status')=='processing'])})", callback_data="admin_view_withdraw")],
-        [InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
-        [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"), InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
-        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"), InlineKeyboardButton("👑 Add Admin", callback_data="admin_add_admin")],
-        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"), InlineKeyboardButton("⏰ Missed ON/OFF", callback_data="admin_missed_toggle")],
-        [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
-    ])
-    
-    await update.message.reply_text(msg[:4000], reply_markup=kb)
+    await update.message.reply_text(msg[:4000], reply_markup=admin_panel_keyboard())
 
 async def admin_view_pending_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -1233,6 +1234,9 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
             return
     today=str(get_ist_today())
+    if is_holiday(today):
+        await q.message.reply_text(f"🏖️ Today is a holiday.\n\nNo tasks are available today.\nReason: {holidays_db.get(today, 'Holiday')}\n\nPlease come back tomorrow.", reply_markup=main_menu())
+        return
     count, limit, cap = check_daily_limits(uid)
     if count >= limit and limit > 0:
         is_active, plan_name, _ = check_plan_active(uid)
@@ -1286,7 +1290,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📅 Today's Task:\n\nTitle: {task['title']}\nReward: Rs{task['reward']}\nLink: {task['link']}\n\n"
                 f"Tasks today: {count}/{limit}\n\nClick Upload Screenshot after completing!",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"),
+                    InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_v2"),
                     InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task_id}")
                 ]])
             )
@@ -1310,11 +1314,11 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_file_id = current.get('image_file_id') or task_images_db.get(current['id'])
     if image_file_id:
         try:
-            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_v2")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
             return
         except Exception as e:
             print(f"Image send error {e}")
-    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_v2")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
 
 async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1488,8 +1492,25 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             chan = get_screenshot_channel()
             if chan:
                 try:
-                    kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Screenshot fix!", reply_markup=kb_chan)
+                    user_name = users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')
+                    kb_chan = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_daily_{uid}"),
+                         InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_daily_{uid}")],
+                        [InlineKeyboardButton("🚀 Approve ALL Pending", callback_data="bulk_approve_all")]
+                    ])
+                    await context.bot.send_photo(
+                        chat_id=chan,
+                        photo=file_id,
+                        caption=(
+                            f"📸 TASK SCREENSHOT\n"
+                            f"👤 Name: {user_name}\n"
+                            f"🆔 User ID: {uid}\n"
+                            f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
+                            f"💰 Reward: ₹{task_to_use.get('reward',5)}\n"
+                            f"📅 {get_ist_today()}"
+                        ),
+                        reply_markup=kb_chan
+                    )
                     print(f"V56 forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Upload screenshot button fix!")
                 except Exception as e:
                     print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan} admin?")
@@ -2002,6 +2023,52 @@ async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     await q.message.reply_text(f"📞 Contact Us\n\nSupport: {SUPPORT_USERNAME}\nChannel: {get_join_channel_link()}\nUPI: {ADMIN_UPI}\n\nFor any issues, contact admin!", reply_markup=main_menu())
 
+async def withdraw_history_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except: pass
+    uid = q.from_user.id
+    rows = withdraw_history_db.get(uid, [])
+    if not rows:
+        # Include the current request if history was not yet migrated.
+        req = withdraw_requests.get(uid)
+        if req:
+            rows = [req]
+    if not rows:
+        await q.message.reply_text("🧾 Withdrawal History\n\nNo withdrawal records yet.", reply_markup=main_menu())
+        return
+    msg = "🧾 WITHDRAWAL HISTORY\n\n"
+    for i, r in enumerate(reversed(rows[-30:]), 1):
+        msg += (f"{i}. 📅 {r.get('date', r.get('created_at','N/A'))}\n"
+                f"   💰 Amount: ₹{r.get('amount',0)}\n"
+                f"   📌 Status: {str(r.get('status','unknown')).title()}\n")
+        if r.get('processed_at'): msg += f"   ✅ Processed: {r.get('processed_at')}\n"
+        msg += "\n"
+    await q.message.reply_text(msg[:4000], reply_markup=main_menu())
+
+async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    uid=q.from_user.id
+    user=users_db.get(uid,{})
+    plan=_get_user_plan_record(uid)
+    total_earned=get_balance(uid)
+    joined=user.get('joined') or user.get('reg_date') or 'N/A'
+    plan_name=plan.get('plan_name',plan.get('name',plan.get('plan','No Plan'))) if plan else 'No Plan'
+    expiry=plan.get('expires_at',plan.get('expiry','N/A')) if plan else 'N/A'
+    remaining='N/A'
+    if expiry not in (None,'N/A'):
+        try: remaining=max(0,(date.fromisoformat(str(expiry)[:10])-get_ist_today()).days)
+        except: pass
+    count,limit,cap=check_daily_limits(uid)
+    msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
+         f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
+         f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
+         f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
+         f"📋 Today's tasks: {count}/{limit}\n💰 Total earning: ₹{total_earned}")
+    await q.message.reply_text(msg,reply_markup=main_menu())
+
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     await q.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
@@ -2207,6 +2274,8 @@ async def wd_confirm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'date': today
     }
     withdraw_done_date[uid] = today
+    req = dict(withdraw_requests[uid])
+    withdraw_history_db.setdefault(uid, []).append(req)
     save_data()
 
     await q.message.reply_text(
@@ -2250,6 +2319,10 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         is_first=tasks_db.get(uid,0)==0
         reward=pending_daily[uid].get('task',{}).get('reward',5)
         today=pending_daily[uid].get('date')
+        _, _, daily_cap = check_daily_limits(uid)
+        if daily_cap > 0 and get_daily_task_earned(uid, today) + int(reward) > daily_cap:
+            await q.message.reply_text(f"⛔ Daily earning cap reached for User {uid}. Cap: ₹{daily_cap}, earned today: ₹{get_daily_task_earned(uid, today)}.")
+            return
         tasks_db[uid]=tasks_db.get(uid,0)+1
         if uid not in daily_task_count: daily_task_count[uid]={}
         daily_task_count[uid][today]=daily_task_count[uid].get(today,0)+1
@@ -2259,6 +2332,7 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         for tid, status_data in list(user_task_status.get(uid, {}).items()):
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
                 mark_task_completed_with_interval(uid, tid)
+                if isinstance(user_task_status[uid].get(tid), dict): user_task_status[uid][tid]['reward'] = int(reward)
                 break
         ref_id=referral_map.get(uid)
         if ref_id and is_first:
@@ -2349,7 +2423,6 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_admin(q.from_user.id):
         await q.message.reply_text("❌ Admin only!")
         return
-
     uid = int(q.data.split("_")[-1])
     req = withdraw_requests.get(uid)
     if not req:
@@ -2358,44 +2431,31 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     if req.get('status') != 'processing':
         await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
         return
-
     amount = int(req['amount'])
     current_bal = get_balance(uid)
     if current_bal < amount:
         req['status'] = 'rejected'
+        req['rejected_at'] = str(get_ist_now())
+        hist = withdraw_history_db.setdefault(uid, [])
+        if hist: hist[-1].update(req)
         save_data()
         await q.message.reply_text("❌ Cannot approve: user's current balance is insufficient.")
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Withdrawal rejected because your balance is insufficient at processing time.", reply_markup=main_menu())
-        except Exception:
-            pass
+        except Exception: pass
         return
-
-    # Deduct the withdrawal amount without changing the completed-task count.
     bonus_balance[uid] = bonus_balance.get(uid, 0) - amount
     new_bal = get_balance(uid)
     req['status'] = 'approved'
     req['approved_at'] = str(get_ist_now())
     last_withdraw_date_db[uid] = str(get_ist_today())
+    hist = withdraw_history_db.setdefault(uid, [])
+    if hist: hist[-1].update(req)
     save_data()
-
-    await q.message.reply_text(
-        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
-    )
+    await q.message.reply_text(f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}")
     try:
-        await context.bot.send_message(
-            chat_id=uid,
-            text=(f"✅ Withdrawal Approved!\n\n"
-                  f"Amount: Rs{amount}\n"
-                  f"UPI: {req['upi']}\n"
-                  f"You Receive: Rs{req['net']}\n"
-                  f"Remaining Balance: Rs{new_bal}\n\n"
-                  "Your payment request has been processed.\n"
-                  "⏰ You can withdraw again tomorrow."),
-            reply_markup=main_menu()
-        )
-    except Exception:
-        pass
+        await context.bot.send_message(chat_id=uid, text=(f"✅ Withdrawal Approved!\n\nAmount: Rs{amount}\nUPI: {req['upi']}\nYou Receive: Rs{req['net']}\nRemaining Balance: Rs{new_bal}\n\nYour payment request has been processed.\n⏰ You can withdraw again tomorrow."), reply_markup=main_menu())
+    except Exception: pass
 
 
 async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2404,7 +2464,6 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(q.from_user.id):
         await q.message.reply_text("❌ Admin only!")
         return
-
     uid = int(q.data.split("_")[-1])
     req = withdraw_requests.get(uid)
     if not req:
@@ -2413,23 +2472,15 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if req.get('status') != 'processing':
         await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
         return
-
     req['status'] = 'rejected'
     req['rejected_at'] = str(get_ist_now())
+    hist = withdraw_history_db.setdefault(uid, [])
+    if hist: hist[-1].update(req)
     save_data()
     await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
     try:
-        await context.bot.send_message(
-            chat_id=uid,
-            text=(f"❌ Withdrawal Rejected\n\nAmount: Rs{req['amount']}\n"
-                  f"UPI: {req['upi']}\n\n"
-                  "Your withdrawal request was rejected by Admin.\n"
-                  "⏰ You can submit another withdrawal tomorrow."),
-            reply_markup=main_menu()
-        )
-    except Exception:
-        pass
-
+        await context.bot.send_message(chat_id=uid, text=(f"❌ Withdrawal Rejected\n\nAmount: Rs{req['amount']}\nUPI: {req['upi']}\n\nYour withdrawal request was rejected by Admin.\n⏰ You can submit another withdrawal tomorrow."), reply_markup=main_menu())
+    except Exception: pass
 
 async def error_handler(update, context):
     print(f"Polling error: {context.error}")
@@ -2494,6 +2545,8 @@ async def test_withdraw_setup_cmd(update: Update, context: ContextTypes.DEFAULT_
 
 
 def track_missed_tasks_for_user(uid):
+    if not MISSED_ENABLED:
+        return missed_tasks_db.get(uid, [])
     # Check which tasks user missed today (time passed without completing)
     today = str(get_ist_today())
     now = get_ist_time()
@@ -2521,6 +2574,12 @@ def track_missed_tasks_for_user(uid):
 async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
+    if not MISSED_ENABLED:
+        await q.message.reply_text(
+            "⏰ Missed Tasks are currently OFF by Admin.",
+            reply_markup=main_menu()
+        )
+        return
     missed = track_missed_tasks_for_user(uid)
     # Also check newly missed
     if not missed:
@@ -2822,34 +2881,35 @@ async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 
-# === PERSISTENT STORAGE - RENDER POSTGRES + LOCAL JSON FALLBACK ===
+# === PERSISTENT STORAGE - FIX DATA LOSS ===
 import json, os
 DATA_FILE = "bot_data.json"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 _DB_WARNED = False
 
 def _db_connect():
+    """Connect to Render PostgreSQL when DATABASE_URL is configured.
+    Uses psycopg v3; JSON file remains as a local fallback.
+    """
+    global _DB_WARNED
     if not DATABASE_URL:
         return None
     try:
         import psycopg
         return psycopg.connect(DATABASE_URL, connect_timeout=10)
     except Exception as e:
-        global _DB_WARNED
         if not _DB_WARNED:
             print(f"Persistent PostgreSQL unavailable: {e}")
             _DB_WARNED = True
         return None
 
 def _db_init():
-    conn = _db_connect()
-    if not conn:
-        return
+    conn=_db_connect()
+    if not conn: return
     try:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS s2e_state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())")
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         print("Persistent PostgreSQL storage ready")
     except Exception as e:
         print(f"DB init error: {e}")
@@ -2857,13 +2917,12 @@ def _db_init():
         except: pass
 
 def _db_load_snapshot():
-    conn = _db_connect()
-    if not conn:
-        return None
+    conn=_db_connect()
+    if not conn: return None
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT payload FROM s2e_state WHERE id=1")
-            row = cur.fetchone()
+            row=cur.fetchone()
         conn.close()
         return json.loads(row[0]) if row else None
     except Exception as e:
@@ -2872,135 +2931,172 @@ def _db_load_snapshot():
         except: pass
         return None
 
+def _db_save_snapshot(payload):
+    conn=_db_connect()
+    if not conn: return False
+    try:
+        payload_text=json.dumps(payload, ensure_ascii=False)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO s2e_state(id,payload,updated_at) VALUES(1,%s,NOW()) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, updated_at=NOW()", (payload_text,))
+        conn.commit(); conn.close(); return True
+    except Exception as e:
+        print(f"DB save error: {e}")
+        try: conn.rollback(); conn.close()
+        except: pass
+        return False
+
 def _json_safe(value):
     if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
+        return {str(k): _json_safe(v) for k,v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     if isinstance(value, set):
         return [_json_safe(v) for v in sorted(value, key=lambda x: str(x))]
-    try:
-        from datetime import datetime, date, time
-        if isinstance(value, (datetime, date, time)):
-            return value.isoformat()
-    except Exception:
-        pass
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
     return value
 
-def _db_save_snapshot(payload):
-    conn = _db_connect()
-    if not conn:
-        return False
-    try:
-        payload_text = json.dumps(_json_safe(payload), ensure_ascii=False)
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO s2e_state(id,payload,updated_at) VALUES(1,%s,NOW()) "
-                "ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, updated_at=NOW()",
-                (payload_text,)
-            )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"DB save error: {e}")
-        try:
-            conn.rollback(); conn.close()
-        except: pass
-        return False
-
-def _restore_user_keys(data):
-    # JSON/PostgreSQL payload keys are strings; restore Telegram user IDs as ints.
+def _restore_special_state(data):
+    # Keys saved by JSON become strings; convert user-keyed maps back to int keys.
     int_key_maps = [
-        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
+        'users_db','tasks_db','bonus_balance','referrals_db','referral_earnings','referral_map',
         'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count',
         'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
         'promo_views_db','promo_pending','pending_plans'
     ]
     for name in int_key_maps:
-        obj = data.get(name)
+        obj=data.get(name)
         if isinstance(obj, dict):
-            fixed = {}
-            for k, v in obj.items():
-                try: nk = int(k)
-                except: nk = k
-                fixed[nk] = v
-            data[name] = fixed
+            fixed={}
+            for k,v in obj.items():
+                try: nk=int(k)
+                except: nk=k
+                fixed[nk]=v
+            data[name]=fixed
+
+    # Telegram IDs / sets.
+    for name in ('banned_users','screenshot_hashes','task_notifications_sent','awaiting_plan_image_admins','awaiting_plan_payment_adminless'):
+        if isinstance(data.get(name), list):
+            try: data[name]=set(data[name])
+            except: pass
+
+    # Scheduled task time fields must be datetime.time after JSON/DB restore.
+    tasks=data.get('scheduled_tasks_db')
+    if isinstance(tasks,list):
+        for t in tasks:
+            if not isinstance(t,dict): continue
+            for obj_key, text_key in (('open_time_obj','open_time'),('close_time_obj','close_time'),('next_time_obj','next_time')):
+                val=t.get(obj_key)
+                if isinstance(val,str):
+                    parsed=parse_time_str(val)
+                    if parsed: t[obj_key]=parsed
+                elif val is None and t.get(text_key):
+                    parsed=parse_time_str(str(t.get(text_key)))
+                    if parsed: t[obj_key]=parsed
+
+    # Promo member sets.
+    promos=data.get('promo_campaigns_db')
+    if isinstance(promos,list):
+        for c in promos:
+            if isinstance(c,dict) and isinstance(c.get('members_joined'),list):
+                c['members_joined']=set(c['members_joined'])
+
     return data
 
-def _apply_loaded_data(data):
-    global PAYMENT_UPI, support_plan_banner_file_id
-    data = _restore_user_keys(data or {})
-    map_names = [
-        'users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map',
-        'scheduled_tasks_db','support_plans_db','user_plans','withdraw_requests','withdraw_done_date',
-        'last_withdraw_date_db','daily_task_count','user_task_status'
-    ]
-    for name in map_names:
-        obj = data.get(name)
-        if obj is None or name not in globals():
-            continue
-        target = globals()[name]
-        if isinstance(target, dict) and isinstance(obj, dict):
-            target.clear(); target.update(obj)
-        elif isinstance(target, list) and isinstance(obj, list):
-            target.clear(); target.extend(obj)
-    if data.get('payment_upi'):
-        PAYMENT_UPI = str(data['payment_upi'])
-    if 'support_plan_banner_file_id' in data:
-        support_plan_banner_file_id = data.get('support_plan_banner_file_id')
-
 def save_data():
+    """Persist all user/task/admin state. PostgreSQL is primary when configured; JSON is a backup/fallback.
+    Existing records are updated in-place; nothing is intentionally deleted during saves.
+    """
     try:
         data = {
-            'users_db': users_db,
-            'tasks_db': tasks_db,
-            'bonus_balance': bonus_balance,
-            'referral_earnings': referral_earnings,
-            'referrals_db': referrals_db,
-            'referral_map': referral_map,
-            'scheduled_tasks_db': scheduled_tasks_db,
-            'support_plans_db': support_plans_db,
-            'support_plan_banner_file_id': support_plan_banner_file_id,
-            'user_plans': user_plans,
-            'withdraw_requests': withdraw_requests,
-            'withdraw_done_date': withdraw_done_date,
-            'last_withdraw_date_db': last_withdraw_date_db,
-            'daily_task_count': daily_task_count,
-            'user_task_status': user_task_status,
-            'payment_upi': get_payment_upi(),
+            'users_db': users_db, 'tasks_db': tasks_db, 'bonus_balance': bonus_balance,
+            'referral_earnings': referral_earnings, 'referrals_db': referrals_db, 'referral_map': referral_map,
+            'pending_referrals': pending_referrals, 'withdraw_requests': withdraw_requests,
+            'withdraw_done_date': withdraw_done_date, 'last_withdraw_date_db': last_withdraw_date_db,
+            'daily_task_count': daily_task_count, 'user_task_status': user_task_status,
+            'scheduled_tasks_db': scheduled_tasks_db, 'scheduled_task_counter': scheduled_task_counter,
+            'support_plans_db': support_plans_db, 'user_plans': user_plans, 'pending_plans': pending_plans,
+            'missed_tasks_db': missed_tasks_db, 'skip_db': skip_db, 'warnings_db': warnings_db,
+            'banned_users': banned_users, 'task_images_db': task_images_db, 'screenshot_hashes': screenshot_hashes,
+            'promo_campaigns_db': promo_campaigns_db, 'promo_campaign_counter': promo_campaign_counter,
+            'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'promo_pending': promo_pending,
+            'pending_daily': pending_daily, 'holidays_db': holidays_db, 'withdraw_history_db': withdraw_history_db, 'ADMIN_ID_LIST': ADMIN_ID_LIST, 'ADMIN_NAMES_DB': admin_names_db, 'MISSED_ENABLED': MISSED_ENABLED,
+            'PAYMENT_UPI': get_payment_upi(),
         }
-        safe = _json_safe(data)
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(safe, f, ensure_ascii=False)
+        safe=_json_safe(data)
+        # Always keep a local backup too.
+        with open(DATA_FILE,'w',encoding='utf-8') as f:
+            json.dump(safe,f,ensure_ascii=False)
         if DATABASE_URL:
             _db_save_snapshot(safe)
-        print(f"Data saved OK - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(user_plans)}")
+        print(f"Data saved OK - Users:{len(users_db)} Pending:{len(pending_daily)} Admins:{len(ADMIN_ID_LIST)}")
     except Exception as e:
         print(f"Save error {e}")
 
+def _apply_loaded_data(data):
+    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db
+    data=_restore_special_state(data or {})
+    map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referrals_db','referral_map','pending_referrals',
+               'withdraw_requests','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
+               'support_plans_db','user_plans','pending_plans','missed_tasks_db','skip_db','warnings_db','promo_earnings_db',
+               'promo_views_db','promo_pending','pending_daily','task_images_db','promo_campaigns_db','holidays_db','withdraw_history_db']
+    for name in map_names:
+        obj=data.get(name)
+        if obj is not None and name in globals():
+            target=globals()[name]
+            if isinstance(target,dict) and isinstance(obj,dict): target.clear(); target.update(obj)
+            elif isinstance(target,list) and isinstance(obj,list): target.clear(); target.extend(obj)
+    if isinstance(data.get('banned_users'), (list,set)):
+        banned_users.clear(); banned_users.update(data['banned_users'])
+    if isinstance(data.get('screenshot_hashes'), (list,set)):
+        screenshot_hashes.clear(); screenshot_hashes.update(data['screenshot_hashes'])
+    if isinstance(data.get('task_notifications_sent'), (list,set)):
+        task_notifications_sent.clear(); task_notifications_sent.update(data['task_notifications_sent'])
+    if isinstance(data.get('ADMIN_NAMES_DB'), dict):
+        admin_names_db.clear()
+        for k, v in data['ADMIN_NAMES_DB'].items():
+            try:
+                admin_names_db[int(k)] = str(v)
+            except Exception:
+                pass
+    if isinstance(data.get('ADMIN_ID_LIST'),list):
+        ADMIN_ID_LIST.clear()
+        for x in data['ADMIN_ID_LIST']:
+            try:
+                x=int(x)
+                if x not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(x)
+            except: pass
+    if isinstance(data.get('awaiting_plan_image_admins'),list):
+        awaiting_plan_image_admins.clear(); awaiting_plan_image_admins.update(data['awaiting_plan_image_admins'])
+    if isinstance(data.get('awaiting_plan_payment_adminless'),list):
+        awaiting_plan_payment_adminless.clear(); awaiting_plan_payment_adminless.update(data['awaiting_plan_payment_adminless'])
+    if data.get('PAYMENT_UPI'): PAYMENT_UPI=str(data['PAYMENT_UPI'])
+    try: scheduled_task_counter=max(int(data.get('scheduled_task_counter',1)), max([int(t.get('id',0)) for t in scheduled_tasks_db if isinstance(t,dict)],default=0)+1)
+    except: pass
+    try: promo_campaign_counter=max(int(data.get('promo_campaign_counter',1)), max([int(c.get('id',0)) for c in promo_campaigns_db if isinstance(c,dict)],default=0)+1)
+    except: pass
+    if 'MISSED_ENABLED' in data: MISSED_ENABLED=bool(data['MISSED_ENABLED'])
+
 def load_data():
+    """Load PostgreSQL snapshot first. If empty, load the old bot_data.json and immediately migrate it to DB."""
     try:
-        _db_init()
-        data = _db_load_snapshot() if DATABASE_URL else None
-        source = 'PostgreSQL' if data else None
+        db_data=_db_load_snapshot() if DATABASE_URL else None
+        source='PostgreSQL' if db_data else None
+        data=db_data
         if data is None and os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            source = 'bot_data.json'
+            with open(DATA_FILE,'r',encoding='utf-8') as f: data=json.load(f)
+            source='bot_data.json'
         if data:
             _apply_loaded_data(data)
             normalize_support_plans()
             print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
-            # If an old local JSON was found and PostgreSQL is configured, migrate it once.
-            if source == 'bot_data.json' and DATABASE_URL:
-                save_data()
+            if source=='bot_data.json' and DATABASE_URL:
+                save_data()  # migrate legacy local data to PostgreSQL
         else:
             print('No saved data found - starting with empty state')
     except Exception as e:
         print(f"Load error {e}")
         import traceback; traceback.print_exc()
-
 
 # User Plans - which user bought which plan
 if 'user_plans' not in globals():
@@ -3008,22 +3104,15 @@ if 'user_plans' not in globals():
 
 def get_reward_for_user(uid, base_reward=5):
     try:
-        pid = user_plans.get(str(uid)) or user_plans.get(int(uid))
-        if not pid:
-            return base_reward
-        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+        plan = _get_user_plan_record(uid)
         if not plan:
             return base_reward
-        price = plan['price']
-        if price == 199:
-            return 10
-        elif price == 499:
-            return 15
-        elif price >= 999:
-            return 20
-        else:
-            return base_reward + (price // 100)
-    except:
+        price = int(plan.get('price',0) or 0)
+        if price == 199: return 10
+        if price == 499: return 15
+        if price >= 999: return 20
+        return base_reward + (price // 100)
+    except Exception:
         return base_reward
 
 async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3057,10 +3146,11 @@ async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No user plans yet!")
         return
     msg = f"USER PLANS - {len(user_plans)} Users:\n\n"
-    for uid, pid in list(user_plans.items())[:30]:
-        plan = next((p for p in support_plans_db if p['id'] == pid), None)
+    for uid, raw in list(user_plans.items())[:30]:
+        plan = _get_user_plan_record(uid)
         name = users_db.get(int(uid), {}).get('name', 'Unknown') if str(uid).isdigit() else 'Unknown'
-        msg += f"{uid} {name} -> Plan {pid} {plan['name'] if plan else ''} = Rs{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
+        plan_name = plan.get('name',plan.get('plan_name',plan.get('plan',''))) if plan else 'No Plan'
+        msg += f"{uid} {name} -> {plan_name} = Rs{get_reward_for_user(int(uid) if str(uid).isdigit() else uid)}/task\n"
     await update.message.reply_text(msg)
 
 async def new_members_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3085,10 +3175,13 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(context.args[0])
         user = users_db.get(uid, {})
-        plan_id = user_plans.get(str(uid))
-        plan = next((p for p in support_plans_db if p['id'] == plan_id), None) if plan_id else None
+        plan = _get_user_plan_record(uid)
         reward = get_reward_for_user(uid)
-        msg = f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\nEarnings: {bonus_balance.get(uid,0)}\nPlan: {plan['name'] if plan else 'No Plan'} Rs{plan['price'] if plan else 0}\nReward: Rs{reward}/task"
+        total = get_balance(uid)
+        count, limit, cap = check_daily_limits(uid)
+        msg = (f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\n"
+               f"Earnings: Rs{total}\nPlan: {plan.get('name',plan.get('plan_name',plan.get('plan','No Plan'))) if plan else 'No Plan'} "
+               f"Rs{plan.get('price',0) if plan else 0}\nReward: Rs{reward}/task\nToday: {count}/{limit} tasks\nDaily cap: Rs{cap}")
         await update.message.reply_text(msg)
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
@@ -3097,25 +3190,49 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
+    q=update.callback_query
+    try: await q.answer("Processing bulk approval…")
+    except: pass
+    if not is_admin(q.from_user.id):
         return
-    try:
-        data = update.callback_query.data
-        if data.startswith("bulk_approve_"):
-            task_num = data.replace("bulk_approve_", "")
-            if task_num == "all":
-                await approve_all_pending_cmd(update, context)
-            else:
-                # Simulate command
-                context.args = [task_num]
-                await approve_task_all_cmd(update, context)
-            try:
-                await update.callback_query.answer(f"Approved Task {task_num}")
-            except:
-                pass
-    except Exception as e:
-        print(f"Bulk callback error {e}")
-
+    data=str(q.data)
+    target=data.replace("bulk_approve_", "", 1)
+    if target=="all":
+        uids=list(pending_daily.keys())
+    else:
+        uids=[]
+        for uid,p in list(pending_daily.items()):
+            t=p.get('task',{}) if isinstance(p,dict) else {}
+            if str(t.get('task_number',''))==target or str(t.get('id',''))==target:
+                uids.append(uid)
+    approved=0
+    for uid in uids:
+        if uid not in pending_daily: continue
+        try:
+            pdata=pending_daily[uid]; task=pdata.get('task',{})
+            base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
+            reward=get_reward_for_user(uid,base_reward)
+            _, _, daily_cap = check_daily_limits(uid)
+            today=str(get_ist_today())
+            if daily_cap > 0 and get_daily_task_earned(uid, today) + int(reward) > daily_cap:
+                continue
+            tasks_db[uid]=tasks_db.get(uid,0)+1
+            today=str(get_ist_today())
+            daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
+            for tid,st in list(user_task_status.get(uid,{}).items()):
+                if isinstance(st,dict) and st.get('status')=='pending_verification':
+                    user_task_status[uid][tid]={'status':'completed','completed_at':get_ist_now()}; break
+            if reward!=base_reward:
+                bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-base_reward)
+            pending_daily.pop(uid,None); approved+=1
+            try: await context.bot.send_message(chat_id=uid,text=f"✅ Task Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
+            except: pass
+        except Exception as e:
+            print(f"bulk approval error {uid}: {e}")
+    save_data()
+    label="ALL PENDING" if target=="all" else f"TASK {target}"
+    try: await q.message.reply_text(f"✅ BULK APPROVAL DONE\n\n{label}\nApproved: {approved}\nRemaining pending: {len(pending_daily)}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin",callback_data="back_admin")]]))
+    except: pass
 
 # === CHANNEL METHOD + BULK APPROVE V28 ===
 # Admin channels - set via command or env
@@ -3413,19 +3530,70 @@ async def backup_cmd(update, context):
 async def add_admin_cmd(update, context):
     uid = update.effective_user.id
     if uid not in ADMIN_ID_LIST:
+        await update.message.reply_text("Admin only.")
         return
     if not context.args:
         await update.message.reply_text("Usage: /add_admin USER_ID")
         return
     try:
         new_id = int(context.args[0])
-        if new_id not in ADMIN_ID_LIST:
-            ADMIN_ID_LIST.append(new_id)
-            await update.message.reply_text(f"✅ Admin added: {new_id}. Total admins: {ADMIN_ID_LIST}. If one blocked, other can control!")
-        else:
-            await update.message.reply_text("Already admin")
+        if new_id <= 0:
+            raise ValueError("invalid user id")
+        if new_id in ADMIN_ID_LIST:
+            name = await get_admin_display_name(new_id, context.bot)
+            await update.message.reply_text(f"ℹ️ Already admin:\n👤 {name}\n🆔 {new_id}")
+            return
+        name = " ".join(context.args[1:]).strip() if len(context.args) > 1 else ""
+        if not name:
+            name = await get_admin_display_name(new_id, context.bot)
+        ADMIN_ID_LIST.append(new_id)
+        admin_names_db[new_id] = name
+        save_data()
+        await update.message.reply_text(
+            f"✅ ADMIN ADDED\n\n👤 Name: {name}\n🆔 User ID: {new_id}\n\n"
+            "Use /list_admins to view all admins."
+        )
     except Exception as e:
-        await update.message.reply_text(f"Error {e}")
+        await update.message.reply_text(f"Error: {e}")
+
+async def remove_admin_cmd(update, context):
+    uid = update.effective_user.id
+    if uid not in ADMIN_ID_LIST:
+        await update.message.reply_text("Admin only.")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /remove_admin USER_ID")
+        return
+    try:
+        target = int(context.args[0])
+        if target not in ADMIN_ID_LIST:
+            await update.message.reply_text(f"❌ Not in admin list: {target}")
+            return
+        if len(ADMIN_ID_LIST) <= 1:
+            await update.message.reply_text("❌ Cannot remove the last admin.")
+            return
+        old_name = await get_admin_display_name(target, context.bot)
+        ADMIN_ID_LIST.remove(target)
+        admin_names_db.pop(target, None)
+        admin_names_db.pop(str(target), None)
+        save_data()
+        await update.message.reply_text(
+            f"✅ ADMIN REMOVED\n\n👤 Name: {old_name}\n🆔 User ID: {target}\n\n"
+            "Use /list_admins to view remaining admins."
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def list_admins_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    lines = ["👑 ADMIN LIST", f"Total: {len(ADMIN_ID_LIST)}", ""]
+    for i, aid in enumerate(ADMIN_ID_LIST, 1):
+        name = await get_admin_display_name(aid, context.bot)
+        marker = " (you)" if int(aid) == int(update.effective_user.id) else ""
+        lines.append(f"{i}. 👤 {name}{marker}\n   🆔 {aid}")
+    lines.append("\n/add_admin USER_ID -> add\n/remove_admin USER_ID -> remove")
+    await update.message.reply_text("\n".join(lines))
 
 async def referral_stats_cmd(update, context):
     uid = update.effective_user.id
@@ -3479,23 +3647,86 @@ async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
+async def get_admin_display_name(admin_id, bot=None):
+    """Return a readable admin name, falling back to the Telegram ID."""
+    try:
+        aid = int(admin_id)
+    except Exception:
+        aid = admin_id
+    stored = admin_names_db.get(aid) or admin_names_db.get(str(aid))
+    if stored:
+        return str(stored)
+    user = users_db.get(aid) or users_db.get(str(aid))
+    if isinstance(user, dict) and user.get("name"):
+        return str(user["name"])
+    if bot:
+        try:
+            chat = await bot.get_chat(aid)
+            full_name = " ".join(
+                x for x in [getattr(chat, "first_name", None), getattr(chat, "last_name", None)] if x
+            ).strip()
+            if full_name:
+                admin_names_db[aid] = full_name
+                return full_name
+            if getattr(chat, "username", None):
+                admin_names_db[aid] = f"@{chat.username}"
+                return f"@{chat.username}"
+        except Exception as e:
+            print(f"Admin name lookup failed for {aid}: {e}")
+    return f"User {aid}"
+
 async def admin_add_admin_cb(update, context):
     try:
         await update.callback_query.answer()
-        await update.effective_message.reply_text("Use /add_admin USER_ID")
-    except: pass
+        if not is_admin(update.effective_user.id):
+            return
+        lines = [f"👑 ADMIN MANAGEMENT", f"Total admins: {len(ADMIN_ID_LIST)}", ""]
+        for idx, aid in enumerate(ADMIN_ID_LIST, 1):
+            name = await get_admin_display_name(aid, context.bot)
+            marker = " (you)" if int(aid) == int(update.effective_user.id) else ""
+            lines.append(f"{idx}. 👤 {name}{marker}\n   🆔 {aid}")
+        lines += ["", "/add_admin USER_ID - add", "/remove_admin USER_ID - remove", "/list_admins - full list"]
+        await update.effective_message.reply_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh Admin List", callback_data="admin_add_admin")],
+                [InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]
+            ])
+        )
+    except Exception as e:
+        print(f"admin list error: {e}")
+
 async def admin_referral_cb(update, context):
     try:
         await update.callback_query.answer()
-        await update.effective_message.reply_text("Referral L1 10%+2% L2 0.2%")
-    except: pass
+        await update.effective_message.reply_text(
+            "🔗 REFERRAL SETTINGS\n\n"
+            "L1: 10% plan commission + task referral bonus\n"
+            "L2: Current configured referral system"
+        )
+    except:
+        pass
+
 async def admin_missed_toggle_cb(update, context):
+    global MISSED_ENABLED
     try:
         await update.callback_query.answer()
-        global MISSED_ENABLED
-        MISSED_ENABLED=not MISSED_ENABLED
-        await update.effective_message.reply_text(f"Missed {'ON' if MISSED_ENABLED else 'OFF'}")
-    except: pass
+        MISSED_ENABLED = not MISSED_ENABLED
+        save_data()
+        status = "ON" if MISSED_ENABLED else "OFF"
+        try:
+            await update.effective_message.edit_reply_markup(reply_markup=admin_panel_keyboard())
+        except Exception:
+            pass
+        await update.effective_message.reply_text(
+            f"⏰ Missed Tasks: {status}\n\n" +
+            ("Missed task tracking/notifications are now ENABLED."
+             if MISSED_ENABLED else
+             "Missed task tracking is now DISABLED."),
+            reply_markup=admin_panel_keyboard()
+        )
+    except Exception as e:
+        print(f"missed toggle error: {e}")
 
 
 async def channels_status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3728,8 +3959,106 @@ async def set_plan_image_cmd(update, context):
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
+async def userlist_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    date_filter = context.args[0] if context.args else None
+    items = list(users_db.items())
+    if date_filter:
+        items = [(uid,d) for uid,d in items if str(d.get('joined',d.get('reg_date','')))[:10] == date_filter]
+    if not items:
+        await update.message.reply_text(f"👥 USER LIST\n\nNo users found{(' for '+date_filter) if date_filter else ''}.")
+        return
+    msg = f"👥 USER LIST{(' — '+date_filter) if date_filter else ''}\nTotal: {len(items)}\n\n"
+    for uid, d in items[-50:]:
+        plan = _get_user_plan_record(uid) or {}
+        pname = plan.get('name', plan.get('plan_name', plan.get('plan','No Plan')))
+        msg += f"🆔 {uid}\n👤 {d.get('name','Unknown')}\n💎 {pname}\n📅 Joined: {str(d.get('joined',d.get('reg_date','N/A')))[:10]}\n💰 Balance: ₹{get_balance(uid)}\n\n"
+    await update.message.reply_text(msg[:4000])
+
+async def user_history_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("Usage: /user_history USER_ID [YYYY-MM-DD]\nExample: /user_history 8709635130 2026-08-23")
+        return
+    try:
+        uid=int(context.args[0]); date_filter=context.args[1] if len(context.args)>1 else None
+    except:
+        await update.message.reply_text("❌ Invalid User ID")
+        return
+    user=users_db.get(uid,{})
+    statuses=user_task_status.get(uid,{})
+    msg=f"📊 USER HISTORY\n\n🆔 User ID: {uid}\n👤 Name: {user.get('name','Unknown')}\n"
+    msg += f"📅 Filter: {date_filter or 'All dates'}\n\n"
+    shown=0
+    for tid, st in statuses.items():
+        if not isinstance(st,dict): continue
+        dt=str(st.get('completed_at',st.get('submitted_at',st.get('skipped_at',st.get('missed_at','')))))
+        if date_filter and dt[:10] != date_filter: continue
+        task_num=st.get('task_number', tid)
+        msg += f"Task {task_num} | {st.get('status','unknown')} | {dt}\n"
+        shown += 1
+    if not shown: msg += "No task records for this filter.\n"
+    msg += f"\n💰 Current balance: ₹{get_balance(uid)}\n💸 Withdraw records: {len(withdraw_history_db.get(uid,[]))}"
+    await update.message.reply_text(msg[:4000])
+
+async def holiday_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("Usage: /holiday YYYY-MM-DD [reason]\nExample: /holiday 2026-08-23 Sunday Holiday")
+        return
+    day=context.args[0]
+    try: date.fromisoformat(day)
+    except: await update.message.reply_text("❌ Date must be YYYY-MM-DD"); return
+    reason=' '.join(context.args[1:]).strip() or 'Holiday / No Tasks'
+    holidays_db[day]=reason
+    save_data()
+    await update.message.reply_text(f"🏖️ Holiday set: {day}\nReason: {reason}\nNo Daily Tasks will be shown on this date.")
+
+async def remove_holiday_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("Usage: /remove_holiday YYYY-MM-DD"); return
+    day=context.args[0]
+    if day in holidays_db:
+        holidays_db.pop(day,None); save_data(); await update.message.reply_text(f"✅ Holiday removed: {day}")
+    else: await update.message.reply_text("No holiday found for that date.")
+
+async def bulk_tasks_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2:
+        await update.message.reply_text("Usage: /bulk_tasks YYYY-MM-DD COUNT [REWARD] [START_HOUR] [INTERVAL_MIN]\nExample: /bulk_tasks 2026-08-23 10 5 9 30")
+        return
+    try:
+        day=context.args[0]; count=int(context.args[1]); reward=int(context.args[2]) if len(context.args)>2 else 5
+        start_hour=int(context.args[3]) if len(context.args)>3 else 9; interval=int(context.args[4]) if len(context.args)>4 else 30
+        date.fromisoformat(day)
+        if day in holidays_db: holidays_db.pop(day,None)
+        global scheduled_task_counter
+        created=[]
+        for i in range(count):
+            start_min=start_hour*60+i*interval; end_min=start_min+max(5,min(interval,29))
+            oh,om=divmod(start_min,60); eh,em=divmod(end_min,60)
+            if oh>23 or eh>23: break
+            ot=time(oh,om); ct=time(eh,em)
+            task={'id':scheduled_task_counter,'date':day,'open_time':f'{oh:02d}:{om:02d}','close_time':f'{eh:02d}:{em:02d}','open_time_obj':ot,'close_time_obj':ct,'title':f'Task {i+1} - {day}','link':get_join_channel_link(),'reward':reward,'task_number':i+1,'next_time':f'{(eh):02d}:{em:02d}','window_minutes':max(5,int((end_min-start_min)))}
+            scheduled_tasks_db.append(task); created.append(task); scheduled_task_counter+=1
+        save_data()
+        ids=', '.join(str(x['id']) for x in created)
+        await update.message.reply_text(f"✅ Bulk tasks created: {len(created)}\n📅 {day}\n🆔 Task IDs: {ids}\n\nSet images with /set_task_image TASK_ID and send the photo.")
+    except Exception as e: await update.message.reply_text(f"❌ Error: {e}")
+
+async def bulk_images_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        await update.message.reply_text("Usage: /bulk_images TASK_ID1 TASK_ID2 TASK_ID3 ...\nThen send the photos in the same order."); return
+    try:
+        ids=[int(x) for x in context.args]
+        context.user_data['bulk_image_task_ids']=ids
+        await update.message.reply_text(f"🖼️ Bulk image mode ON for {len(ids)} tasks. Send {len(ids)} photos in this exact order.")
+    except: await update.message.reply_text("❌ Task IDs must be numbers.")
+
 async def bulk_tasks_help_cmd(update, context):
-    await update.message.reply_text("BULK: /add_week 2026-08-22 15 5, /add_date 2026-08-22 15 5, /add_plan Basic 299 30 15")
+    await update.message.reply_text("📦 BULK TASKS\n\n/bulk_tasks YYYY-MM-DD COUNT [REWARD] [START_HOUR] [INTERVAL_MIN]\nExample: /bulk_tasks 2026-08-23 10 5 9 30\n\n🖼️ Then /bulk_images TASK_ID1 TASK_ID2 ... and send photos in order.\n🏖️ Sunday/holiday: /holiday YYYY-MM-DD Sunday Holiday\n👥 Users: /userlist [YYYY-MM-DD]\n📊 User history: /user_history USER_ID [YYYY-MM-DD]\n🧾 User withdrawal history is available from Withdraw History.")
 
 async def handle_plan_image_upload(update, context):
     try:
@@ -3792,6 +4121,7 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
+    global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
     print("============================================================")
     print("S2E Bot FINAL V56 - No ConversationHandler - Important Channel Fix V56 FINAL - All Filters Fix V56 FINAL - No Reply Fix! - Upload Screenshot + Task Image Final Fix V56 FINAL - Screenshot + Task Image Final Fix V56 FINAL - Final Output! - Screenshot + Task Image Fix V56 FINAL - Final Output! - Task Image + Join ALWAYS True Fix V56 FINAL - Final Output! - Check Joined ALWAYS True + Task Image Fix V56 FINAL - Check Joined Bypass + Withdraw Buttons Fix V56 FINAL - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V56 FINAL - NameError Fixed!")
@@ -3833,11 +4163,10 @@ def main():
         print(f"V56 Quick webhook outer err {e}")
 
     print("V56 Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
-    # Load persistent data once at startup. Do NOT call save_data() immediately
-    # after loading: if PostgreSQL is temporarily unavailable, that could overwrite
-    # a valid database snapshot with empty in-memory data.
+    _db_init()
     load_data()
     normalize_support_plans()
+    save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
         print('Keep-alive started V56 FINAL')
@@ -3872,12 +4201,18 @@ def main():
                 entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
                 states={
                     NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-                    GENDER:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)],
+                    GENDER:[
+                        CallbackQueryHandler(reg_gender_cb, pattern=r"^reg_gender_(male|female|other)$"),
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_gender)
+                    ],
                     DOB:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
                     MOBILE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_mobile)],
                     UPI:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_upi)],
                     PINCODE:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_pincode)],
-                    PROFESSION:[MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)],
+                    PROFESSION:[
+                        CallbackQueryHandler(reg_profession_cb, pattern=r"^reg_prof_(student|employee|business|self_employed|other)$"),
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_profession)
+                    ],
                 },
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
@@ -3930,7 +4265,14 @@ def main():
                             ]])
                             await context.bot.send_photo(
                                 chat_id=admin_id, photo=file_id,
-                                caption=f"💎 PLAN PAYMENT PROOF\\nUser: {uid}\\nPlan: {plan_type}\\nAmount: ₹{price}\\nUPI: {get_payment_upi()}",
+                                caption=(
+                                    f"💎 PLAN PAYMENT PROOF\n"
+                                    f"👤 Name: {users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')}\n"
+                                    f"🆔 User ID: {uid}\n"
+                                    f"📦 Plan: {plan_type}\n"
+                                    f"💰 Amount: ₹{price}\n"
+                                    f"💳 UPI: {get_payment_upi()}"
+                                ),
                                 reply_markup=kb
                             )
                         except Exception as e:
@@ -3965,6 +4307,22 @@ def main():
             async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     uid = update.effective_user.id
+                    bulk_ids = context.user_data.get('bulk_image_task_ids') if is_admin(uid) else None
+                    if bulk_ids and (update.message.photo or update.message.document):
+                        task_id = int(bulk_ids.pop(0))
+                        file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+                        task_images_db[task_id] = file_id
+                        task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == task_id), None)
+                        if task:
+                            task['image_file_id'] = file_id; task['has_image'] = True
+                        save_data()
+                        if bulk_ids:
+                            context.user_data['bulk_image_task_ids'] = bulk_ids
+                            await update.message.reply_text(f"✅ Image set for Task {task_id}. Send next photo for Task {bulk_ids[0]}.")
+                        else:
+                            context.user_data.pop('bulk_image_task_ids', None)
+                            await update.message.reply_text(f"✅ Bulk images completed. Image set for Task {task_id}.", reply_markup=main_menu())
+                        return
                     if not is_admin(uid):
                         return
                     if not update.message.photo and not update.message.document:
@@ -4069,8 +4427,25 @@ def main():
                     await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
                         chan = get_screenshot_channel()
-                        kb_chan = InlineKeyboardMarkup([[InlineKeyboardButton("Approve", callback_data=f"admin_approve_daily_{uid}"), InlineKeyboardButton("Reject", callback_data=f"admin_reject_daily_{uid}")]])
-                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)} {task_to_use.get('title','Daily')} Reward {task_to_use.get('reward',5)} V56 FINAL - Important channel ki vachedi!", reply_markup=kb_chan)
+                        user_name = users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')
+                        kb_chan = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("✅ Approve", callback_data=f"admin_approve_daily_{uid}"),
+                             InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_daily_{uid}")],
+                            [InlineKeyboardButton("🚀 Approve ALL Pending", callback_data="bulk_approve_all")]
+                        ])
+                        await context.bot.send_photo(
+                            chat_id=chan,
+                            photo=file_id,
+                            caption=(
+                                f"📸 TASK SCREENSHOT\n"
+                                f"👤 Name: {user_name}\n"
+                                f"🆔 User ID: {uid}\n"
+                                f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
+                                f"💰 Reward: ₹{task_to_use.get('reward',5)}\n"
+                                f"📅 {get_ist_today()}"
+                            ),
+                            reply_markup=kb_chan
+                        )
                         print(f"V58 v56_screenshot_simple_handler: Forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY!")
                         context.user_data.pop('awaiting_daily_screenshot', None)
                         context.user_data.pop('daily_screenshot_task_id', None)
@@ -4130,9 +4505,6 @@ def main():
             print("V56 Catch-all photo fallback disabled - dedicated upload handlers active!")
 
             app.add_handler(CommandHandler("menu", menu))
-            app.add_handler(CommandHandler("userlist", userlist_cmd))
-            app.add_handler(CommandHandler("dbstatus", dbstatus_cmd))
-            app.add_handler(CommandHandler("users", userlist_cmd))
             app.add_handler(CommandHandler("admin", admin_panel))
             app.add_handler(CommandHandler("pending", pending_cmd))
             app.add_handler(CommandHandler("approve", approve_cmd))
@@ -4153,13 +4525,13 @@ def main():
             app.add_handler(
                 CallbackQueryHandler(
                     daily_upload_screenshot_cb,
-                    pattern=r"^daily_upload_screenshot$"
+                    pattern=r"^daily_upload_v2$"
                 ),
-                group=-10
+                group=-100
             )
             app.add_handler(CallbackQueryHandler(my_ref_cb, pattern="^my_ref$"))
-            app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+            app.add_handler(CallbackQueryHandler(withdraw_history_cb, pattern="^withdraw_history$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
@@ -4174,6 +4546,8 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
             app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
             app.add_handler(CallbackQueryHandler(missed_tasks_cb, pattern="^missed_tasks$"))
+            app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
+            app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
             app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
@@ -4212,13 +4586,22 @@ def main():
             app.add_handler(CommandHandler("list_pending", list_pending_cmd))
             app.add_handler(CommandHandler("add_week", add_week_cmd))
             app.add_handler(CommandHandler("add_date", add_date_cmd))
-            app.add_handler(CommandHandler("bulk_tasks", bulk_tasks_help_cmd))
+            app.add_handler(CommandHandler("bulk_tasks", bulk_tasks_cmd))
+            app.add_handler(CommandHandler("bulk_help", bulk_tasks_help_cmd))
+            app.add_handler(CommandHandler("bulk_images", bulk_images_cmd))
+            app.add_handler(CommandHandler("holiday", holiday_cmd))
+            app.add_handler(CommandHandler("remove_holiday", remove_holiday_cmd))
+            app.add_handler(CommandHandler("userlist", userlist_cmd))
+            app.add_handler(CommandHandler("user_list", userlist_cmd))
+            app.add_handler(CommandHandler("user_history", user_history_cmd))
             app.add_handler(CommandHandler("add_plan", add_support_plan_cmd))
             app.add_handler(CommandHandler("list_plans", list_plans_cmd))
             app.add_handler(CommandHandler("remove_plan", remove_plan_cmd))
             app.add_handler(CommandHandler("set_plan_image", set_plan_image_cmd))
             app.add_handler(CommandHandler("bacup", backup_cmd))
             app.add_handler(CommandHandler("add_admin", add_admin_cmd))
+            app.add_handler(CommandHandler("remove_admin", remove_admin_cmd))
+            app.add_handler(CommandHandler("list_admins", list_admins_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
             app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
@@ -4233,6 +4616,13 @@ def main():
             # and let python-telegram-bot keep it open while run_polling is active.
             polling_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(polling_loop)
+            # Connect the notifier to the SAME asyncio loop used by Telegram polling.
+            bot_application = app
+            bot_event_loop = polling_loop
+            if not notification_thread_started:
+                threading.Thread(target=notification_thread_func, daemon=True).start()
+                notification_thread_started = True
+                print("1-minute task notification thread started.")
             try:
                 app.run_polling(
                     drop_pending_updates=True,
