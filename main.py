@@ -674,20 +674,62 @@ def get_total_withdraw_cap(uid):
     except Exception:
         return 0
 
+def _user_keyed_value(mapping, uid, default=None):
+    """Read user-keyed persistence safely even if an old snapshot used string IDs."""
+    try:
+        iuid = int(uid)
+    except Exception:
+        iuid = uid
+    if isinstance(mapping, dict):
+        if iuid in mapping:
+            return mapping.get(iuid)
+        if str(iuid) in mapping:
+            return mapping.get(str(iuid))
+    return default
+
+def _withdraw_rows_for_user(uid):
+    rows = _user_keyed_value(withdraw_history_db, uid, []) or []
+    if not isinstance(rows, list):
+        rows = []
+    return rows
+
 def get_withdrawn_total(uid, include_processing=False):
-    rows = withdraw_history_db.get(uid, []) or []
+    """Return approved withdrawals, with optional processing requests.
+
+    Older bot versions sometimes stored the latest withdrawal only in
+    withdraw_requests and not in withdraw_history_db.  Include that record as
+    a safe fallback so a restart/redeploy cannot make a real withdrawal appear
+    as Rs0.
+    """
+    rows = _withdraw_rows_for_user(uid)
     total = 0
+    seen = set()
     for r in rows:
+        if not isinstance(r, dict):
+            continue
         status = str(r.get('status','')).lower()
         if status == 'approved' or (include_processing and status == 'processing'):
-            try: total += int(r.get('amount',0) or 0)
-            except Exception: pass
-    # If history is empty after an older migration, use the current request too.
-    if include_processing:
-        req = withdraw_requests.get(uid) or {}
-        if str(req.get('status','')).lower() == 'processing' and not any(r.get('date') == req.get('date') and r.get('amount') == req.get('amount') for r in rows):
-            try: total += int(req.get('amount',0) or 0)
-            except Exception: pass
+            try:
+                amount = int(r.get('amount',0) or 0)
+            except Exception:
+                amount = 0
+            total += amount
+            seen.add((str(r.get('date','')), amount))
+
+    # Migration-safe fallback: if an older snapshot has the current request
+    # but no history row, count it instead of silently showing Rs0.
+    req = _user_keyed_value(withdraw_requests, uid, {}) or {}
+    if isinstance(req, dict):
+        status = str(req.get('status','')).lower()
+        allowed = status == 'approved' or (include_processing and status == 'processing')
+        if allowed:
+            try:
+                amount = int(req.get('amount',0) or 0)
+            except Exception:
+                amount = 0
+            key = (str(req.get('date','')), amount)
+            if amount > 0 and key not in seen:
+                total += amount
     return total
 
 def get_withdraw_remaining(uid):
@@ -2195,8 +2237,20 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count,limit,cap=check_daily_limits(uid)
     withdraw_cap=get_total_withdraw_cap(uid)
     total_withdrawn=get_withdrawn_total(uid)
-    pending_withdraw=get_withdrawn_total(uid, include_processing=True)-total_withdrawn
-    withdraw_remaining=max(0, withdraw_cap-get_withdrawn_total(uid, include_processing=True))
+    reserved_withdraw=get_withdrawn_total(uid, include_processing=True)
+    pending_withdraw=max(0, reserved_withdraw-total_withdrawn)
+    withdraw_remaining=max(0, withdraw_cap-reserved_withdraw)
+    # Show today's request separately so the user can immediately see whether
+    # today's withdrawal is approved or still pending.
+    today_withdraw_approved = 0
+    today_withdraw_pending = 0
+    for r in _withdraw_rows_for_user(uid):
+        if not isinstance(r, dict) or str(r.get('date','')) != str(get_ist_today()):
+            continue
+        try: amt = int(r.get('amount',0) or 0)
+        except Exception: amt = 0
+        if str(r.get('status','')).lower() == 'approved': today_withdraw_approved += amt
+        elif str(r.get('status','')).lower() == 'processing': today_withdraw_pending += amt
     msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
          f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
          f"UPI: {user.get('upi','N/A')}\nPincode: {user.get('pincode','N/A')}\nProfession: {user.get('profession','N/A')}\nJoined: {joined}\n\n"
@@ -2206,7 +2260,9 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
          f"🎯 Plan withdrawal cap: ₹{withdraw_cap}\n"
          f"📉 Withdrawal cap remaining: ₹{withdraw_remaining}\n"
          f"💸 Total withdrawn: ₹{total_withdrawn}\n"
-         f"⏳ Pending withdrawal: ₹{pending_withdraw}")
+         f"📅 Today's approved withdrawal: ₹{today_withdraw_approved}\n"
+         f"⏳ Pending withdrawal: ₹{pending_withdraw}\n"
+         f"🕐 Today's pending withdrawal: ₹{today_withdraw_pending}")
     await q.message.reply_text(msg,reply_markup=main_menu())
 
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3262,6 +3318,42 @@ def save_data():
 def _apply_loaded_data(data):
     global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db
     data=_restore_special_state(data or {})
+
+    # WITHDRAWAL MIGRATION FIX:
+    # Older deployments could keep the latest withdrawal in withdraw_requests
+    # without a matching history row.  Rebuild that missing row during startup
+    # so My Details / Withdraw History remain correct after redeploys.
+    try:
+        loaded_reqs = data.get('withdraw_requests') or {}
+        loaded_hist = data.get('withdraw_history_db') or {}
+        if isinstance(loaded_reqs, dict):
+            if not isinstance(loaded_hist, dict):
+                loaded_hist = {}
+            for raw_uid, req in loaded_reqs.items():
+                if not isinstance(req, dict):
+                    continue
+                status = str(req.get('status','')).lower()
+                if status not in ('processing','approved','rejected'):
+                    continue
+                try: uid_key = int(raw_uid)
+                except Exception: uid_key = raw_uid
+                rows = loaded_hist.setdefault(uid_key, [])
+                if not isinstance(rows, list):
+                    rows = []
+                    loaded_hist[uid_key] = rows
+                amount = int(req.get('amount',0) or 0)
+                req_date = str(req.get('date',''))
+                exists = any(
+                    isinstance(r, dict) and int(r.get('amount',0) or 0) == amount
+                    and str(r.get('date','')) == req_date
+                    for r in rows
+                )
+                if amount > 0 and not exists:
+                    rows.append(dict(req))
+            data['withdraw_history_db'] = loaded_hist
+    except Exception as e:
+        print(f'Withdrawal history migration warning: {e}')
+
     # Normalize user IDs one more time after every persistence load. Older snapshots can
     # contain both integer and string user IDs; merge them instead of losing the record.
     loaded_users = data.get('users_db')
