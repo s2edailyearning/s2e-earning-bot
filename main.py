@@ -1604,133 +1604,143 @@ def get_current_task_for_user(uid):
     return None, "none"
 
 async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid=q.from_user.id
-    # Track missed tasks when user opens daily task
-    track_missed_tasks_for_user(uid)
-    if uid in banned_users:
-        await q.message.reply_text("🚫 You are BANNED! Contact admin!")
-        return
-    if not is_admin(uid):
-        is_joined = await check_user_in_channel(uid, context)
-        if not is_joined:
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=get_join_channel_link())], [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]])
-            await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
+    try:
+        q=update.callback_query; await q.answer()
+        uid=q.from_user.id
+        # Track missed tasks when user opens daily task
+        track_missed_tasks_for_user(uid)
+        if uid in banned_users:
+            await q.message.reply_text("🚫 You are BANNED! Contact admin!")
             return
-    today=str(get_ist_today())
-    count, limit, cap = check_daily_limits(uid)
-    if count >= limit and limit > 0:
-        is_active, plan_name, _ = check_plan_active(uid)
-        if is_active and plan_name.lower().startswith("basic"):
-            limit_msg = f"⏰ Basic plan daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nUpgrade to Premium for {DAILY_TASK_LIMIT_PREMIUM} tasks/day if you want more tasks."
-        elif is_active and plan_name.lower().startswith("premium"):
-            limit_msg = f"⏰ Premium daily limit {limit} reached! You completed {count}/{limit} tasks today."
-        else:
-            limit_msg = f"⏰ Daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nChoose a Support Plan for more daily tasks."
-        await q.message.reply_text(limit_msg, reply_markup=main_menu())
-        return
-    current, current_state = get_current_task_for_user(uid)
-    _, next_task = get_current_scheduled_task_with_interval()
-    missed, newly_missed = check_missed_tasks_with_interval(uid)
-    if newly_missed:
-        for nm in newly_missed:
-            await q.message.reply_text(f"❌ You missed Task {nm['task_number']}! {nm['open_time']}→{nm['close_time']} - {nm['title']}", reply_markup=main_menu())
-    if not current:
-        next_t = next_task
-        if next_t:
-            msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t['window_minutes']} mins)\n\nCheck Scheduled Tasks for list!"
-            await q.message.reply_text(msg, reply_markup=main_menu())
+        if not is_admin(uid):
+            is_joined = await check_user_in_channel(uid, context)
+            if not is_joined:
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel", url=get_join_channel_link())], [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]])
+                await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
+                return
+        today=str(get_ist_today())
+        count, limit, cap = check_daily_limits(uid)
+        if count >= limit and limit > 0:
+            is_active, plan_name, _ = check_plan_active(uid)
+            if is_active and plan_name.lower().startswith("basic"):
+                limit_msg = f"⏰ Basic plan daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nUpgrade to Premium for {DAILY_TASK_LIMIT_PREMIUM} tasks/day if you want more tasks."
+            elif is_active and plan_name.lower().startswith("premium"):
+                limit_msg = f"⏰ Premium daily limit {limit} reached! You completed {count}/{limit} tasks today."
+            else:
+                limit_msg = f"⏰ Daily limit {limit} reached! You completed {count}/{limit} tasks today.\n\nChoose a Support Plan for more daily tasks."
+            await q.message.reply_text(limit_msg, reply_markup=main_menu())
             return
-        else:
-            # No active/next task. The old code called get_today_task_for_user(),
-            # which can return None after all today's task windows are closed, and
-            # then crashed on task.get(...). That made the Daily Task button appear
-            # to do nothing. Handle this state explicitly.
-            today_tasks = get_tasks_for_today()
-            if not today_tasks:
+        current, current_state = get_current_task_for_user(uid)
+        _, next_task = get_current_scheduled_task_with_interval()
+        missed, newly_missed = check_missed_tasks_with_interval(uid)
+        if newly_missed:
+            for nm in newly_missed:
+                await q.message.reply_text(f"❌ You missed Task {nm['task_number']}! {nm['open_time']}→{nm['close_time']} - {nm['title']}", reply_markup=main_menu())
+        if not current:
+            next_t = next_task
+            if next_t:
+                msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t['window_minutes']} mins)\n\nCheck Scheduled Tasks for list!"
+                await q.message.reply_text(msg, reply_markup=main_menu())
+                return
+            else:
+                # No active/next task. The old code called get_today_task_for_user(),
+                # which can return None after all today's task windows are closed, and
+                # then crashed on task.get(...). That made the Daily Task button appear
+                # to do nothing. Handle this state explicitly.
+                today_tasks = get_tasks_for_today()
+                if not today_tasks:
+                    await q.message.reply_text(
+                        "📅 DAILY TASK\n\n"
+                        "❌ No task has been scheduled for today yet.\n\n"
+                        "Please check again later or contact Admin.",
+                        reply_markup=main_menu()
+                    )
+                    return
+
+                # Check whether all today's tasks are already finished/skipped/missed.
+                pending_task = None
+                pending_status = None
+                for t in today_tasks:
+                    tid = t.get('id')
+                    status_data = user_task_status.get(uid, {}).get(tid, {})
+                    status = status_data.get('status') if isinstance(status_data, dict) else status_data
+                    if status == 'pending_verification':
+                        pending_task = t
+                        pending_status = status
+                        break
+                    if status not in ('completed', 'skipped', 'missed'):
+                        pending_task = t
+                        pending_status = status
+                        break
+
+                if pending_task is None:
+                    await q.message.reply_text(
+                        "📅 DAILY TASK\n\n"
+                        f"✅ All of today's {len(today_tasks)} task(s) are already completed, skipped, or missed.\n\n"
+                        f"Tasks today: {count}/{limit}\n"
+                        "New tasks will appear when Admin schedules them.",
+                        reply_markup=main_menu()
+                    )
+                    return
+
+                task = pending_task
+                task_id = task.get('id')
+                if pending_status == 'pending_verification':
+                    await q.message.reply_text(
+                        f"⏳ Task {task.get('task_number', '?')} screenshot is already pending Admin verification.\n\n"
+                        f"Tasks today: {count}/{limit}",
+                        reply_markup=main_menu()
+                    )
+                    return
+
                 await q.message.reply_text(
-                    "📅 DAILY TASK\n\n"
-                    "❌ No task has been scheduled for today yet.\n\n"
-                    "Please check again later or contact Admin.",
-                    reply_markup=main_menu()
+                    f"📅 Today's Task:\n\n"
+                    f"Task {task.get('task_number', '?')}\n"
+                    f"Open: {task.get('open_time', '')}  Close: {task.get('close_time', '')}\n"
+                    f"Title: {task.get('title', '')}\n"
+                    f"Reward: ₹{task.get('reward', 5)}\n"
+                    f"Link: {task.get('link', '')}\n\n"
+                    f"Tasks today: {count}/{limit}\n\n"
+                    "Click Upload Screenshot after completing!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"),
+                        InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task_id}")
+                    ]])
                 )
                 return
-
-            # Check whether all today's tasks are already finished/skipped/missed.
-            pending_task = None
-            pending_status = None
-            for t in today_tasks:
-                tid = t.get('id')
-                status_data = user_task_status.get(uid, {}).get(tid, {})
-                status = status_data.get('status') if isinstance(status_data, dict) else status_data
-                if status == 'pending_verification':
-                    pending_task = t
-                    pending_status = status
-                    break
-                if status not in ('completed', 'skipped', 'missed'):
-                    pending_task = t
-                    pending_status = status
-                    break
-
-            if pending_task is None:
-                await q.message.reply_text(
-                    "📅 DAILY TASK\n\n"
-                    f"✅ All of today's {len(today_tasks)} task(s) are already completed, skipped, or missed.\n\n"
-                    f"Tasks today: {count}/{limit}\n"
-                    "New tasks will appear when Admin schedules them.",
-                    reply_markup=main_menu()
-                )
-                return
-
-            task = pending_task
-            task_id = task.get('id')
-            if pending_status == 'pending_verification':
-                await q.message.reply_text(
-                    f"⏳ Task {task.get('task_number', '?')} screenshot is already pending Admin verification.\n\n"
-                    f"Tasks today: {count}/{limit}",
-                    reply_markup=main_menu()
-                )
-                return
-
-            await q.message.reply_text(
-                f"📅 Today's Task:\n\n"
-                f"Task {task.get('task_number', '?')}\n"
-                f"Open: {task.get('open_time', '')}  Close: {task.get('close_time', '')}\n"
-                f"Title: {task.get('title', '')}\n"
-                f"Reward: ₹{task.get('reward', 5)}\n"
-                f"Link: {task.get('link', '')}\n\n"
-                f"Tasks today: {count}/{limit}\n\n"
-                "Click Upload Screenshot after completing!",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot"),
-                    InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{task_id}")
-                ]])
-            )
+        task_id = current['id']
+        status_data = user_task_status.get(uid, {}).get(task_id, {})
+        status = status_data.get('status') if isinstance(status_data, dict) else status_data
+        if status == 'completed':
+            await q.message.reply_text(f"✅ Already Completed Task {current['task_number']}! Next task at {current['next_time']}", reply_markup=main_menu())
             return
-    task_id = current['id']
-    status_data = user_task_status.get(uid, {}).get(task_id, {})
-    status = status_data.get('status') if isinstance(status_data, dict) else status_data
-    if status == 'completed':
-        await q.message.reply_text(f"✅ Already Completed Task {current['task_number']}! Next task at {current['next_time']}", reply_markup=main_menu())
-        return
-    skip_data = skip_db.get(uid, {}).get(task_id, {})
-    skip_status = skip_data.get('status') if isinstance(skip_data, dict) else skip_data
-    if skip_status == 'skipped':
-        await q.message.reply_text(f"⏭️ Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
-        return
-    task_open_time[uid] = get_ist_now()
-    msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
-    if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
-        msg += "\n\n⚠️ Already have account? Click Skip Task!"
-    # If task has image, send photo with caption - THIS IS YOUR IMAGE FEATURE
-    image_file_id = current.get('image_file_id') or task_images_db.get(current['id'])
-    if image_file_id:
+        skip_data = skip_db.get(uid, {}).get(task_id, {})
+        skip_status = skip_data.get('status') if isinstance(skip_data, dict) else skip_data
+        if skip_status == 'skipped':
+            await q.message.reply_text(f"⏭️ Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
+            return
+        task_open_time[uid] = get_ist_now()
+        msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
+        if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
+            msg += "\n\n⚠️ Already have account? Click Skip Task!"
+        # If task has image, send photo with caption - THIS IS YOUR IMAGE FEATURE
+        image_file_id = current.get('image_file_id') or task_images_db.get(current['id'])
+        if image_file_id:
+            try:
+                await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+                return
+            except Exception as e:
+                print(f"Image send error {e}")
+        await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+
+    except Exception as e:
+        print(f"daily_cb error: {e}")
+        import traceback; traceback.print_exc()
         try:
-            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
-            return
-        except Exception as e:
-            print(f"Image send error {e}")
-    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
+            q=update.callback_query
+            await q.message.reply_text(f"❌ Error: {e}", reply_markup=main_menu())
+        except:
+            pass
 
 async def daily_upload_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -3146,15 +3156,28 @@ def track_missed_tasks_for_user(uid):
             snap=_missed_snapshot(task)
             missed_tasks_db[uid].append(snap); existing[tid]=snap
         missed.append(existing[tid])
-    # Return only today's snapshots that have not been completed after reopening.
+    # Return only today's snapshots that have not been completed after reopening - DEDUP BY ID
     result=[]
+    seen_ids=set()
     for t in missed_tasks_db.get(uid,[]):
         if str(t.get('date')) != today: continue
         tid=t.get('id')
+        if tid in seen_ids:
+            continue
+        seen_ids.add(tid)
         st=user_task_status.get(uid,{}).get(tid,{})
         st=st.get('status') if isinstance(st,dict) else st
         if st not in ('completed',): result.append(t)
-    return result
+    # Also dedup by task_number if same number appears twice with different IDs (keep first)
+    final=[]
+    seen_numbers=set()
+    for t in result:
+        tnum=t.get('task_number')
+        if tnum in seen_numbers:
+            continue
+        seen_numbers.add(tnum)
+        final.append(t)
+    return final
 
 async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -3164,6 +3187,15 @@ async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     missed=track_missed_tasks_for_user(uid)
     if not missed:
         await q.message.reply_text("✅ No missed tasks today!", reply_markup=main_menu()); return
+    # Dedup missed by task_number for display
+    seen_nums=set()
+    unique_missed=[]
+    for t in missed:
+        tnum=t.get('task_number')
+        if tnum not in seen_nums:
+            seen_nums.add(tnum)
+            unique_missed.append(t)
+    missed=unique_missed
     msg=f"❌ MISSED TASKS TODAY - Total {len(missed)}:\n\n"
     kb=[]
     for t in missed:
@@ -3476,352 +3508,6 @@ async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_T
     await support_plans_cb(update, context)
 
 
-
-async def add_bulk_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    # If args provided as multiline text after command, use that, else ask
-    raw = " ".join(context.args) if context.args else ""
-    # Also check if message has newline separated tasks in reply
-    if not raw and update.message.text:
-        # Get text after /add_bulk_tasks
-        txt = update.message.text
-        if "\n" in txt or "\n" in txt:
-            raw = txt.split("\n", 1)[-1] if "\n" in txt else txt.split("\n", 1)[-1]
-        else:
-            # Try to get lines after command
-            parts = txt.split(" ", 1)
-            if len(parts) > 1:
-                raw = parts[1]
-    
-    if not raw or len(raw) < 10:
-        await update.message.reply_text(
-            "📋 BULK ADD 6-7 TASKS AT ONCE!\n\n"
-            "Usage:\n"
-            "/add_bulk_tasks\n"
-            "12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\n"
-            "2:00PM 15min 2:15PM Task 4 Shop Rating https://maps.app.goo.gl/yyy 5\n"
-            "3:00PM 15min 3:15PM Task 5 Follow Insta https://instagram.com/xxx 10\n\n"
-            "OR send as separate lines with /add_bulk_tasks command!\n\n"
-            "Format per line: open close next title link reward\n"
-            "Example: 12:45PM 15min 1:03PM Task 3 Google Review https://link 5\n\n"
-            "After bulk add, use /set_task_image <id> for each task poster!"
-        )
-        return
-    
-    # Split by newline
-    lines = [l.strip() for l in raw.split("\n") if l.strip()]
-    # Also try split by newline char if \n not found
-    if len(lines) == 1 and "\n" in raw:
-        lines = [l.strip() for l in raw.split("\n") if l.strip()]
-    
-    added = 0
-    errors = []
-    for line in lines:
-        try:
-            # Parse line: open close next title link reward
-            # Format: 12:45PM 15min 1:03PM Task 3 Google Review https://link 5
-            # Last token is reward, second last is link, rest is title, first 3 tokens are open close next
-            parts = line.split()
-            if len(parts) < 6:
-                errors.append(f"Too short: {line}")
-                continue
-            open_time = parts[0]
-            close_dur = parts[1]
-            next_time = parts[2]
-            reward = parts[-1]
-            link = parts[-2]
-            title = " ".join(parts[3:-2])
-            
-            # Call add_task logic
-            # Simulate context.args
-            from datetime import datetime
-            # Validate times
-            try:
-                # Use existing add_task parsing
-                task_id = len(scheduled_tasks_db) + 1 if 'scheduled_tasks_db' in globals() else len(scheduled_tasks_data) + 1
-                # Create task dict similar to add_task
-                task = {
-                    'id': task_id,
-                    'open_time': open_time,
-                    'close_duration': close_dur,
-                    'next_time': next_time,
-                    'title': title,
-                    'link': link,
-                    'reward': int(reward) if reward.isdigit() else 5,
-                    'open_time_obj': None,
-                    'close_time_obj': None
-                }
-                # Try to parse times
-                try:
-                    from datetime import datetime as dt
-                    task['open_time_obj'] = dt.strptime(open_time, "%I:%M%p").time()
-                except:
-                    pass
-                
-                if 'scheduled_tasks_db' in globals():
-                    scheduled_tasks_db.append(task)
-                if 'scheduled_tasks_data' in globals():
-                    scheduled_tasks_data.append(task)
-                    
-                added += 1
-            except Exception as e:
-                errors.append(f"{line} -> {e}")
-        except Exception as e:
-            errors.append(f"{line} -> {e}")
-    
-    msg = f"✅ BULK ADD DONE!\n\nAdded: {added} tasks\n"
-    if errors:
-        msg += f"Errors: {len(errors)}\n" + "\n".join(errors[:5])
-    msg += f"\n\nTotal tasks today: {len(scheduled_tasks_db) if 'scheduled_tasks_db' in globals() else len(scheduled_tasks_data)}\n"
-    msg += "\nNow set images: /set_task_image <id> + send photo for each!"
-    await update.message.reply_text(msg)
-
-
-
-# === PERSISTENT STORAGE - FIX DATA LOSS ===
-import json, os
-DATA_FILE = "bot_data.json"
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-_DB_WARNED = False
-
-def _db_connect():
-    """Connect to Render PostgreSQL when DATABASE_URL is configured.
-    Uses psycopg v3; JSON file remains as a local fallback.
-    """
-    global _DB_WARNED
-    if not DATABASE_URL:
-        return None
-    try:
-        import psycopg
-        return psycopg.connect(DATABASE_URL, connect_timeout=10)
-    except Exception as e:
-        if not _DB_WARNED:
-            print(f"Persistent PostgreSQL unavailable: {e}")
-            _DB_WARNED = True
-        return None
-
-def _db_init():
-    conn=_db_connect()
-    if not conn: return
-    try:
-        with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS s2e_state (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())")
-        conn.commit(); conn.close()
-        print("Persistent PostgreSQL storage ready")
-    except Exception as e:
-        print(f"DB init error: {e}")
-        try: conn.close()
-        except: pass
-
-def _db_load_snapshot():
-    conn=_db_connect()
-    if not conn: return None
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT payload FROM s2e_state WHERE id=1")
-            row=cur.fetchone()
-        conn.close()
-        return json.loads(row[0]) if row else None
-    except Exception as e:
-        print(f"DB load error: {e}")
-        try: conn.close()
-        except: pass
-        return None
-
-def _db_save_snapshot(payload):
-    conn=_db_connect()
-    if not conn: return False
-    try:
-        payload_text=json.dumps(payload, ensure_ascii=False)
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO s2e_state(id,payload,updated_at) VALUES(1,%s,NOW()) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload, updated_at=NOW()", (payload_text,))
-        conn.commit(); conn.close(); return True
-    except Exception as e:
-        print(f"DB save error: {e}")
-        try: conn.rollback(); conn.close()
-        except: pass
-        return False
-
-def _json_safe(value):
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k,v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, set):
-        return [_json_safe(v) for v in sorted(value, key=lambda x: str(x))]
-    if isinstance(value, (datetime, date, time)):
-        return value.isoformat()
-    return value
-
-def _restore_special_state(data):
-    # Keys saved by JSON become strings; convert user-keyed maps back to int keys.
-    int_key_maps = [
-        'users_db','tasks_db','bonus_balance','referrals_db','referral_earnings','referral_map',
-        'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count',
-        'user_task_status','missed_tasks_db','pending_daily','skip_db','warnings_db','promo_earnings_db',
-        'promo_views_db','promo_pending','pending_plans'
-    ]
-    for name in int_key_maps:
-        obj=data.get(name)
-        if isinstance(obj, dict):
-            fixed={}
-            for k,v in obj.items():
-                try: nk=int(k)
-                except: nk=k
-                fixed[nk]=v
-            data[name]=fixed
-
-    # Telegram IDs / sets.
-    for name in ('banned_users','screenshot_hashes','task_notifications_sent','awaiting_plan_image_admins','awaiting_plan_payment_adminless'):
-        if isinstance(data.get(name), list):
-            try: data[name]=set(data[name])
-            except: pass
-
-    # Scheduled task time fields must be datetime.time after JSON/DB restore.
-    tasks=data.get('scheduled_tasks_db')
-    if isinstance(tasks,list):
-        for t in tasks:
-            if not isinstance(t,dict): continue
-            for obj_key, text_key in (('open_time_obj','open_time'),('close_time_obj','close_time'),('next_time_obj','next_time')):
-                val=t.get(obj_key)
-                if isinstance(val,str):
-                    parsed=parse_time_str(val)
-                    if parsed: t[obj_key]=parsed
-                elif val is None and t.get(text_key):
-                    parsed=parse_time_str(str(t.get(text_key)))
-                    if parsed: t[obj_key]=parsed
-
-    # Promo member sets.
-    promos=data.get('promo_campaigns_db')
-    if isinstance(promos,list):
-        for c in promos:
-            if isinstance(c,dict) and isinstance(c.get('members_joined'),list):
-                c['members_joined']=set(c['members_joined'])
-
-    return data
-
-def save_data():
-    """Persist all user/task/admin state. PostgreSQL is primary when configured; JSON is a backup/fallback.
-    Existing records are updated in-place; nothing is intentionally deleted during saves.
-    """
-    try:
-        data = {
-            'users_db': users_db, 'tasks_db': tasks_db, 'bonus_balance': bonus_balance,
-            'referral_earnings': referral_earnings, 'referral_commission_ledger': referral_commission_ledger, 'daily_task_earnings': daily_task_earnings, 'referrals_db': referrals_db, 'referral_map': referral_map,
-            'pending_referrals': pending_referrals, 'withdraw_requests': withdraw_requests, 'withdraw_history': withdraw_history,
-            'withdraw_done_date': withdraw_done_date, 'last_withdraw_date_db': last_withdraw_date_db,
-            'daily_task_count': daily_task_count, 'user_task_status': user_task_status,
-            'scheduled_tasks_db': scheduled_tasks_db, 'scheduled_task_counter': scheduled_task_counter,
-            'support_plans_db': support_plans_db, 'user_plans': user_plans, 'pending_plans': pending_plans,
-            'missed_tasks_db': missed_tasks_db, 'skip_db': skip_db, 'warnings_db': warnings_db,
-            'banned_users': banned_users, 'task_images_db': task_images_db, 'support_banner_db': support_banner_db, 'screenshot_hashes': screenshot_hashes,
-            'promo_campaigns_db': promo_campaigns_db, 'promo_campaign_counter': promo_campaign_counter,
-            'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'REFERRAL_PLAN_COMMISSION_PERCENT': REFERRAL_PLAN_COMMISSION_PERCENT, 'L1_TASK_COMMISSION_PERCENT': L1_TASK_COMMISSION_PERCENT, 'L2_TASK_COMMISSION_PERCENT': L2_TASK_COMMISSION_PERCENT, 'promo_pending': promo_pending,
-            'pending_daily': pending_daily, 'ADMIN_ID_LIST': ADMIN_ID_LIST, 'ADMIN_NAMES_DB': admin_names_db, 'MISSED_ENABLED': MISSED_ENABLED,
-            'PAYMENT_UPI': get_payment_upi(), 'CONTACT_USERNAME': get_contact_username(), 'CONTACT_ADMIN_ID': CONTACT_ADMIN_ID,
-        }
-        safe=_json_safe(data)
-        # Always keep a local backup too.
-        with open(DATA_FILE,'w',encoding='utf-8') as f:
-            json.dump(safe,f,ensure_ascii=False)
-        if DATABASE_URL:
-            _db_save_snapshot(safe)
-        print(f"Data saved OK - Users:{len(users_db)} Pending:{len(pending_daily)} Admins:{len(ADMIN_ID_LIST)}")
-    except Exception as e:
-        print(f"Save error {e}")
-
-def _apply_loaded_data(data):
-    global PAYMENT_UPI, scheduled_task_counter, promo_campaign_counter, MISSED_ENABLED, ADMIN_ID_LIST, admin_names_db, CONTACT_USERNAME, CONTACT_ADMIN_ID, REFERRAL_PLAN_COMMISSION_PERCENT, L1_TASK_COMMISSION_PERCENT, L2_TASK_COMMISSION_PERCENT
-    data=_restore_special_state(data or {})
-    map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referral_commission_ledger','daily_task_earnings','referrals_db','referral_map','pending_referrals',
-               'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
-               'support_plans_db','user_plans','pending_plans','missed_tasks_db','skip_db','warnings_db','promo_earnings_db',
-               'promo_views_db','promo_pending','pending_daily','task_images_db','support_banner_db','promo_campaigns_db']
-    for name in map_names:
-        obj=data.get(name)
-        if obj is not None and name in globals():
-            target=globals()[name]
-            if isinstance(target,dict) and isinstance(obj,dict): target.clear(); target.update(obj)
-            elif isinstance(target,list) and isinstance(obj,list): target.clear(); target.extend(obj)
-    if isinstance(data.get('banned_users'), (list,set)):
-        banned_users.clear(); banned_users.update(data['banned_users'])
-    if isinstance(data.get('screenshot_hashes'), (list,set)):
-        screenshot_hashes.clear(); screenshot_hashes.update(data['screenshot_hashes'])
-    if isinstance(data.get('task_notifications_sent'), (list,set)):
-        task_notifications_sent.clear(); task_notifications_sent.update(data['task_notifications_sent'])
-    if isinstance(data.get('ADMIN_NAMES_DB'), dict):
-        admin_names_db.clear()
-        for k, v in data['ADMIN_NAMES_DB'].items():
-            try:
-                admin_names_db[int(k)] = str(v)
-            except Exception:
-                pass
-    if isinstance(data.get('ADMIN_ID_LIST'),list):
-        ADMIN_ID_LIST.clear()
-        for x in data['ADMIN_ID_LIST']:
-            try:
-                x=int(x)
-                if x not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(x)
-            except: pass
-    if isinstance(data.get('awaiting_plan_image_admins'),list):
-        awaiting_plan_image_admins.clear(); awaiting_plan_image_admins.update(data['awaiting_plan_image_admins'])
-    if isinstance(data.get('awaiting_plan_payment_adminless'),list):
-        awaiting_plan_payment_adminless.clear(); awaiting_plan_payment_adminless.update(data['awaiting_plan_payment_adminless'])
-    if data.get('PAYMENT_UPI'): PAYMENT_UPI=str(data['PAYMENT_UPI'])
-    if data.get('CONTACT_USERNAME'): CONTACT_USERNAME=str(data['CONTACT_USERNAME'])
-    try:
-        if data.get('CONTACT_ADMIN_ID') is not None: CONTACT_ADMIN_ID=int(data['CONTACT_ADMIN_ID'])
-    except Exception: pass
-    try: REFERRAL_PLAN_COMMISSION_PERCENT=float(data.get("REFERRAL_PLAN_COMMISSION_PERCENT", REFERRAL_PLAN_COMMISSION_PERCENT))
-    except: pass
-    try: L1_TASK_COMMISSION_PERCENT=float(data.get("L1_TASK_COMMISSION_PERCENT", L1_TASK_COMMISSION_PERCENT))
-    except: pass
-    try: L2_TASK_COMMISSION_PERCENT=float(data.get("L2_TASK_COMMISSION_PERCENT", L2_TASK_COMMISSION_PERCENT))
-    except: pass
-    try: scheduled_task_counter=max(int(data.get('scheduled_task_counter',1)), max([int(t.get('id',0)) for t in scheduled_tasks_db if isinstance(t,dict)],default=0)+1)
-    except: pass
-    try: promo_campaign_counter=max(int(data.get('promo_campaign_counter',1)), max([int(c.get('id',0)) for c in promo_campaigns_db if isinstance(c,dict)],default=0)+1)
-    except: pass
-    if 'MISSED_ENABLED' in data: MISSED_ENABLED=bool(data['MISSED_ENABLED'])
-
-def load_data():
-    """Load PostgreSQL snapshot first. If empty, load the old bot_data.json and immediately migrate it to DB."""
-    try:
-        db_data=_db_load_snapshot() if DATABASE_URL else None
-        source='PostgreSQL' if db_data else None
-        data=db_data
-        if data is None and os.path.exists(DATA_FILE):
-            with open(DATA_FILE,'r',encoding='utf-8') as f: data=json.load(f)
-            source='bot_data.json'
-        if data:
-            _apply_loaded_data(data)
-            normalize_support_plans()
-            print(f"Data loaded from {source} - Users:{len(users_db)} Tasks:{len(scheduled_tasks_db)} Plans:{len(support_plans_db)} UserPlans:{len(user_plans)}")
-            if source=='bot_data.json' and DATABASE_URL:
-                save_data()  # migrate legacy local data to PostgreSQL
-        else:
-            print('No saved data found - starting with empty state')
-    except Exception as e:
-        print(f"Load error {e}")
-        import traceback; traceback.print_exc()
-
-# User Plans - which user bought which plan
-if 'user_plans' not in globals():
-    user_plans = {}
-
-def get_reward_for_user(uid, base_reward=5):
-    try:
-        plan = _get_user_plan_record(uid)
-        if not plan:
-            return base_reward
-        price = int(plan.get('price',0) or 0)
-        if price == 199: return 10
-        if price == 499: return 15
-        if price >= 999: return 20
-        return base_reward + (price // 100)
-    except Exception:
-        return base_reward
 
 async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -4778,6 +4464,108 @@ def auto_clean_duplicates():
         print(f"Auto-clean error: {e}")
 
 
+
+async def add_bulk_tasks_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    # Get full text after command
+    full_text = update.message.text or ""
+    # Remove /add_bulk, /bulk_add, /bulk_tasks prefix
+    for prefix in ["/add_bulk", "/bulk_add", "/bulk_tasks_add"]:
+        if full_text.startswith(prefix):
+            full_text = full_text[len(prefix):].strip()
+            break
+    if not full_text:
+        await update.message.reply_text(
+            "📋 BULK ADD - 2 WAYS:\n\n"
+            "1️⃣ Separate (1 task per message):\n"
+            "/add_task_all 14:00 15:00 WatchAd https://t.me/... 10\n\n"
+            "2️⃣ Bulk (many tasks in 1 message):\n"
+            "/add_bulk\n"
+            "14:00 15:00 WatchAd https://t.me/... 10\n"
+            "15:00 16:00 WatchAd2 https://t.me/... 10 all\n"
+            "16:00 17:00 PremiumTask https://t.me/... 20 basic\n\n"
+            "Amount separation:\n"
+            "• all/free = Free + All paid users can do\n"
+            "• basic/premium/pro/vip = Only that plan & higher\n"
+            "• Reward 10 = Free, 15-20 = Paid plans\n\n"
+            "Example:\n"
+            "/add_task_all 14:00 15:00 WatchAd link 10 all\n"
+            "/add_task_basic 15:00 16:00 SpecialTask link 20"
+        )
+        return
+    lines = [l.strip() for l in full_text.split("\n") if l.strip()]
+    # If single line without newline, treat as one task
+    if len(lines) == 1 and " " in lines[0]:
+        # Check if it looks like a task line
+        parts = lines[0].split()
+        if len(parts) >= 4:
+            lines = [lines[0]]
+        else:
+            lines = [l.strip() for l in full_text.split() if l.strip()] # fallback
+            lines = [" ".join(lines)] if lines else []
+    
+    added = 0
+    errors = []
+    for idx, line in enumerate(lines, 1):
+        # Skip if line starts with /add_task_all
+        line = line.replace("/add_task_all", "").strip()
+        line = line.replace("/add_task_free", "").strip()
+        line = line.replace("/add_task_basic", "").strip()
+        parts = line.split()
+        if len(parts) < 4:
+            errors.append(f"Line {idx}: Too few args - {line}")
+            continue
+        try:
+            open_time, close_time, title, link = parts[0], parts[1], parts[2], parts[3]
+            reward = int(parts[4]) if len(parts) >= 5 else 10
+            audience = parts[5].lower() if len(parts) >= 6 else 'all'
+            # Validate time
+            from datetime import datetime as dt2
+            ot = dt2.strptime(open_time, "%H:%M").time()
+            ct = dt2.strptime(close_time, "%H:%M").time()
+            # Overlap check
+            today = str(get_ist_today())
+            overlap = False
+            for ex in scheduled_tasks_db:
+                if ex.get('date') == today and is_time_overlap(open_time, close_time, ex.get('open_time'), ex.get('close_time')):
+                    ex_aud = str(ex.get('audience','all')).lower()
+                    if ex_aud == 'all' or audience == 'all' or ex_aud == audience:
+                        errors.append(f"Line {idx}: Overlap with ID:{ex['id']} {ex['open_time']}-{ex['close_time']}")
+                        overlap = True
+                        break
+            if overlap:
+                continue
+            global scheduled_task_counter
+            task = {
+                'id': scheduled_task_counter, 
+                'date': today, 
+                'open_time': open_time, 
+                'close_time': close_time, 
+                'open_time_obj': ot, 
+                'close_time_obj': ct, 
+                'title': title, 
+                'link': link, 
+                'reward': reward, 
+                'audience': audience, 
+                'rewards': {}, 
+                'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
+            }
+            scheduled_tasks_db.append(task)
+            scheduled_task_counter+=1
+            added+=1
+        except Exception as e:
+            errors.append(f"Line {idx}: {e} - {line[:50]}")
+    save_data()
+    msg = f"✅ BULK ADD DONE! Added: {added}"
+    if errors:
+        msg += f"\n\nErrors ({len(errors)}):\n" + "\n".join(errors[:5])
+        if len(errors) > 5:
+            msg += f"\n...and {len(errors)-5} more"
+    msg += f"\n\nTotal scheduled today: {len([t for t in scheduled_tasks_db if t.get('date')==str(get_ist_today())])}"
+    await update.message.reply_text(msg)
+
+
 async def add_task_manual_cmd(update, context):
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
@@ -5577,6 +5365,9 @@ def main():
             app.add_handler(CommandHandler("list_tasks_audience", list_tasks_audience_cmd))
             app.add_handler(CommandHandler("add_task_5plans", add_task_5plans_cmd))
             app.add_handler(CommandHandler("add_task_5p", add_task_5plans_cmd))
+            app.add_handler(CommandHandler("add_bulk", add_bulk_tasks_cmd))
+            app.add_handler(CommandHandler("bulk_add", add_bulk_tasks_cmd))
+            app.add_handler(CommandHandler("bulk_tasks_add", add_bulk_tasks_cmd))
 
             try:
                 from telegram.ext import TypeHandler
