@@ -1874,6 +1874,8 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             context.user_data.pop('daily_screenshot_task_id', None)
             return ConversationHandler.END
         if existing_status == 'pending_verification' or uid in pending_daily:
+            await update.message.reply_text("⏳ Your screenshot is already submitted! Waiting for admin approval.", reply_markup=main_menu())
+            return
             await update.message.reply_text(
                 "⏳ This task screenshot is already pending admin verification.\n\n"
                 "Please wait for Approve/Reject; don't submit the same task again.",
@@ -2866,6 +2868,14 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         record_task_referral_commissions(uid, reward)
         save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
+        # Update channel message to show approved status
+        try:
+            await q.message.edit_caption(caption=q.message.caption + f"\n\n✅ APPROVED by admin - Rs{reward} credited!\nApproved: {get_ist_now().strftime('%H:%M:%S')}")
+        except:
+            try:
+                await q.message.edit_text(f"✅ APPROVED - User {uid} +Rs{reward}\nOriginal: {q.message.caption or q.message.text or ''}")
+            except:
+                pass
         try:
             _, daily_limit, _ = check_daily_limits(uid)
             daily_count = get_tasks(uid)
@@ -3891,6 +3901,55 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
     q=update.callback_query
     try: await q.answer("Processing bulk approval…")
     except: pass
+    if not is_admin(q.from_user.id):
+        return
+    data=str(q.data)
+    target=data.replace("bulk_approve_", "", 1)
+    if target=="all":
+        uids=list(pending_daily.keys())
+    else:
+        uids=[]
+        for uid,p in list(pending_daily.items()):
+            t=p.get('task',{}) if isinstance(p,dict) else {}
+            if str(t.get('task_number',''))==target or str(t.get('id',''))==target:
+                uids.append(uid)
+    approved=0
+    approved_list=[]
+    for uid in uids:
+        if uid not in pending_daily: continue
+        try:
+            pdata=pending_daily[uid]; task=pdata.get('task',{})
+            base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
+            reward=get_reward_for_user(uid,base_reward)
+            tasks_db[uid]=tasks_db.get(uid,0)+1
+            today=str(get_ist_today())
+            daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
+            add_today_task_earning(uid, reward, today)
+            for tid,st in list(user_task_status.get(uid,{}).items()):
+                if isinstance(st,dict) and st.get('status')=='pending_verification':
+                    user_task_status[uid][tid]={'status':'completed','completed_at':get_ist_now()}; break
+            if reward!=base_reward:
+                bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-base_reward)
+            record_task_referral_commissions(uid, reward)
+            pending_daily.pop(uid,None); approved+=1
+            approved_list.append(f"{uid} (Rs{reward})")
+            try: await context.bot.send_message(chat_id=uid,text=f"✅ Task Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
+            except: pass
+        except Exception as e:
+            print(f"bulk approval error {uid}: {e}")
+    save_data()
+    label="ALL PENDING" if target=="all" else f"TASK {target}"
+    details = "\n".join(approved_list[:10])
+    if len(approved_list) > 10:
+        details += f"\n...and {len(approved_list)-10} more"
+    try: await q.message.reply_text(f"✅ BULK APPROVAL DONE\n\n{label}\nApproved: {approved}\n{details}\n\nRemaining pending: {len(pending_daily)}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin",callback_data="back_admin")]]))
+    except: pass
+    # Also try to edit original message to show approved
+    try:
+        await q.message.edit_caption(caption=(q.message.caption or "") + f"\n\n✅ BULK APPROVED {approved} users\n{get_ist_now().strftime('%H:%M:%S')}")
+    except:
+        pass
+
     if not is_admin(q.from_user.id):
         return
     data=str(q.data)
