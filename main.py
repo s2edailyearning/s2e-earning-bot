@@ -716,12 +716,13 @@ task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
 
-# === PERSISTENT STORAGE - RESTORED / SAFE JSON VERSION ===
-# The previous build called load_data()/save_data() from main(), but those
-# functions were missing from this file. That caused Render to stop with:
-# NameError: name 'load_data' is not defined
-# Persistent storage path. On Render, mount a Persistent Disk at /var/data.
-# DATA_FILE can still override the path through an environment variable.
+# === PERSISTENT STORAGE - SUPABASE + LOCAL FALLBACK ===
+# Runtime state is stored in Supabase when SUPABASE_URL and SUPABASE_KEY are set.
+# A local JSON file remains as a fallback and as a one-time migration source.
+import urllib.request
+import urllib.parse
+import urllib.error
+
 _render_disk = "/var/data"
 _default_data_file = os.path.join(_render_disk, "bot_data.json") if os.path.isdir(_render_disk) else "bot_data.json"
 DATA_FILE = os.getenv("DATA_FILE", _default_data_file)
@@ -729,8 +730,14 @@ DATA_DIR = os.path.dirname(DATA_FILE) or "."
 try:
     os.makedirs(DATA_DIR, exist_ok=True)
 except Exception as _e:
-    print(f"Persistent data directory unavailable: {_e}")
-print(f"DATA_FILE={DATA_FILE} | Persistent Disk={'YES' if DATA_FILE.startswith('/var/data/') else 'NO'}")
+    print(f"Local data directory unavailable: {_e}")
+
+SUPABASE_URL = str(os.getenv("SUPABASE_URL", "")).rstrip("/")
+SUPABASE_KEY = str(os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+SUPABASE_STATE_TABLE = os.getenv("SUPABASE_STATE_TABLE", "bot_state")
+SUPABASE_STATE_ID = os.getenv("SUPABASE_STATE_ID", "main")
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
+print(f"DATA_FILE={DATA_FILE} | Supabase={'YES' if USE_SUPABASE else 'NO'} | State table={SUPABASE_STATE_TABLE}")
 
 
 def _json_safe(value):
@@ -761,11 +768,7 @@ def _restore_scheduled_task_times():
     for task in scheduled_tasks_db:
         if not isinstance(task, dict):
             continue
-        for field, obj_field in (
-            ("open_time", "open_time_obj"),
-            ("close_time", "close_time_obj"),
-            ("next_time", "next_time_obj"),
-        ):
+        for field, obj_field in (("open_time", "open_time_obj"), ("close_time", "close_time_obj"), ("next_time", "next_time_obj")):
             if not task.get(obj_field):
                 raw = task.get(field)
                 if raw:
@@ -775,150 +778,185 @@ def _restore_scheduled_task_times():
 
 
 def _restore_loaded_sets_and_times():
-    """Restore non-JSON native containers used by the bot."""
     _restore_scheduled_task_times()
     for campaign in promo_campaigns_db:
         if isinstance(campaign, dict):
             members = campaign.get("members_joined", set())
             if isinstance(members, list):
                 campaign["members_joined"] = set(members)
-    if not isinstance(screenshot_hashes, set):
-        try:
+    try:
+        if not isinstance(screenshot_hashes, set):
             screenshot_hashes.clear()
             screenshot_hashes.update([])
-        except Exception:
-            pass
-    if not isinstance(task_notifications_sent, set):
-        try:
-            task_notifications_sent = set(task_notifications_sent or [])
-        except Exception:
-            pass
+    except Exception:
+        pass
+    try:
+        if not isinstance(task_notifications_sent, set):
+            task_notifications_sent.clear()
+            task_notifications_sent.update([])
+    except Exception:
+        pass
+
+
+def _state_snapshot():
+    state_names = [
+        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+        "banned_users", "warnings_db", "pending_daily", "user_plans",
+        "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
+        "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+        "withdraw_history", "withdraw_done_date", "daily_task_count",
+        "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
+        "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
+        "user_task_status", "task_notifications_sent", "skip_db",
+        "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
+        "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter",
+        "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db",
+        "admin_names_db", "support_plans_db", "pending_plan_purchases",
+        "support_plan_image_file_id", "PAYMENT_UPI",
+    ]
+    data = {}
+    for name in state_names:
+        if name in globals():
+            data[name] = _json_safe(globals()[name])
+    return data
+
+
+def _supabase_request(method, path, payload=None, timeout=12):
+    if not USE_SUPABASE:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}{path}"
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if method.upper() == "POST":
+        headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+    req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+        return json.loads(raw) if raw else None
+
+
+def _supabase_load_state():
+    if not USE_SUPABASE:
+        return None
+    try:
+        q = urllib.parse.quote(str(SUPABASE_STATE_ID), safe="")
+        rows = _supabase_request("GET", f"?id=eq.{q}&select=data")
+        if isinstance(rows, list) and rows:
+            data = rows[0].get("data")
+            if isinstance(data, dict):
+                print(f"Supabase state loaded OK - {len(data)} state sections")
+                return data
+        print("Supabase state row not found - will use local state for first migration")
+        return None
+    except Exception as e:
+        print(f"Supabase load error: {e}")
+        return None
+
+
+def _supabase_save_state(data):
+    if not USE_SUPABASE:
+        return False
+    try:
+        _supabase_request("POST", "", {"id": SUPABASE_STATE_ID, "data": data})
+        print(f"Supabase state saved OK - {len(data)} state sections")
+        return True
+    except Exception as e:
+        print(f"Supabase save error: {e}")
+        return False
 
 
 def save_data():
-    """Persist the bot's important runtime state to bot_data.json."""
+    """Persist runtime state to Supabase; also keep local JSON as fallback."""
+    data = _state_snapshot()
+    supabase_ok = _supabase_save_state(data)
     try:
-        state_names = [
-            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-            "banned_users", "warnings_db", "pending_daily", "user_plans",
-            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
-            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-            "withdraw_history", "withdraw_done_date", "daily_task_count",
-            "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
-            "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
-            "user_task_status", "task_notifications_sent", "skip_db",
-            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
-            "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db",
-            "admin_names_db", "support_plans_db", "pending_plan_purchases",
-            "support_plan_image_file_id", "pending_plans",
-        ]
-        data = {}
-        for name in state_names:
-            if name in globals():
-                data[name] = _json_safe(globals()[name])
-
-        # Atomic-ish write: finish a temporary file first, then replace the old file.
         temp_file = DATA_FILE + ".tmp"
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(temp_file, DATA_FILE)
-        print(f"Data saved OK - {len(data)} state sections")
-        return True
+        print(f"Local backup saved OK - {len(data)} state sections")
     except Exception as e:
-        print(f"Save error: {e}")
+        print(f"Local backup save error: {e}")
+    return supabase_ok or os.path.exists(DATA_FILE)
+
+
+def _apply_loaded_state(data):
+    if not isinstance(data, dict):
         return False
+    container_names = [
+        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+        "warnings_db", "pending_daily", "user_plans", "pending_plans",
+        "referral_map", "pending_referrals", "referral_earnings",
+        "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+        "withdraw_history", "withdraw_done_date", "daily_task_count",
+        "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
+        "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db", "product_promo_db",
+        "promo_earnings_db", "promo_views_db", "promo_pending", "product_promo_pending",
+        "product_promo_approved", "task_images_db", "support_banner_db", "admin_names_db", "support_plans_db",
+    ]
+    for name in container_names:
+        if name not in data or name not in globals():
+            continue
+        current = globals()[name]
+        loaded = data[name]
+        if isinstance(current, dict) and isinstance(loaded, dict):
+            current.clear(); current.update(loaded)
+        elif isinstance(current, list) and isinstance(loaded, list):
+            current.clear(); current.extend(loaded)
+    if "banned_users" in data:
+        banned_users.clear(); banned_users.update(data.get("banned_users") or [])
+    if "screenshot_hashes" in data:
+        screenshot_hashes.clear(); screenshot_hashes.update(data.get("screenshot_hashes") or [])
+    if "task_notifications_sent" in data:
+        task_notifications_sent.clear(); task_notifications_sent.update(data.get("task_notifications_sent") or [])
+    for counter_name in ("scheduled_task_counter", "product_promo_counter", "promo_campaign_counter"):
+        if counter_name in data:
+            try: globals()[counter_name] = int(data[counter_name])
+            except Exception: pass
+    if "PAYMENT_UPI" in data and data["PAYMENT_UPI"]:
+        globals()["PAYMENT_UPI"] = str(data["PAYMENT_UPI"])
+    for name in (
+        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance", "warnings_db",
+        "pending_daily", "user_plans", "pending_plans", "referral_map", "pending_referrals",
+        "referral_earnings", "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+        "withdraw_history", "withdraw_done_date", "daily_task_count", "missed_tasks_db",
+        "last_withdraw_date_db", "task_open_time", "user_task_status", "skip_db", "promo_earnings_db",
+        "promo_views_db", "promo_pending", "product_promo_approved", "admin_names_db",
+    ):
+        if name in globals() and isinstance(globals()[name], dict):
+            _restore_int_keys(globals()[name])
+    _restore_loaded_sets_and_times()
+    print(f"Data applied - Users: {len(users_db)} | Scheduled: {len(scheduled_tasks_db)} | Plans: {len(support_plans_db)} | UserPlans: {len(user_plans)}")
+    return True
 
 
 def load_data():
-    """Load persisted state if bot_data.json exists; otherwise keep defaults."""
+    """Load Supabase state first; if empty, migrate the existing local JSON once."""
+    data = _supabase_load_state()
+    if data is not None:
+        return _apply_loaded_state(data)
     try:
         if not os.path.exists(DATA_FILE):
-            print("No bot_data.json found - starting with fresh/default data")
+            print("No local bot_data.json found - starting with fresh/default data")
             return False
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            print("Load error: bot_data.json is not a JSON object")
+            local_data = json.load(f)
+        if not isinstance(local_data, dict):
+            print("Local load error: bot_data.json is not a JSON object")
             return False
-
-        # Dictionaries/lists that should be updated in-place so existing references
-        # used by handlers remain valid.
-        container_names = [
-            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-            "warnings_db", "pending_daily", "user_plans", "pending_plans",
-            "referral_map", "pending_referrals", "referral_earnings",
-            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-            "withdraw_history", "withdraw_done_date", "daily_task_count",
-            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
-            "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db", "product_promo_db",
-            "promo_earnings_db", "promo_views_db", "promo_pending", "product_promo_pending", "product_promo_approved", "task_images_db",
-            "support_banner_db", "admin_names_db", "support_plans_db",
-        ]
-
-        for name in container_names:
-            if name not in data or name not in globals():
-                continue
-            current = globals()[name]
-            loaded = data[name]
-            if isinstance(current, dict) and isinstance(loaded, dict):
-                current.clear()
-                current.update(loaded)
-            elif isinstance(current, list) and isinstance(loaded, list):
-                current.clear()
-                current.extend(loaded)
-
-        # Sets are saved as lists.
-        if "banned_users" in data:
-            banned_users.clear()
-            banned_users.update(data.get("banned_users") or [])
-        if "screenshot_hashes" in data:
-            screenshot_hashes.clear()
-            screenshot_hashes.update(data.get("screenshot_hashes") or [])
-        if "task_notifications_sent" in data:
-            task_notifications_sent.clear()
-            task_notifications_sent.update(data.get("task_notifications_sent") or [])
-
-        if "scheduled_task_counter" in data:
-            try:
-                globals()["scheduled_task_counter"] = int(data["scheduled_task_counter"])
-            except Exception:
-                pass
-        if "product_promo_counter" in data:
-            try:
-                globals()["product_promo_counter"] = int(data["product_promo_counter"])
-            except Exception:
-                pass
-        if "promo_campaign_counter" in data:
-            try:
-                globals()["promo_campaign_counter"] = int(data["promo_campaign_counter"])
-            except Exception:
-                pass
-
-        # JSON changes Telegram/user IDs to strings. Restore integer keys where
-        # the rest of this bot expects integer user IDs.
-        for name in (
-            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-            "warnings_db", "pending_daily", "user_plans", "pending_plans",
-            "referral_map", "pending_referrals", "referral_earnings",
-            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-            "withdraw_history", "withdraw_done_date", "daily_task_count",
-            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
-            "user_task_status", "skip_db", "promo_earnings_db", "promo_views_db",
-            "promo_pending", "product_promo_approved", "admin_names_db",
-        ):
-            if name in globals() and isinstance(globals()[name], dict):
-                _restore_int_keys(globals()[name])
-
-        _restore_loaded_sets_and_times()
-        print(
-            f"Data loaded - Users: {len(users_db)} | Scheduled: {len(scheduled_tasks_db)} "
-            f"| Plans: {len(support_plans_db)} | UserPlans: {len(user_plans)}"
-        )
-        return True
+        ok = _apply_loaded_state(local_data)
+        if ok and USE_SUPABASE:
+            _supabase_save_state(local_data)
+            print("✅ Existing local data migrated to Supabase")
+        return ok
     except Exception as e:
         print(f"Load error: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return False
 
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
