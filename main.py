@@ -61,6 +61,146 @@ async def set_payment_upi_cmd(update, context):
 
 
 ADMIN_ID_LIST = [7256515560, 8544307598]
+
+# === SMART AUTO SYSTEM - FIXED (Your Idea) ===
+import time as time_module
+last_activity_time = time_module.time()
+is_auto_mode = False
+auto_job = None
+idle_check_job = None
+
+async def auto_keepalive_function(context):
+    try:
+        me = await context.bot.get_me()
+        print(f"[AUTO {get_ist_now().strftime('%H:%M:%S')}] Keep-Alive ping - Bot @{me.username} alive")
+    except Exception as e:
+        print(f"Auto keep-alive error: {e}")
+
+async def idle_checker(context):
+    global last_activity_time, is_auto_mode
+    idle_seconds = time_module.time() - last_activity_time
+    if idle_seconds >= 300 and not is_auto_mode:
+        print(f"[IDLE {get_ist_now().strftime('%H:%M:%S')}] {int(idle_seconds)}s idle - Starting auto mode")
+        start_auto_mode(context)
+
+def start_auto_mode(context):
+    global is_auto_mode, auto_job
+    if is_auto_mode:
+        return
+    is_auto_mode = True
+    try:
+        auto_job = context.job_queue.run_repeating(auto_keepalive_function, interval=120, first=10)
+        print("✅ AUTO MODE ON - Every 2 min keep-alive started")
+    except Exception as e:
+        print(f"Failed to start auto mode: {e}")
+
+def stop_auto_mode():
+    global is_auto_mode, auto_job
+    if not is_auto_mode:
+        return
+    is_auto_mode = False
+    try:
+        if auto_job:
+            auto_job.schedule_removal()
+            auto_job = None
+        print(f"⏸️ AUTO MODE OFF - User active at {get_ist_now().strftime('%H:%M:%S')}")
+    except Exception as e:
+        print(f"Failed to stop auto: {e}")
+
+def update_activity():
+    global last_activity_time
+    last_activity_time = time_module.time()
+
+async def global_activity_tracker(update, context):
+    try:
+        update_activity()
+        if is_auto_mode:
+            stop_auto_mode()
+    except Exception:
+        pass
+
+def setup_smart_auto(application):
+    global idle_check_job
+    try:
+        idle_check_job = application.job_queue.run_repeating(idle_checker, interval=60, first=60)
+        print("🧠 Smart Idle Checker started")
+    except Exception as e:
+        print(f"Idle checker error: {e}")
+
+# === 5 PLANS TASK SYSTEM ===
+def get_user_plan_id(uid):
+    try:
+        record = _get_user_plan_record(uid) if '_get_user_plan_record' in globals() else None
+        if not record:
+            return 0
+        if isinstance(record, dict):
+            if 'plan_id' in record:
+                return int(record['plan_id'])
+            p = record.get('plan', 'free').lower()
+        else:
+            p = str(record).lower()
+        if p in ['free', '0']:
+            return 0
+        elif p in ['basic', '199', '1']:
+            return 1
+        elif p in ['premium', '499', '2']:
+            return 2
+        elif p in ['pro', '999', '3']:
+            return 3
+        elif p in ['vip', '1999', '4']:
+            return 4
+        else:
+            try:
+                return int(p)
+            except:
+                return 0
+    except:
+        return 0
+
+def get_task_reward_for_user(task, uid):
+    plan_id = get_user_plan_id(uid)
+    rewards = task.get('rewards', None)
+    if rewards and isinstance(rewards, dict) and len(rewards) > 0:
+        if plan_id in rewards:
+            return rewards[plan_id]
+        if 'all' in rewards:
+            return rewards['all']
+    return task.get('reward', 5)
+
+def get_tasks_for_today_filtered(uid):
+    today_tasks = [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
+    try:
+        plan_id = get_user_plan_id(uid)
+    except:
+        plan_id = 0
+    filtered = []
+    for task in today_tasks:
+        audience = task.get('audience', 'all')
+        if audience == 'all' or str(audience).lower() == 'free' or audience == 0 or audience == 'all':
+            filtered.append(task)
+        elif isinstance(audience, list):
+            if plan_id in audience or 0 in audience:
+                filtered.append(task)
+        elif isinstance(audience, int):
+            if audience == 0 or audience == plan_id:
+                filtered.append(task)
+        elif str(audience).lower() in ['1', 'basic', '199']:
+            if plan_id in [1,2,3,4]:
+                filtered.append(task)
+        elif str(audience).lower() in ['2', 'premium', '499']:
+            if plan_id in [2,3,4]:
+                filtered.append(task)
+        elif str(audience).lower() in ['3', 'pro', '999']:
+            if plan_id in [3,4]:
+                filtered.append(task)
+        elif str(audience).lower() in ['4', 'vip', '1999']:
+            if plan_id == 4:
+                filtered.append(task)
+        else:
+            filtered.append(task)
+    return filtered
+
+
 # Readable admin names, persisted with the bot data.
 admin_names_db = {}
 notification_thread_started = False
@@ -4351,6 +4491,137 @@ async def support_plans_fixed_cb(update, context):
 
 
 
+
+async def add_task_free_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5:
+        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            context.args.append('free')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_basic_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5:
+        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            context.args.append('basic')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_premium_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5:
+        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            context.args.append('premium')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_all_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5:
+        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            context.args.append('all')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_5plans_cmd(update, context):
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        args = context.args
+        if len(args) < 5:
+            await update.message.reply_text(
+                "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all"
+            )
+            return
+        open_time, close_time, title, link = args[0], args[1], args[2], args[3]
+        reward_arg = args[4]
+        audience_arg = args[5].lower() if len(args) >= 6 else 'all'
+        rewards_dict = {}
+        base_reward = 5
+        if ':' in reward_arg:
+            try:
+                parts = reward_arg.split(',')
+                for part in parts:
+                    if ':' in part:
+                        k, v = part.split(':')
+                        k = k.strip().lower()
+                        v = int(v.strip())
+                        if k in ['free', '0']:
+                            rewards_dict[0] = v
+                        elif k in ['1', 'basic', '199']:
+                            rewards_dict[1] = v
+                        elif k in ['2', 'premium', '499']:
+                            rewards_dict[2] = v
+                        elif k in ['3', 'pro', '999']:
+                            rewards_dict[3] = v
+                        elif k in ['4', 'vip', '1999']:
+                            rewards_dict[4] = v
+                        elif k == 'all':
+                            rewards_dict['all'] = v
+                base_reward = rewards_dict.get('all', list(rewards_dict.values())[0] if rewards_dict else 5)
+            except:
+                base_reward = 5
+        else:
+            try:
+                base_reward = int(reward_arg)
+                rewards_dict = {'all': base_reward}
+            except:
+                base_reward = 5
+        if audience_arg == 'all':
+            audience = 'all'
+        elif ',' in audience_arg:
+            try:
+                audience = [int(x.strip()) if x.strip().isdigit() else x.strip() for x in audience_arg.split(',')]
+            except:
+                audience = 'all'
+        elif audience_arg.isdigit():
+            audience = int(audience_arg)
+        else:
+            audience = audience_arg
+        from datetime import datetime as dt
+        today = str(get_ist_today())
+        global scheduled_task_counter
+        ot = dt.strptime(open_time, "%H:%M").time()
+        ct = dt.strptime(close_time, "%H:%M").time()
+        task = {
+            'id': scheduled_task_counter,
+            'date': today,
+            'open_time': open_time,
+            'close_time': close_time,
+            'open_time_obj': ot,
+            'close_time_obj': ct,
+            'title': title,
+            'link': link,
+            'reward': base_reward,
+            'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
+            'audience': audience,
+            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
+        }
+        scheduled_tasks_db.append(task)
+        scheduled_task_counter+=1
+        save_data()
+        msg = f"✅ Task Added ID:{task['id']} {title} Reward:{base_reward} Audience:{audience}"
+        if rewards_dict and len(rewards_dict)>1:
+            msg += f"\nPer-plan: {rewards_dict}"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def list_tasks_audience_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    today = str(get_ist_today())
+    tasks = [t for t in scheduled_tasks_db if t['date'] == today]
+    if not tasks:
+        await update.message.reply_text("No tasks for today!")
+        return
+    msg = f"📊 Today's Tasks ({today}):\n"
+    for t in tasks:
+        msg += f"ID:{t['id']} {t['open_time']}-{t['close_time']} {t['title']} ₹{t['reward']} Aud:{t.get('audience','all')} Rewards:{t.get('rewards',{})}\n"
+    await update.message.reply_text(msg)
+
+
 async def add_task_manual_cmd(update, context):
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
@@ -4359,7 +4630,7 @@ async def add_task_manual_cmd(update, context):
         if len(args) < 5:
             await update.message.reply_text(
                 "Usage: /add_task_manual <open> <close> <title> <link> <reward> [audience]\n"
-                "Audience: all, free, basic, premium, 0,1,2,3,4\n"
+                "Audience: all, free, 0,1,2,3,4, basic, premium\n"
                 "Ex: /add_task_manual 10:00 11:00 Title https://t.me/... 10 premium"
             )
             return
@@ -5145,15 +5416,12 @@ def main():
             app.add_handler(CommandHandler("add_task_5plans", add_task_5plans_cmd))
             app.add_handler(CommandHandler("add_task_5p", add_task_5plans_cmd))
 
-            # ADD GLOBAL ACTIVITY TRACKER - FIXED
             try:
                 from telegram.ext import TypeHandler
                 app.add_handler(TypeHandler(Update, global_activity_tracker), group=-100)
-                print("Global activity tracker added - FIXED")
+                print("Global activity tracker added")
             except Exception as e:
-                print(f"Tracker add error: {e}")
-            
-            # Setup smart auto system (Your Idea)
+                print(f"Tracker error: {e}")
             try:
                 setup_smart_auto(app)
             except Exception as e:
