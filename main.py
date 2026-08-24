@@ -26,6 +26,12 @@ SCREENSHOT_CHANNEL = -1004295034675
 WITHDRAW_CHANNEL = -1004319888475
 JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
+
+print("="*60)
+print("FINAL CLEANUP VERSION V3 - DUPLICATE FIX - BULK APPROVAL FIX")
+print("Features: Overlap block, Duplicate clean, Bulk approve status")
+print("="*60)
+
 print(f"Screenshot Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs - SEPARATE!")
 print(f"Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
 print(f"Join Channel {JOIN_CHANNEL} = -1004352241439 - SEPARATE!")
@@ -4766,7 +4772,7 @@ def auto_clean_duplicates():
                     cleaned += 1
             missed_tasks_db[uid] = new_list
         if cleaned > 0:
-            print(f"Auto-cleaned {cleaned} duplicate missed tasks on startup")
+            print(f"=== AUTO-CLEANED {cleaned} duplicate missed tasks on startup ===")
             save_data()
     except Exception as e:
         print(f"Auto-clean error: {e}")
