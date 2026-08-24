@@ -706,6 +706,10 @@ promo_campaign_counter = 1
 promo_earnings_db = {}
 promo_views_db = {}
 promo_pending = {}
+# Separate OWN PRODUCT promotion system (not part of Daily Tasks)
+product_promo_db = []
+product_promo_counter = 1
+product_promo_pending = {}
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -792,7 +796,7 @@ def save_data():
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
             "user_task_status", "task_notifications_sent", "skip_db",
             "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
-            "promo_views_db", "promo_pending", "task_images_db", "support_banner_db",
+            "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "task_images_db", "support_banner_db",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "support_plan_image_file_id", "pending_plans",
         ]
@@ -834,8 +838,8 @@ def load_data():
             "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
-            "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db",
-            "promo_earnings_db", "promo_views_db", "promo_pending", "task_images_db",
+            "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db", "product_promo_db",
+            "promo_earnings_db", "promo_views_db", "promo_pending", "product_promo_pending", "task_images_db",
             "support_banner_db", "admin_names_db", "support_plans_db",
         ]
 
@@ -865,6 +869,11 @@ def load_data():
         if "scheduled_task_counter" in data:
             try:
                 globals()["scheduled_task_counter"] = int(data["scheduled_task_counter"])
+            except Exception:
+                pass
+        if "product_promo_counter" in data:
+            try:
+                globals()["product_promo_counter"] = int(data["product_promo_counter"])
             except Exception:
                 pass
         if "promo_campaign_counter" in data:
@@ -929,6 +938,46 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
     promo_campaigns_db.append(campaign)
     promo_campaign_counter += 1
     return campaign
+
+def _product_reward_for_user(task, uid):
+    rewards = task.get('rewards', {}) if isinstance(task, dict) else {}
+    if isinstance(rewards, dict):
+        pid = get_user_plan_id(uid)
+        if pid in rewards:
+            return int(rewards[pid])
+        if str(pid) in rewards:
+            return int(rewards[str(pid)])
+        if 'all' in rewards:
+            return int(rewards['all'])
+    return int(task.get('reward', 0) if isinstance(task, dict) else 0)
+
+def get_active_product_promo_for_user(uid):
+    now = get_ist_now()
+    today = str(get_ist_today())
+    result = []
+    for t in product_promo_db:
+        if t.get('date') != today or t.get('status','active') != 'active':
+            continue
+        try:
+            video_deadline = datetime.combine(get_ist_today(), parse_time_str(t['download_deadline']), tzinfo=IST)
+            shot_open = datetime.combine(get_ist_today(), parse_time_str(t['screenshot_open']), tzinfo=IST)
+            shot_close = datetime.combine(get_ist_today(), parse_time_str(t['screenshot_close']), tzinfo=IST)
+            if shot_close <= shot_open:
+                shot_close += timedelta(days=1)
+            if now <= shot_close:
+                t['_download_open'] = now <= video_deadline
+                t['_screenshot_open'] = shot_open <= now <= shot_close
+                t['_screenshot_closed'] = now > shot_close
+                result.append(t)
+        except Exception:
+            continue
+    return result
+
+def _product_time_text(t):
+    return f"🎥 Video download until: {t.get('download_deadline','')}\n📸 Screenshot: {t.get('screenshot_open','')} → {t.get('screenshot_close','')}"
+
+def _product_reward_text(t, uid):
+    return f"💰 Reward: ₹{_product_reward_for_user(t, uid)}"
 
 def get_active_promo_campaigns():
     today = get_ist_today()
@@ -1325,6 +1374,7 @@ def main_menu():
         [InlineKeyboardButton("👥 My Referrals", callback_data="my_ref"), InlineKeyboardButton("🔗 Refer & Earn", callback_data="refer_earn")],
         [InlineKeyboardButton("💰 Wallet", callback_data="wallet"), InlineKeyboardButton("📅 Daily Task", callback_data="daily")],
         [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw"), InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks")],
+        [InlineKeyboardButton("📢 Product Promotion", callback_data="product_promo")],
         [InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop"), InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled")],
         [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("👤 My Details", callback_data="my_details")],
         [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
@@ -1759,6 +1809,186 @@ async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📢 Promote Your Shop via S2E Network!\n\nYou have shop in Kavali/Palmaner? Want customers? We have members!\n\nMembers put your poster on WhatsApp Status, you get views!\n\n💰 Pricing:\nRs200 per 1000 views\nMembers earn Rs10 per 100 views\nYour profit Rs10 per 100 views\n\nExample: 5000 views = Shop pays Rs1000, Members get Rs500, You profit Rs500\n\nContact @s2edayincome to start!\n\nAdmin command:\n/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
     await q.message.reply_text(msg, reply_markup=main_menu())
 
+async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    promos=get_active_product_promo_for_user(uid)
+    if not promos:
+        await q.message.reply_text("📢 PRODUCT PROMOTION\n\nNo active product promotion right now.", reply_markup=main_menu())
+        return
+    kb=[]
+    lines=["📢 PRODUCT PROMOTION\n"]
+    for t in promos[:10]:
+        lines.append(f"🎥 {t.get('title','Product Promotion')}\n{_product_time_text(t)}\n{_product_reward_text(t,uid)}\n")
+        tid=t['id']
+        if t.get('_download_open'):
+            kb.append([InlineKeyboardButton("⬇️ Download Video", callback_data=f"product_download_{tid}")])
+        if t.get('_screenshot_open'):
+            kb.append([InlineKeyboardButton("📸 Submit Screenshot", callback_data=f"product_screenshot_{tid}")])
+        elif not t.get('_download_open'):
+            lines.append("⏳ Screenshot submission will open at the scheduled time.\n")
+    await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup(kb or [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+
+async def product_download_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    try: tid=int(q.data.split('_')[-1])
+    except: return
+    t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
+    if not t:
+        await q.message.reply_text("❌ Product promotion not found.", reply_markup=main_menu()); return
+    promos=get_active_product_promo_for_user(uid)
+    t2=next((x for x in promos if int(x.get('id',-1))==tid),None)
+    if not t2 or not t2.get('_download_open'):
+        await q.message.reply_text(f"⏰ Video download is closed. Download deadline was {t.get('download_deadline','') }.", reply_markup=main_menu()); return
+    if not t.get('video_file_id'):
+        await q.message.reply_text("❌ Video is not available yet. Please contact Admin.", reply_markup=main_menu()); return
+    try:
+        await context.bot.send_video(chat_id=uid, video=t['video_file_id'], caption=(
+            f"📢 {t.get('title','Product Promotion')}\n\n{t.get('description','')}\n\n"
+            f"⬇️ Download this video and put it on your WhatsApp Status.\n"
+            f"{_product_time_text(t)}\n{_product_reward_text(t,uid)}"
+        ))
+    except Exception as e:
+        await q.message.reply_text(f"❌ Could not send video: {e}", reply_markup=main_menu())
+
+async def product_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    uid=q.from_user.id
+    try: tid=int(q.data.split('_')[-1])
+    except: return
+    t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
+    promos=get_active_product_promo_for_user(uid)
+    t2=next((x for x in promos if int(x.get('id',-1))==tid),None)
+    if not t2 or not t2.get('_screenshot_open'):
+        await q.message.reply_text(f"⏰ Screenshot submission is available only from {t.get('screenshot_open','')} to {t.get('screenshot_close','')}.", reply_markup=main_menu())
+        return
+    if uid in product_promo_pending:
+        await q.message.reply_text("⏳ Your product promotion screenshot is already pending admin verification.", reply_markup=main_menu()); return
+    context.user_data['awaiting_product_screenshot']=True
+    context.user_data['product_screenshot_id']=tid
+    await q.message.reply_text(
+        f"📸 Send the WhatsApp Status screenshot for:\n{t.get('title','Product Promotion')}\n\n"
+        f"Submission window: {t.get('screenshot_open','')} → {t.get('screenshot_close','')}\n"
+        "Send the screenshot as a photo."
+    )
+
+async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid=update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Admin only!"); return
+    text=update.message.text.replace('/add_product_promo','',1).strip()
+    if not text:
+        await update.message.reply_text(
+            "Usage:\n/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
+            "Example:\n/add_product_promo 10:00AM 8:00PM 10:00PM My Product free:10,basic:15,premium:20,pro:25,vip:30 | Download the video, put it on WhatsApp Status, keep it for 6 hours, then send screenshot during 8PM-10PM.\n\nThen send the video to the bot."
+        ); return
+    if '|' in text:
+        left, desc=text.split('|',1); desc=desc.strip()
+    else:
+        left, desc=text, "Download the video and put it on your WhatsApp Status. Send the screenshot only during the scheduled screenshot window."
+    import re
+    urls=re.findall(r'https?://\S+', left)
+    parts=left.split()
+    if len(parts)<5:
+        await update.message.reply_text("Need: download_deadline screenshot_open screenshot_close title reward_spec | instructions"); return
+    download_deadline, shot_open, shot_close=parts[:3]
+    reward_spec=parts[-1]
+    title=' '.join(parts[3:-1]).strip()
+    rewards={}; base=0
+    try:
+        if ':' in reward_spec:
+            for piece in reward_spec.split(','):
+                k,v=piece.split(':',1); v=int(v)
+                kl=k.strip().lower()
+                pid={'free':0,'basic':1,'premium':2,'pro':3,'vip':4}.get(kl, int(kl) if kl.isdigit() else 0)
+                rewards[pid]=v
+            base=rewards.get(0,next(iter(rewards.values())))
+        else:
+            base=int(reward_spec); rewards={'all':base}
+    except Exception:
+        await update.message.reply_text("❌ Invalid reward. Example: free:10,basic:15,premium:20,pro:25,vip:30"); return
+    try:
+        d=parse_time_str(download_deadline); so=parse_time_str(shot_open); sc=parse_time_str(shot_close)
+        if not d or not so or not sc: raise ValueError('Invalid time')
+    except Exception:
+        await update.message.reply_text("❌ Invalid time. Use examples 10:00AM 8:00PM 10:00PM"); return
+    global product_promo_counter
+    task={'id':product_promo_counter,'date':str(get_ist_today()),'title':title or 'Product Promotion','description':desc,'download_deadline':d.strftime('%H:%M'),'screenshot_open':so.strftime('%H:%M'),'screenshot_close':sc.strftime('%H:%M'),'reward':base,'rewards':rewards,'video_file_id':None,'status':'waiting_video','created_at':get_ist_now()}
+    product_promo_db.append(task); product_promo_counter+=1
+    context.user_data['awaiting_product_video']=task['id']
+    save_data()
+    await update.message.reply_text(f"✅ Product Promotion ID {task['id']} created.\n\n🎥 Now send the promotion VIDEO to this bot.\n\nDownload deadline: {task['download_deadline']}\nScreenshot: {task['screenshot_open']} → {task['screenshot_close']}\n{_product_reward_text(task,uid)}")
+
+async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid=update.effective_user.id
+        if not is_admin(uid): return
+        tid=context.user_data.get('awaiting_product_video')
+        if not tid: return
+        if not update.message.video and not update.message.document: return
+        file_id=update.message.video.file_id if update.message.video else update.message.document.file_id
+        t=next((x for x in product_promo_db if int(x.get('id',-1))==int(tid)),None)
+        if not t: return
+        t['video_file_id']=file_id; t['status']='active'
+        context.user_data.pop('awaiting_product_video',None)
+        save_data()
+        await update.message.reply_text(f"✅ Product Promotion {tid} video saved and activated.\nMembers will see it in 📢 Product Promotion, NOT in Daily Task.")
+    except Exception as e:
+        print(f'product_video_handler error: {e}')
+
+async def product_screenshot_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        uid=update.effective_user.id
+        if is_admin(uid) or not context.user_data.get('awaiting_product_screenshot'): return
+        if not update.message.photo and not update.message.document: return
+        tid=int(context.user_data.get('product_screenshot_id'))
+        t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
+        promos=get_active_product_promo_for_user(uid)
+        t2=next((x for x in promos if int(x.get('id',-1))==tid),None)
+        if not t or not t2 or not t2.get('_screenshot_open'):
+            await update.message.reply_text("⏰ Screenshot submission window is closed.", reply_markup=main_menu()); return
+        file_id=update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+        unique_id=update.message.photo[-1].file_unique_id if update.message.photo else update.message.document.file_unique_id
+        if unique_id in screenshot_hashes:
+            await update.message.reply_text("⚠️ Same screenshot detected.", reply_markup=main_menu()); return
+        screenshot_hashes.add(unique_id)
+        reward=_product_reward_for_user(t,uid)
+        product_promo_pending[uid]={'uid':uid,'promo_id':tid,'file_id':file_id,'reward':reward,'submitted_at':get_ist_now(),'status':'pending'}
+        context.user_data.pop('awaiting_product_screenshot',None); context.user_data.pop('product_screenshot_id',None)
+        await update.message.reply_text("✅ Product promotion screenshot received! Waiting for admin approval.", reply_markup=main_menu())
+        chan=get_screenshot_channel()
+        if chan:
+            kb=InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Approve ₹{reward}", callback_data=f"product_approve_{uid}_{tid}"),InlineKeyboardButton("❌ Reject", callback_data=f"product_reject_{uid}_{tid}")]])
+            await context.bot.send_photo(chat_id=chan,photo=file_id,caption=(f"📢 PRODUCT PROMOTION SCREENSHOT\n👤 {users_db.get(uid,{}).get('name','Unknown')}\n🆔 {uid}\n📋 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n📅 {get_ist_today()}"),reply_markup=kb)
+    except Exception as e:
+        print(f'product_screenshot_photo_handler error: {e}')
+
+async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return
+    try: uid=int(q.data.split('_')[2]); tid=int(q.data.split('_')[3])
+    except: return
+    sub=product_promo_pending.get(uid)
+    if not sub or int(sub.get('promo_id',-1))!=tid:
+        await q.message.reply_text('❌ Product submission not found or already processed.'); return
+    reward=int(sub.get('reward',0)); promo_earnings_db[uid]=promo_earnings_db.get(uid,0)+reward
+    del product_promo_pending[uid]; save_data()
+    await q.message.reply_text(f"✅ Product promotion approved: User {uid} +₹{reward}")
+    try: await context.bot.send_message(chat_id=uid,text=f"✅ Product Promotion Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
+    except: pass
+
+async def product_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    if not is_admin(q.from_user.id): return
+    try: uid=int(q.data.split('_')[2]); tid=int(q.data.split('_')[3])
+    except: return
+    sub=product_promo_pending.get(uid)
+    if sub and int(sub.get('promo_id',-1))==tid: del product_promo_pending[uid]
+    save_data(); await q.message.reply_text(f"❌ Product promotion screenshot rejected for User {uid}.")
+    try: await context.bot.send_message(chat_id=uid,text="❌ Product Promotion Screenshot Rejected. Please follow the instructions and submit a valid screenshot during the allowed time.",reply_markup=main_menu())
+    except: pass
+
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
@@ -1898,6 +2128,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Title: {task.get('title', '')}\n"
                     f"Reward: ₹{task.get('reward', 5)}\n"
                     f"Link: {task.get('link', '')}\n\n"
+                    f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
                     f"Tasks today: {count}/{limit}\n\n"
                     "Click Upload Screenshot after completing!",
                     reply_markup=InlineKeyboardMarkup([[
@@ -3431,6 +3662,7 @@ async def missed_reopen_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_id=tid
     text=(f"🔄 MISSED TASK {task.get('task_number','?')} REOPENED\n\n"
           f"Title: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
+          f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
           "Complete the task using the link above, then tap Upload Screenshot.")
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data=f"missed_upload_{task_id}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
     await q.message.reply_text(text, reply_markup=kb)
@@ -4444,43 +4676,94 @@ async def support_plans_fixed_cb(update, context):
 
 
 
+def _split_task_description_args(args):
+    """Support optional task instructions after a | separator."""
+    if not args:
+        return list(args), ""
+    vals = list(args)
+    if "|" in vals:
+        idx = vals.index("|")
+        return vals[:idx], " ".join(vals[idx+1:]).strip()
+    # Also accept a single argument containing the separator.
+    for i, val in enumerate(vals):
+        if "|" in str(val):
+            left, right = str(val).split("|", 1)
+            new_vals = vals[:i]
+            if left.strip():
+                new_vals.append(left.strip())
+            return new_vals, (right.strip() + (" " + " ".join(vals[i+1:]) if vals[i+1:] else "")).strip()
+    return vals, ""
+
 async def add_task_free_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
         return
-    if len(context.args) >= 5:
-        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
-            context.args.append('free')
+    clean_args, description = _split_task_description_args(context.args)
+    if len(clean_args) >= 5:
+        if clean_args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            clean_args.append('free')
+    old_args = context.args
+    context.args = clean_args
+    before_id = scheduled_task_counter
     await add_task_manual_cmd(update, context)
+    context.args = old_args
+    if description and scheduled_task_counter > before_id and scheduled_tasks_db:
+        task = scheduled_tasks_db[-1]
+        task['description'] = description
+        save_data()
 
 async def add_task_basic_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
         return
-    if len(context.args) >= 5:
-        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
-            context.args.append('basic')
+    clean_args, description = _split_task_description_args(context.args)
+    if len(clean_args) >= 5:
+        if clean_args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            clean_args.append('basic')
+    old_args = context.args
+    context.args = clean_args
+    before_id = scheduled_task_counter
     await add_task_manual_cmd(update, context)
+    context.args = old_args
+    if description and scheduled_task_counter > before_id and scheduled_tasks_db:
+        scheduled_tasks_db[-1]['description'] = description
+        save_data()
 
 async def add_task_premium_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
         return
-    if len(context.args) >= 5:
-        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
-            context.args.append('premium')
+    clean_args, description = _split_task_description_args(context.args)
+    if len(clean_args) >= 5:
+        if clean_args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            clean_args.append('premium')
+    old_args = context.args
+    context.args = clean_args
+    before_id = scheduled_task_counter
     await add_task_manual_cmd(update, context)
+    context.args = old_args
+    if description and scheduled_task_counter > before_id and scheduled_tasks_db:
+        scheduled_tasks_db[-1]['description'] = description
+        save_data()
 
 async def add_task_all_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
         return
-    if len(context.args) >= 5:
-        if context.args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
-            context.args.append('all')
+    clean_args, description = _split_task_description_args(context.args)
+    if len(clean_args) >= 5:
+        if clean_args[-1].lower() not in ['all','free','basic','premium','0','1','2','3','4']:
+            clean_args.append('all')
+    old_args = context.args
+    context.args = clean_args
+    before_id = scheduled_task_counter
     await add_task_manual_cmd(update, context)
+    context.args = old_args
+    if description and scheduled_task_counter > before_id and scheduled_tasks_db:
+        scheduled_tasks_db[-1]['description'] = description
+        save_data()
 
 async def add_task_5plans_cmd(update, context):
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
             return
-        args = context.args
+        args, description = _split_task_description_args(context.args)
         if len(args) < 5:
             await update.message.reply_text(
                 "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all"
@@ -4563,6 +4846,7 @@ async def add_task_5plans_cmd(update, context):
             'reward': base_reward,
             'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
             'audience': audience,
+            'description': description,
             'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
         }
         scheduled_tasks_db.append(task)
@@ -5410,6 +5694,8 @@ def main():
                         pass
 
             #  Add simple handlers with high priority - No ConversationHandler!
+            app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, product_video_handler), group=0)
+            app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, product_screenshot_photo_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.PHOTO, v56_screenshot_simple_handler), group=2)
@@ -5451,6 +5737,7 @@ def main():
             app.add_handler(CommandHandler("pending", pending_cmd))
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
+            app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
             # Support Plans banner command. Photo handling is integrated into the
             # existing high-priority admin photo handler so normal task posters remain safe.
@@ -5491,7 +5778,9 @@ def main():
                 context.user_data['awaiting_daily_screenshot']=False
                 context.user_data['daily_screenshot_task_id']=tid
                 context.user_data.pop('missed_reopened_task_id',None)
-                text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\nAfter completing, tap Upload Screenshot.")
+                text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
+                      f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
+                      "After completing, tap Upload Screenshot.")
                 kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
                 await q.message.reply_text(text, reply_markup=kb)
             app.add_handler(CallbackQueryHandler(daily_open_cb, pattern=r"^daily_open_-?\d+$"))
@@ -5499,6 +5788,11 @@ def main():
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
             app.add_handler(CallbackQueryHandler(promo_tasks_cb, pattern="^promo_tasks$"))
             app.add_handler(CallbackQueryHandler(promo_join_cb, pattern="^promo_join_"))
+            app.add_handler(CallbackQueryHandler(product_promo_cb, pattern="^product_promo$"))
+            app.add_handler(CallbackQueryHandler(product_download_cb, pattern=r"^product_download_\d+$"))
+            app.add_handler(CallbackQueryHandler(product_screenshot_cb, pattern=r"^product_screenshot_\d+$"))
+            app.add_handler(CallbackQueryHandler(product_approve_cb, pattern=r"^product_approve_\d+_\d+$"))
+            app.add_handler(CallbackQueryHandler(product_reject_cb, pattern=r"^product_reject_\d+_\d+$"))
             app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
             app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
