@@ -4678,12 +4678,15 @@ def main():
     except:
         pass
 
+    # FIX: keep retrying forever after transient Render/Telegram/network failures.
+    # The previous build referenced max_retries without defining it, which crashed
+    # main.py before Telegram polling started.
     retry_count = 0
     while True:
-        print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - Polling NOW! No Sleep! FINAL! NameError Fixed!")
+        print(f"\nV56 Build attempt {retry_count+1} - Polling NOW! No Sleep! FINAL!")
         app = None
         try:
-            print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - FINAL!")
+            print(f"\nV56 Build attempt {retry_count+1} - FINAL!")
             if not BOT_TOKEN:
                 raise RuntimeError("BOT_TOKEN environment variable is missing")
             app = Application.builder().token(BOT_TOKEN).build()
