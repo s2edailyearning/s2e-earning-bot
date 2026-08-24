@@ -705,6 +705,197 @@ promo_pending = {}
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
+
+# === PERSISTENT STORAGE - RESTORED / SAFE JSON VERSION ===
+# The previous build called load_data()/save_data() from main(), but those
+# functions were missing from this file. That caused Render to stop with:
+# NameError: name 'load_data' is not defined
+DATA_FILE = os.getenv("DATA_FILE", "bot_data.json")
+
+
+def _json_safe(value):
+    """Convert bot state to JSON-safe values without changing live objects."""
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, set):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    return value
+
+
+def _restore_int_keys(target):
+    """Restore Telegram user-id keyed dictionaries after JSON loading."""
+    if not isinstance(target, dict):
+        return
+    for key in list(target.keys()):
+        if isinstance(key, str) and key.lstrip("-").isdigit():
+            value = target.pop(key)
+            target[int(key)] = value
+
+
+def _restore_scheduled_task_times():
+    """Rebuild time objects lost when scheduled tasks are stored as JSON."""
+    for task in scheduled_tasks_db:
+        if not isinstance(task, dict):
+            continue
+        for field, obj_field in (
+            ("open_time", "open_time_obj"),
+            ("close_time", "close_time_obj"),
+            ("next_time", "next_time_obj"),
+        ):
+            if not task.get(obj_field):
+                raw = task.get(field)
+                if raw:
+                    parsed = parse_time_str(str(raw))
+                    if parsed:
+                        task[obj_field] = parsed
+
+
+def _restore_loaded_sets_and_times():
+    """Restore non-JSON native containers used by the bot."""
+    _restore_scheduled_task_times()
+    for campaign in promo_campaigns_db:
+        if isinstance(campaign, dict):
+            members = campaign.get("members_joined", set())
+            if isinstance(members, list):
+                campaign["members_joined"] = set(members)
+    if not isinstance(screenshot_hashes, set):
+        try:
+            screenshot_hashes.clear()
+            screenshot_hashes.update([])
+        except Exception:
+            pass
+    if not isinstance(task_notifications_sent, set):
+        try:
+            task_notifications_sent = set(task_notifications_sent or [])
+        except Exception:
+            pass
+
+
+def save_data():
+    """Persist the bot's important runtime state to bot_data.json."""
+    try:
+        state_names = [
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "banned_users", "warnings_db", "pending_daily", "user_plans",
+            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
+            "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
+            "user_task_status", "task_notifications_sent", "skip_db",
+            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
+            "promo_views_db", "promo_pending", "task_images_db", "support_banner_db",
+            "admin_names_db", "support_plans_db", "pending_plan_purchases",
+            "support_plan_image_file_id", "pending_plans",
+        ]
+        data = {}
+        for name in state_names:
+            if name in globals():
+                data[name] = _json_safe(globals()[name])
+
+        # Atomic-ish write: finish a temporary file first, then replace the old file.
+        temp_file = DATA_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_file, DATA_FILE)
+        print(f"Data saved OK - {len(data)} state sections")
+        return True
+    except Exception as e:
+        print(f"Save error: {e}")
+        return False
+
+
+def load_data():
+    """Load persisted state if bot_data.json exists; otherwise keep defaults."""
+    try:
+        if not os.path.exists(DATA_FILE):
+            print("No bot_data.json found - starting with fresh/default data")
+            return False
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            print("Load error: bot_data.json is not a JSON object")
+            return False
+
+        # Dictionaries/lists that should be updated in-place so existing references
+        # used by handlers remain valid.
+        container_names = [
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "warnings_db", "pending_daily", "user_plans", "pending_plans",
+            "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
+            "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db",
+            "promo_earnings_db", "promo_views_db", "promo_pending", "task_images_db",
+            "support_banner_db", "admin_names_db", "support_plans_db",
+        ]
+
+        for name in container_names:
+            if name not in data or name not in globals():
+                continue
+            current = globals()[name]
+            loaded = data[name]
+            if isinstance(current, dict) and isinstance(loaded, dict):
+                current.clear()
+                current.update(loaded)
+            elif isinstance(current, list) and isinstance(loaded, list):
+                current.clear()
+                current.extend(loaded)
+
+        # Sets are saved as lists.
+        if "banned_users" in data:
+            banned_users.clear()
+            banned_users.update(data.get("banned_users") or [])
+        if "screenshot_hashes" in data:
+            screenshot_hashes.clear()
+            screenshot_hashes.update(data.get("screenshot_hashes") or [])
+        if "task_notifications_sent" in data:
+            task_notifications_sent.clear()
+            task_notifications_sent.update(data.get("task_notifications_sent") or [])
+
+        if "scheduled_task_counter" in data:
+            try:
+                globals()["scheduled_task_counter"] = int(data["scheduled_task_counter"])
+            except Exception:
+                pass
+        if "promo_campaign_counter" in data:
+            try:
+                globals()["promo_campaign_counter"] = int(data["promo_campaign_counter"])
+            except Exception:
+                pass
+
+        # JSON changes Telegram/user IDs to strings. Restore integer keys where
+        # the rest of this bot expects integer user IDs.
+        for name in (
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "warnings_db", "pending_daily", "user_plans", "pending_plans",
+            "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
+            "user_task_status", "skip_db", "promo_earnings_db", "promo_views_db",
+            "promo_pending", "admin_names_db",
+        ):
+            if name in globals() and isinstance(globals()[name], dict):
+                _restore_int_keys(globals()[name])
+
+        _restore_loaded_sets_and_times()
+        print(
+            f"Data loaded - Users: {len(users_db)} | Scheduled: {len(scheduled_tasks_db)} "
+            f"| Plans: {len(support_plans_db)} | UserPlans: {len(user_plans)}"
+        )
+        return True
+    except Exception as e:
+        print(f"Load error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
     global promo_campaign_counter
     campaign = {
