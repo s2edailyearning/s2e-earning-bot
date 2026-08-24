@@ -35,10 +35,6 @@ WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
 JOIN_LINK = "https://t.me/S2E_Daily_Earning"
 MISSED_ENABLED = True
 
-# Telegram content protection for bot-delivered user images.
-# This prevents forwarding/saving and, on supported Telegram clients, screenshots.
-PROTECT_USER_MEDIA = True
-
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 PAYMENT_UPI = ADMIN_UPI
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
@@ -264,7 +260,7 @@ async def _send_support_banner(message):
     try:
         file_id = support_banner_db.get("file_id")
         if file_id:
-            await message.reply_photo(photo=file_id, protect_content=PROTECT_USER_MEDIA)
+            await message.reply_photo(photo=file_id)
             return True
     except Exception as e:
         print(f"Support banner send error: {e}")
@@ -334,7 +330,7 @@ async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     kb = [[InlineKeyboardButton("📤 I Paid - Send Proof", callback_data=f"plan_proof_id_{pid}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
     if plan.get("image_file_id"):
         try:
-            await q.message.reply_photo(photo=plan["image_file_id"], caption=text, reply_markup=InlineKeyboardMarkup(kb), protect_content=PROTECT_USER_MEDIA); return
+            await q.message.reply_photo(photo=plan["image_file_id"], caption=text, reply_markup=InlineKeyboardMarkup(kb)); return
         except Exception: pass
     await q.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1584,7 +1580,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     image_file_id = current.get('image_file_id') or task_images_db.get(current['id'])
     if image_file_id:
         try:
-            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]), protect_content=PROTECT_USER_MEDIA)
+            await q.message.reply_photo(photo=image_file_id, caption=msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")], [InlineKeyboardButton("⏭️ Skip Task", callback_data=f"daily_skip_{current['id']}")]]))
             return
         except Exception as e:
             print(f"Image send error {e}")
@@ -1997,7 +1993,7 @@ async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             else:
                 await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! V56 FINAL! Task image same issue fixed!", reply_markup=main_menu())
             try:
-                await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set via caption! FINAL! Task image fix!", protect_content=PROTECT_USER_MEDIA)
+                await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set via caption! FINAL! Task image fix!")
             except:
                 try:
                     await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
@@ -2066,7 +2062,7 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
             print(f"V56 Image Poster Set for Task {task_id} - Task not found but file_id saved! FINAL!")
         await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Task image same issue fixed!", reply_markup=main_menu())
         try:
-            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! Members will see this! FINAL! Task image same issue fixed!", protect_content=PROTECT_USER_MEDIA)
+            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! Members will see this! FINAL! Task image same issue fixed!")
         except:
             try:
                 await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
@@ -4678,17 +4674,13 @@ def main():
     except:
         pass
 
-    # FIX: keep retrying forever after transient Render/Telegram/network failures.
-    # The previous build referenced max_retries without defining it, which crashed
-    # main.py before Telegram polling started.
     retry_count = 0
-    while True:
-        print(f"\nV56 Build attempt {retry_count+1} - Polling NOW! No Sleep! FINAL!")
+    max_retries = 100
+    while retry_count < max_retries:
+        print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - Polling NOW! No Sleep! FINAL! NameError Fixed!")
         app = None
         try:
-            print(f"\nV56 Build attempt {retry_count+1} - FINAL!")
-            if not BOT_TOKEN:
-                raise RuntimeError("BOT_TOKEN environment variable is missing")
+            print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - FINAL!")
             app = Application.builder().token(BOT_TOKEN).build()
             app.add_error_handler(error_handler)
             try:
@@ -4862,7 +4854,7 @@ def main():
                         print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
                     await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
                     try:
-                        await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!", protect_content=PROTECT_USER_MEDIA)
+                        await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
                     except:
                         try:
                             await context.bot.send_document(chat_id=uid, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
@@ -5164,19 +5156,13 @@ def main():
                     pass
 
         except Exception as e:
-            from telegram.error import InvalidToken
-            if isinstance(e, InvalidToken):
-                print("❌ BOT_TOKEN IS INVALID/REVOKED. Update Render Environment -> BOT_TOKEN with the current @BotFather token, then redeploy.")
-                import traceback
-                traceback.print_exc()
-                break
             print(f"V56 Polling attempt {retry_count+1} failed: {e}")
             if isinstance(e, RuntimeError) and "Event loop is closed" in str(e):
                 print("V56 EVENT LOOP RECOVERY: fresh asyncio loop will be created on the next attempt")
             import traceback
             traceback.print_exc()
             retry_count += 1
-            time.sleep(min(30, 5 + retry_count // 10))
+            time.sleep(5)
             continue
 
 if __name__ == "__main__":
