@@ -1635,31 +1635,76 @@ def get_active_product_promo():
             return p
     return None
 
+def get_product_promo_user_state(uid, campaign_id):
+    """Return pending/approved state for this user and today's exact campaign.
+    This is checked BEFORE time-window checks so an existing submission keeps
+    its status even after the screenshot window closes.
+    """
+    pending = product_promo_pending.get(uid)
+    if pending and int(pending.get("campaign_id", -1)) == int(campaign_id):
+        return "pending"
+    approved = product_promo_approved.get(uid, {})
+    if str(campaign_id) in approved or campaign_id in approved:
+        return "approved"
+    return None
+
 async def product_promotion_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
+    uid = q.from_user.id
     campaign=get_active_product_promo()
     if not campaign:
-        await q.message.reply_text("📢 PRODUCT PROMOTION\n\nNo product promotion is active right now.", reply_markup=main_menu())
+        await q.message.reply_text("📢 PRODUCT PROMOTION\\n\\nNo product promotion is active right now.", reply_markup=main_menu())
         return
+
+    campaign_id = int(campaign["id"])
+    state = get_product_promo_user_state(uid, campaign_id)
+
+    # IMPORTANT: submission state has priority over the time window.
+    # After upload, the user must continue to see Waiting/Approved even if
+    # the screenshot window has already closed.
+    if state == "pending":
+        await q.message.reply_text(
+            "⏳ PRODUCT PROMOTION\\n\\n"
+            "📸 Screenshot already uploaded.\\n"
+            "⏳ Waiting for Admin approval.\\n\\n"
+            "Please wait. Do not upload another screenshot for today's promotion.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+            ])
+        )
+        return
+
+    if state == "approved":
+        await q.message.reply_text(
+            "✅ PRODUCT PROMOTION\\n\\n"
+            "💰 Promotion amount has already been added to your wallet.\\n"
+            "🚫 No more Product Promotion for today.\\n"
+            "⏰ Please wait for the next Product Promotion campaign.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+            ])
+        )
+        return
+
     download_open, screenshot_open = _product_promo_now_window(campaign)
     msg=(
-        "📢 PRODUCT PROMOTION\n\n"
-        f"🎁 Reward: ₹{campaign.get('reward',0):g}\n"
-        f"⬇️ Video download: {campaign.get('download_start')} - {campaign.get('download_end')}\n"
-        f"📸 Screenshot: {campaign.get('screenshot_start')} - {campaign.get('screenshot_end')}\n\n"
-        f"📝 {campaign.get('message','')}\n\n"
-        "📌 Steps:\n"
-        "1️⃣ Download the promotion video.\n"
-        "2️⃣ Put the video on your WhatsApp Status.\n"
-        "3️⃣ Keep it on your Status as instructed.\n"
-        "4️⃣ Send the screenshot only during the screenshot window.\n\n"
+        "📢 PRODUCT PROMOTION\\n\\n"
+        f"🎁 Reward: ₹{campaign.get('reward',0):g}\\n"
+        f"⬇️ Video download: {campaign.get('download_start')} - {campaign.get('download_end')}\\n"
+        f"📸 Screenshot: {campaign.get('screenshot_start')} - {campaign.get('screenshot_end')}\\n\\n"
+        f"📝 {campaign.get('message','')}\\n\\n"
+        "📌 Steps:\\n"
+        "1️⃣ Download the promotion video.\\n"
+        "2️⃣ Put the video on your WhatsApp Status.\\n"
+        "3️⃣ Keep it on your Status as instructed.\\n"
+        "4️⃣ Send the screenshot only during the screenshot window.\\n\\n"
     )
     kb=[]
     if download_open:
-        msg += "✅ Video download is OPEN now.\n"
+        msg += "✅ Video download is OPEN now.\\n"
         kb.append([InlineKeyboardButton("🎥 Get / Download Video", callback_data=f"product_video_{campaign['id']}")])
     else:
-        msg += f"⏳ Video download is closed. It opens {campaign.get('download_start')} - {campaign.get('download_end')}.\n"
+        msg += f"⏳ Video download is closed. It opens {campaign.get('download_start')} - {campaign.get('download_end')}.\\n"
     if screenshot_open:
         msg += "📸 Screenshot upload is OPEN now."
         kb.append([InlineKeyboardButton("📤 Send Screenshot", callback_data=f"product_upload_{campaign['id']}")])
@@ -1684,15 +1729,42 @@ async def product_video_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def product_upload_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
+    uid = q.from_user.id
     c=get_active_product_promo()
     if not c or str(c.get("id")) != q.data.rsplit("_",1)[-1]:
         await q.message.reply_text("❌ Promotion is no longer active.", reply_markup=main_menu()); return
+
+    campaign_id = int(c["id"])
+    state = get_product_promo_user_state(uid, campaign_id)
+
+    # Check existing submission FIRST. Never let an expired time window hide
+    # a pending/approved state.
+    if state == "pending":
+        await q.message.reply_text(
+            "⏳ Screenshot already uploaded. Waiting for Admin approval.\\n"
+            "Please do not upload again.",
+            reply_markup=main_menu()
+        )
+        return
+    if state == "approved":
+        await q.message.reply_text(
+            "✅ Promotion amount already added to your wallet.\\n"
+            "🚫 No more promotion for today. Please wait for the next campaign.",
+            reply_markup=main_menu()
+        )
+        return
+
     _,open_now=_product_promo_now_window(c)
     if not open_now:
-        await q.message.reply_text(f"🔒 Screenshot upload is closed. Open only {c.get('screenshot_start')}-{c.get('screenshot_end')}.", reply_markup=main_menu()); return
+        await q.message.reply_text(
+            f"🔒 Screenshot upload is closed. Open only {c.get('screenshot_start')}-{c.get('screenshot_end')}.",
+            reply_markup=main_menu()
+        )
+        return
+
     context.user_data["awaiting_product_screenshot"]=c["id"]
     await q.message.reply_text(
-        "📸 PRODUCT PROMOTION SCREENSHOT\n\nSend one clear screenshot showing your WhatsApp Status.\n"
+        "📸 PRODUCT PROMOTION SCREENSHOT\\n\\nSend one clear screenshot showing your WhatsApp Status.\\n"
         "This screenshot will go to the Task Screenshot Channel for verification.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
     )
@@ -1706,30 +1778,32 @@ async def product_screenshot_photo_handler(update: Update, context: ContextTypes
         context.user_data.pop("awaiting_product_screenshot", None)
         await update.message.reply_text("❌ Promotion is no longer active.", reply_markup=main_menu())
         return
+    campaign_id = int(c["id"])
+
+    # Check pending/approved BEFORE checking the clock. If the user already
+    # submitted, an expired screenshot window must not turn into "closed".
+    state = get_product_promo_user_state(uid, campaign_id)
+    if state == "pending":
+        context.user_data.pop("awaiting_product_screenshot", None)
+        await update.message.reply_text(
+            "⏳ Your Product Promotion screenshot is already uploaded.\\n"
+            "Waiting for Admin approval. Please do not upload again.",
+            reply_markup=main_menu(),
+        )
+        return
+    if state == "approved":
+        context.user_data.pop("awaiting_product_screenshot", None)
+        await update.message.reply_text(
+            "✅ Promotion amount already added to your wallet.\\n"
+            "🚫 No more Product Promotion for today. Please wait for the next campaign.",
+            reply_markup=main_menu(),
+        )
+        return
+
     _, open_now = _product_promo_now_window(c)
     if not open_now:
         context.user_data.pop("awaiting_product_screenshot", None)
         await update.message.reply_text("🔒 Screenshot upload is closed now.", reply_markup=main_menu())
-        return
-
-    campaign_id = int(c["id"])
-    existing = product_promo_pending.get(uid)
-    if existing and int(existing.get("campaign_id", -1)) == campaign_id:
-        context.user_data.pop("awaiting_product_screenshot", None)
-        await update.message.reply_text(
-            "⏳ Your Product Promotion screenshot is already submitted.\n"
-            "Please wait for Admin approval.",
-            reply_markup=main_menu(),
-        )
-        return
-    approved = product_promo_approved.get(uid, {})
-    if str(campaign_id) in approved or campaign_id in approved:
-        context.user_data.pop("awaiting_product_screenshot", None)
-        await update.message.reply_text(
-            "✅ This Product Promotion is already approved for you.\n"
-            "Please wait for the next Product Promotion campaign.",
-            reply_markup=main_menu(),
-        )
         return
 
     if not update.message.photo:
