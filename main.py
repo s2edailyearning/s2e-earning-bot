@@ -2847,10 +2847,19 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         ADMIN_ID_LIST.append(uid)
         return
     try:
-        text = update.message.text.replace('/add_task','').strip()
+        text = update.message.text.replace('/add_task','',1).strip()
         if not text:
-            await update.message.reply_text("Usage: /add_task open close next title")
+            await update.message.reply_text("Usage: /add_task open close next Title Link Reward | Instructions")
             return
+
+        # Optional instruction separator: everything after the first | is stored
+        # as task instructions instead of accidentally becoming part of the title.
+        description = ""
+        if "|" in text:
+            text, description = text.split("|", 1)
+            text = text.strip()
+            description = description.strip()
+
         import re
         urls = re.findall(r'https?://\S+', text)
         link = urls[0] if urls else CHANNEL_LINK
@@ -2881,7 +2890,10 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         title = remaining if remaining else f"Task at {open_str}"
         success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}")
+            if description:
+                result['description'] = description
+                save_data()
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}" + ("\n📝 Instructions saved" if description else ""))
         else:
             await update.message.reply_text(f"❌ Failed: {result}")
     except Exception as e:
