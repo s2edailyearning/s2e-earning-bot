@@ -696,6 +696,306 @@ def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next
 def get_tasks_for_today():
     return [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
 
+def get_tasks_for_today_filtered(uid):
+    """Filter tasks based on user's plan - FREE / BASIC / PREMIUM / ALL"""
+    today_tasks = [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
+    try:
+        user_plan_record = _get_user_plan_record(uid) if '_get_user_plan_record' in globals() else None
+        plan_type = "free"
+        if user_plan_record:
+            if isinstance(user_plan_record, dict):
+                plan_type = user_plan_record.get('plan', 'free').lower()
+            elif isinstance(user_plan_record, str):
+                plan_type = user_plan_record.lower()
+        if plan_type in ['basic', '199']:
+            plan_type = 'basic'
+        elif plan_type in ['premium', '499']:
+            plan_type = 'premium'
+        else:
+            plan_type = 'free'
+    except:
+        plan_type = 'free'
+    
+    filtered = []
+    for task in today_tasks:
+        audience = str(task.get('audience', 'all')).lower()
+        if audience == 'all':
+            filtered.append(task)
+        elif audience == 'free':
+            filtered.append(task)  # free visible to all
+        elif audience == 'basic' and plan_type in ['basic', 'premium']:
+            filtered.append(task)
+        elif audience == 'premium' and plan_type == 'premium':
+            filtered.append(task)
+        elif audience == plan_type:
+            filtered.append(task)
+    return filtered
+
+def get_user_plan_type(uid):
+    try:
+        record = _get_user_plan_record(uid)
+        if not record:
+            return 'free'
+        if isinstance(record, dict):
+            p = record.get('plan', 'free').lower()
+        else:
+            p = str(record).lower()
+        if p in ['premium', '499']:
+            return 'premium'
+        elif p in ['basic', '199']:
+            return 'basic'
+        else:
+            return 'free'
+    except:
+        return 'free'
+
+async def add_task_free_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5 and context.args[-1].lower() not in ['all','free','basic','premium','199','499']:
+        context.args.append('free')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_basic_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5 and context.args[-1].lower() not in ['all','free','basic','premium','199','499']:
+        context.args.append('basic')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_premium_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5 and context.args[-1].lower() not in ['all','free','basic','premium','199','499']:
+        context.args.append('premium')
+    await add_task_manual_cmd(update, context)
+
+async def add_task_all_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    if len(context.args) >= 5 and context.args[-1].lower() not in ['all','free','basic','premium','199','499']:
+        context.args.append('all')
+    await add_task_manual_cmd(update, context)
+
+
+def get_user_plan_id(uid):
+    try:
+        record = _get_user_plan_record(uid) if '_get_user_plan_record' in globals() else None
+        if not record:
+            return 0
+        if isinstance(record, dict):
+            if 'plan_id' in record:
+                return int(record['plan_id'])
+            p = record.get('plan', 'free').lower()
+        else:
+            p = str(record).lower()
+        if p in ['free', '0', 'no plan']:
+            return 0
+        elif p in ['basic', '199', '1']:
+            return 1
+        elif p in ['premium', '499', '2']:
+            return 2
+        elif p in ['pro', '999', '3']:
+            return 3
+        elif p in ['vip', '1999', '4']:
+            return 4
+        else:
+            try:
+                return int(p)
+            except:
+                return 0
+    except:
+        return 0
+
+def get_task_reward_for_user(task, uid):
+    plan_id = get_user_plan_id(uid)
+    rewards = task.get('rewards', None)
+    if rewards and isinstance(rewards, dict) and len(rewards) > 0:
+        if plan_id in rewards:
+            return rewards[plan_id]
+        if 'all' in rewards:
+            return rewards['all']
+    return task.get('reward', 5)
+
+
+async def add_task_5plans_cmd(update, context):
+    """
+    ULTIMATE COMMAND FOR 5 PLANS:
+    
+    Usage 1 - Same amount for all (simple):
+    /add_task_5plans 10:00 11:00 Title Link 10 all
+    -> Everyone gets ₹10
+    
+    Usage 2 - Different amounts per plan (same task):
+    /add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all
+    -> Free gets 5, Plan1 gets 10, Plan2 gets 15, Plan3 gets 20, Plan4 gets 30
+    
+    Usage 3 - Only for specific plans:
+    /add_task_5plans 10:00 11:00 Title Link 20 2
+    -> Only Plan2 (499) gets it
+    
+    Usage 4 - Multiple plans:
+    /add_task_5plans 10:00 11:00 Title Link 15 1,2,3
+    -> Plans 1,2,3 only
+    
+    Audience options:
+    - all, free, 0, 1, 2, 3, 4, 1,2,3 etc
+    """
+    try:
+        if update.effective_user.id not in ADMIN_ID_LIST:
+            return
+        
+        args = context.args
+        if len(args) < 5:
+            await update.message.reply_text(
+                "📋 5 PLANS TASK ADD:\n\n"
+                "1️⃣ Same amount for all:\n"
+                "/add_task_5plans 10:00 11:00 Title Link 10 all\n\n"
+                "2️⃣ Different amounts per plan:\n"
+                "/add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all\n"
+                "-> Free=5, P1=10, P2=15, P3=20, P4=30\n\n"
+                "3️⃣ Only specific plan:\n"
+                "/add_task_5plans 10:00 11:00 Title Link 20 2\n"
+                "-> Only Plan 2 (499)\n\n"
+                "4️⃣ Multiple plans:\n"
+                "/add_task_5plans 10:00 11:00 Title Link 15 1,2,3\n"
+                "-> Plans 1,2,3 only\n\n"
+                "Plans: 0=free, 1=199, 2=499, 3=999, 4=1999"
+            )
+            return
+        
+        open_time, close_time, title, link = args[0], args[1], args[2], args[3]
+        reward_arg = args[4]
+        audience_arg = args[5].lower() if len(args) >= 6 else 'all'
+        
+        # Parse rewards - can be single number or free:5,1:10,2:15 format
+        rewards_dict = {}
+        base_reward = 5
+        
+        if ':' in reward_arg or ',' in reward_arg and ':' in reward_arg:
+            # Format: free:5,1:10,2:15,3:20,4:30
+            try:
+                parts = reward_arg.split(',')
+                for part in parts:
+                    if ':' in part:
+                        k, v = part.split(':')
+                        k = k.strip().lower()
+                        v = int(v.strip())
+                        if k in ['free', '0']:
+                            rewards_dict[0] = v
+                        elif k in ['1', 'basic', '199']:
+                            rewards_dict[1] = v
+                        elif k in ['2', 'premium', '499']:
+                            rewards_dict[2] = v
+                        elif k in ['3', 'pro', '999']:
+                            rewards_dict[3] = v
+                        elif k in ['4', 'vip', '1999']:
+                            rewards_dict[4] = v
+                        elif k == 'all':
+                            rewards_dict['all'] = v
+                base_reward = rewards_dict.get('all', list(rewards_dict.values())[0] if rewards_dict else 5)
+            except Exception as e:
+                print(f"Rewards parse error: {e}")
+                base_reward = 5
+                rewards_dict = {}
+        else:
+            # Single reward for all
+            try:
+                base_reward = int(reward_arg)
+                rewards_dict = {'all': base_reward}
+            except:
+                base_reward = 5
+        
+        # Parse audience
+        if audience_arg == 'all':
+            audience = 'all'
+        elif ',' in audience_arg:
+            # Multiple: 1,2,3
+            try:
+                audience = [int(x.strip()) if x.strip().isdigit() else x.strip() for x in audience_arg.split(',')]
+                # Convert string numbers to int
+                audience = [int(x) if isinstance(x, str) and x.isdigit() else x for x in audience]
+            except:
+                audience = 'all'
+        elif audience_arg.isdigit():
+            audience = int(audience_arg)
+        else:
+            audience = audience_arg
+        
+        from datetime import datetime
+        today = str(get_ist_today())
+        global scheduled_task_counter
+        
+        ot = datetime.strptime(open_time, "%H:%M").time()
+        ct = datetime.strptime(close_time, "%H:%M").time()
+        
+        task = {
+            'id': scheduled_task_counter,
+            'date': today,
+            'open_time': open_time,
+            'close_time': close_time,
+            'open_time_obj': ot,
+            'close_time_obj': ct,
+            'title': title,
+            'link': link,
+            'reward': base_reward,
+            'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},  # Per-plan rewards
+            'audience': audience,
+            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
+        }
+        
+        scheduled_tasks_db.append(task)
+        scheduled_task_counter+=1
+        save_data()
+        
+        # Build confirmation message
+        msg = f"✅ Task Added for 5 Plans System!\n\n"
+        msg += f"ID: {task['id']}\nTitle: {title}\nTime: {open_time}-{close_time}\n"
+        
+        if rewards_dict and len(rewards_dict) > 1:
+            msg += f"\n💰 Different Amounts (Same Task):\n"
+            for pid in [0,1,2,3,4]:
+                if pid in rewards_dict:
+                    plan_name = ['FREE', 'Plan1(199)', 'Plan2(499)', 'Plan3(999)', 'Plan4(1999)'][pid]
+                    msg += f"  {plan_name}: ₹{rewards_dict[pid]}\n"
+        else:
+            msg += f"Reward: ₹{base_reward} (Same for all)\n"
+        
+        msg += f"\n👥 Audience: {audience}\nLink: {link}"
+        
+        await update.message.reply_text(msg)
+        
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}\n\nUse /add_task_5plans for help")
+        import traceback
+        traceback.print_exc()
+
+
+
+async def list_tasks_audience_cmd(update, context):
+    if update.effective_user.id not in ADMIN_ID_LIST:
+        return
+    today = str(get_ist_today())
+    tasks = [t for t in scheduled_tasks_db if t['date'] == today]
+    if not tasks:
+        await update.message.reply_text("No tasks for today!")
+        return
+    grouped = {'all': [], 'free': [], 'basic': [], 'premium': []}
+    for t in tasks:
+        aud = str(t.get('audience', 'all')).lower()
+        if aud in grouped:
+            grouped[aud].append(t)
+        else:
+            grouped['all'].append(t)
+    msg = f"📊 Today's Tasks ({today}) - By Audience:\n"
+    for aud in ['all', 'free', 'basic', 'premium']:
+        emoji = {'all':'🌍','free':'🆓','basic':'💎','premium':'👑'}.get(aud,'📋')
+        msg += f"\n{emoji} {aud.upper()} - {len(grouped[aud])} tasks:\n"
+        for t in grouped[aud]:
+            msg += f"  ID:{t['id']} {t['open_time']}-{t['close_time']} {t['title']} ₹{t['reward']}\n"
+    await update.message.reply_text(msg)
+
+
 def get_current_scheduled_task_with_interval():
     now = get_ist_time()
     today_tasks = get_tasks_for_today()
@@ -4351,30 +4651,102 @@ async def support_plans_fixed_cb(update, context):
 
 
 async def add_task_manual_cmd(update, context):
+    """
+    NEW USAGE:
+    /add_task_manual <open> <close> <title> <link> <reward> <audience>
+    
+    audience options:
+    - all : everyone (default)
+    - free : free users + all paid (everyone sees)
+    - basic : 199 plan users only + premium
+    - premium : 499 plan users only
+    
+    Examples:
+    /add_task_manual 10:00 11:00 "Free Task" https://t.me/... 5 free
+    /add_task_manual 10:00 11:00 "Premium Special" https://t.me/... 20 premium
+    /add_task_manual 12:00 13:00 "Common Task" https://t.me/... 10 all
+    /add_task_manual 14:00 15:00 "Basic Task" https://t.me/... 15 basic
+    """
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
             return
         args = context.args
         if len(args) < 5:
-            await update.message.reply_text("Usage: /add_task_manual <open> <close> <title> <link> <reward>")
+            await update.message.reply_text(
+                "📋 NEW TASK ADD WITH AUDIENCE:\n\n"
+                "Usage: /add_task_manual <open> <close> <title> <link> <reward> [audience]\n\n"
+                "Audience options:\n"
+                "• all - Everyone (default)\n"
+                "• free - Free users (everyone sees)\n"
+                "• basic - 199₹ Basic plan only\n"
+                "• premium - 499₹ Premium only\n\n"
+                "Examples:\n"
+                "/add_task_manual 10:00 11:00 FreeTask https://t.me/c/123 5 free\n"
+                "/add_task_manual 10:00 11:00 PremiumTask https://t.me/c/123 20 premium\n"
+                "/add_task_manual 12:00 13:00 CommonTask https://t.me/c/123 10 all"
+            )
             return
+        
         open_time, close_time, title, link = args[0], args[1], args[2], args[3]
         try:
             reward = int(args[4])
         except:
             reward = 5
+        
+        # Audience is 6th argument, default 'all'
+        audience = args[5].lower() if len(args) >= 6 else 'all'
+        if audience not in ['all', 'free', 'basic', 'premium', '199', '499']:
+            audience = 'all'
+        
+        # Normalize audience
+        if audience == '199':
+            audience = 'basic'
+        elif audience == '499':
+            audience = 'premium'
+        
         from datetime import datetime
         today = str(get_ist_today())
         global scheduled_task_counter
+        
         ot = datetime.strptime(open_time, "%H:%M").time()
         ct = datetime.strptime(close_time, "%H:%M").time()
-        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1}
+        
+        task = {
+            'id': scheduled_task_counter,
+            'date': today,
+            'open_time': open_time,
+            'close_time': close_time,
+            'open_time_obj': ot,
+            'close_time_obj': ct,
+            'title': title,
+            'link': link,
+            'reward': reward,
+            'audience': audience,  # NEW FIELD
+            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
+        }
+        
         scheduled_tasks_db.append(task)
         scheduled_task_counter+=1
         save_data()
-        await update.message.reply_text(f"Task Added ID:{task['id']} {title}")
+        
+        audience_emoji = {
+            'all': '🌍',
+            'free': '🆓',
+            'basic': '💎',
+            'premium': '👑'
+        }
+        
+        await update.message.reply_text(
+            f"{audience_emoji.get(audience, '📋')} Task Added!\n\n"
+            f"ID: {task['id']}\n"
+            f"Title: {title}\n"
+            f"Time: {open_time} - {close_time}\n"
+            f"Reward: ₹{reward}\n"
+            f"Audience: {audience.upper()} ({'Everyone' if audience=='all' else 'Free users' if audience=='free' else '199₹ Basic' if audience=='basic' else '499₹ Premium'})\n"
+            f"Link: {link}"
+        )
     except Exception as e:
-        await update.message.reply_text(f"Error {e}")
+        await update.message.reply_text(f"Error {e}\n\nUse: /add_task_manual 10:00 11:00 Title Link Reward audience")
 
 async def remove_task_cmd(update, context):
     try:
@@ -5124,6 +5496,18 @@ def main():
             app.add_handler(CommandHandler("set_referral_commission", set_referral_commission_cmd))
             app.add_handler(CommandHandler("channels_status", channels_status_cmd))
             app.add_handler(CommandHandler("channels_list", channels_list_cmd))
+            app.add_handler(CommandHandler("add_task_free", add_task_free_cmd))
+            app.add_handler(CommandHandler("add_task_basic", add_task_basic_cmd))
+            app.add_handler(CommandHandler("add_task_premium", add_task_premium_cmd))
+            app.add_handler(CommandHandler("add_task_all", add_task_all_cmd))
+            app.add_handler(CommandHandler("list_tasks_audience", list_tasks_audience_cmd))
+            app.add_handler(CommandHandler("add_task_5plans", add_task_5plans_cmd))
+            app.add_handler(CommandHandler("add_task_5p", add_task_5plans_cmd))
+
+            # ADD GLOBAL ACTIVITY TRACKER FIRST (tracks all messages/callbacks)
+            from telegram.ext import TypeHandler
+            app.add_handler(TypeHandler(Update, global_activity_tracker), group=-100)
+            print("Global activity tracker added")
 
             print("V56 Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
             # EVENT LOOP FIX: Render/asyncio can leave the previous loop closed after
@@ -5134,6 +5518,9 @@ def main():
             # Connect the notifier to the SAME asyncio loop used by Telegram polling.
             bot_application = app
             bot_event_loop = polling_loop
+            # Setup smart auto system (Your Idea)
+            setup_smart_auto(app)
+            
             if not notification_thread_started:
                 threading.Thread(target=notification_thread_func, daemon=True).start()
                 notification_thread_started = True
