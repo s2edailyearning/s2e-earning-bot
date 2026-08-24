@@ -964,26 +964,45 @@ def _product_reward_for_user(task, uid):
     return int(task.get('reward', 0) if isinstance(task, dict) else 0)
 
 def get_active_product_promo_for_user(uid):
+    """Return only the newest live Product Promotion for today.
+
+    Product Promotion is a single campaign slot. Older campaigns must never
+    reappear when the user presses the menu button again. Campaign state is
+    persisted in product_promo_db; Telegram file_id values are also persisted,
+    so a Render restart does not make the video disappear.
+    """
     now = get_ist_now()
     today = str(get_ist_today())
-    result = []
+    candidates = []
     for t in product_promo_db:
-        if t.get('date') != today or t.get('status','active') != 'active':
+        if not isinstance(t, dict) or t.get('date') != today:
+            continue
+        if t.get('status') != 'active' or not t.get('video_file_id'):
             continue
         try:
-            video_deadline = datetime.combine(get_ist_today(), parse_time_str(t['download_deadline']), tzinfo=IST)
-            shot_open = datetime.combine(get_ist_today(), parse_time_str(t['screenshot_open']), tzinfo=IST)
-            shot_close = datetime.combine(get_ist_today(), parse_time_str(t['screenshot_close']), tzinfo=IST)
+            video_deadline_obj = parse_time_str(str(t.get('download_deadline','')))
+            shot_open_obj = parse_time_str(str(t.get('screenshot_open','')))
+            shot_close_obj = parse_time_str(str(t.get('screenshot_close','')))
+            if not video_deadline_obj or not shot_open_obj or not shot_close_obj:
+                continue
+            video_deadline = datetime.combine(get_ist_today(), video_deadline_obj, tzinfo=IST)
+            shot_open = datetime.combine(get_ist_today(), shot_open_obj, tzinfo=IST)
+            shot_close = datetime.combine(get_ist_today(), shot_close_obj, tzinfo=IST)
             if shot_close <= shot_open:
                 shot_close += timedelta(days=1)
             if now <= shot_close:
                 t['_download_open'] = now <= video_deadline
                 t['_screenshot_open'] = shot_open <= now <= shot_close
                 t['_screenshot_closed'] = now > shot_close
-                result.append(t)
+                candidates.append(t)
         except Exception:
             continue
-    return result
+    # Only the newest campaign is exposed. This prevents an older campaign
+    # from coming back after a new campaign was created.
+    if not candidates:
+        return []
+    newest = max(candidates, key=lambda x: int(x.get('id', 0) or 0))
+    return [newest]
 
 def _product_time_text(t):
     return f"🎥 Video download until: {t.get('download_deadline','')}\n📸 Screenshot: {t.get('screenshot_open','')} → {t.get('screenshot_close','')}"
@@ -1930,8 +1949,19 @@ async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception:
         await update.message.reply_text("❌ Invalid time. Use examples 10:00AM 8:00PM 10:00PM"); return
     global product_promo_counter
-    task={'id':product_promo_counter,'date':str(get_ist_today()),'title':title or 'Product Promotion','description':desc,'download_deadline':d.strftime('%H:%M'),'screenshot_open':so.strftime('%H:%M'),'screenshot_close':sc.strftime('%H:%M'),'reward':base,'rewards':rewards,'video_file_id':None,'status':'waiting_video','created_at':get_ist_now()}
+    # Product Promotion uses one live campaign slot. Archive every older
+    # campaign first so an old promotion/video can never reappear.
+    today = str(get_ist_today())
+    for old in product_promo_db:
+        if isinstance(old, dict) and old.get('date') == today and old.get('status') in ('active', 'waiting_video'):
+            old['status'] = 'archived'
+            old['archived_at'] = get_ist_now()
+
+    task={'id':product_promo_counter,'date':today,'title':title or 'Product Promotion','description':desc,'download_deadline':d.strftime('%H:%M'),'screenshot_open':so.strftime('%H:%M'),'screenshot_close':sc.strftime('%H:%M'),'reward':base,'rewards':rewards,'video_file_id':None,'status':'waiting_video','created_at':get_ist_now(),'created_by':uid}
     product_promo_db.append(task); product_promo_counter+=1
+    # Persist the pending upload target in the campaign itself. context.user_data
+    # is per-session and can be lost on a restart; DB state must remain sufficient
+    # to attach the next admin video to this exact campaign.
     context.user_data['awaiting_product_video']=task['id']
     save_data()
     await update.message.reply_text(f"✅ Product Promotion ID {task['id']} created.\n\n🎥 Now send the promotion VIDEO to this bot.\n\nDownload deadline: {task['download_deadline']}\nScreenshot: {task['screenshot_open']} → {task['screenshot_close']}\n{_product_reward_text(task,uid)}")
@@ -1941,11 +1971,17 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
         uid=update.effective_user.id
         if not is_admin(uid): return
         tid=context.user_data.get('awaiting_product_video')
+        # Recover the upload target from persistent DB after a bot restart or
+        # Telegram session reset. Only today's newest waiting campaign is valid.
+        if not tid:
+            waiting=[x for x in product_promo_db if isinstance(x,dict) and x.get('date')==str(get_ist_today()) and x.get('status')=='waiting_video']
+            if waiting:
+                tid=max(waiting,key=lambda x:int(x.get('id',0) or 0)).get('id')
         if not tid: return
         if not update.message.video and not update.message.document: return
         file_id=update.message.video.file_id if update.message.video else update.message.document.file_id
         t=next((x for x in product_promo_db if int(x.get('id',-1))==int(tid)),None)
-        if not t: return
+        if not t or t.get('status') != 'waiting_video': return
         t['video_file_id']=file_id; t['status']='active'
         context.user_data.pop('awaiting_product_video',None)
         save_data()
@@ -4086,9 +4122,53 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query
-    try: await q.answer("Processing bulk approval…")
-    except: pass
+    """Approve ALL for Daily Task screenshots only.
+    Product Promotion submissions live in product_promo_pending and are never
+    touched by this callback.
+    """
+    q = update.callback_query
+    try:
+        await q.answer("Processing Daily Task bulk approval…")
+    except Exception:
+        pass
+    if not is_admin(q.from_user.id):
+        return
+    approved_count = 0
+    details = []
+    today = str(get_ist_today())
+    for key, sub in list(pending_daily.items()):
+        try:
+            uid = int(key)
+            if not isinstance(sub, dict):
+                continue
+            task = sub.get('task', {}) if isinstance(sub.get('task', {}), dict) else {}
+            reward = float(task.get('reward', 5) or 5)
+            tasks_db[uid] = tasks_db.get(uid, 0) + 1
+            daily_task_count.setdefault(uid, {})
+            daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+            daily_task_earnings.setdefault(uid, {})
+            daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
+            # get_balance already gives ₹5 per approved task. Only the amount
+            # above ₹5 belongs in bonus_balance.
+            if reward > 5:
+                bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
+            pending_daily.pop(key, None)
+            approved_count += 1
+            details.append(f"{uid} (₹{reward:g})")
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"✅ Daily Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"daily bulk approval error {key}: {e}")
+    save_data()
+    detail_text = "\n".join(details[:15])
+    if len(details) > 15:
+        detail_text += f"\n...and {len(details)-15} more"
+    await q.message.reply_text(
+        f"✅ DAILY TASK BULK APPROVAL DONE\n\nApproved: {approved_count}\n{detail_text or 'No pending Daily Task submissions.'}\n\nRemaining pending: {len(pending_daily)}",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]])
+    )
 
 # === CHANNEL METHOD + BULK APPROVE V28 ===
 # Admin channels - set via command or env
