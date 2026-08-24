@@ -5624,8 +5624,8 @@ def main():
                         pass
 
             #  Add simple handlers with high priority - No ConversationHandler!
+            app.add_handler(MessageHandler(filters.PHOTO, product_screenshot_photo_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
-            app.add_handler(MessageHandler(filters.PHOTO, product_screenshot_photo_handler), group=1)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.PHOTO, v56_screenshot_simple_handler), group=2)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_screenshot_simple_handler), group=2)
