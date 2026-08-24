@@ -1564,9 +1564,34 @@ async def check_user_in_channel(user_id, context):
         print(f"check err {e} - Return True!")
         return True
 
+def _get_existing_user_record(uid, telegram_user=None):
+    """Find existing users across int/string IDs and recover legacy activity-only users."""
+    for key in (uid, str(uid)):
+        if key in users_db and isinstance(users_db.get(key), dict):
+            return key, users_db[key]
+
+    activity_maps = (
+        tasks_db, daily_task_count, bonus_balance, referral_earnings, promo_earnings_db,
+        user_plans, withdraw_requests, withdraw_history, referral_commission_ledger,
+        daily_done, missed_tasks_db, user_task_status, skip_db, promo_views_db,
+    )
+    for db in activity_maps:
+        if isinstance(db, dict) and (uid in db or str(uid) in db):
+            name = "User"
+            if telegram_user is not None:
+                name = (getattr(telegram_user, "full_name", None) or
+                        getattr(telegram_user, "first_name", None) or "User").strip()
+            users_db[uid] = {"name": name}
+            try:
+                save_data()
+            except Exception as e:
+                print(f"Legacy user profile recovery save error: {e}")
+            return uid, users_db[uid]
+    return None, None
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if uid in banned_users:
+    if uid in banned_users or str(uid) in banned_users:
         await update.message.reply_text("You are BANNED! Contact admin!")
         return ConversationHandler.END
     if not is_admin(uid):
@@ -1582,16 +1607,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ref_id = None
     if args and args[0].isdigit():
         ref_id = int(args[0])
-        if ref_id != uid and ref_id not in banned_users:
+        if ref_id != uid and ref_id not in banned_users and str(ref_id) not in banned_users:
             referral_map[uid] = ref_id
-    if uid in users_db:
+
+    user_key, user = _get_existing_user_record(uid, update.effective_user)
+    if user is not None:
         _, daily_limit, _ = check_daily_limits(uid)
         await update.message.reply_text(
-            f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\\n"
+            f"Welcome back {user.get('name','User')}! Balance Rs{get_balance(uid)}\n"
             f"Tasks {get_tasks(uid)}/{daily_limit}",
             reply_markup=main_menu()
         )
         return ConversationHandler.END
+
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
 
@@ -1605,9 +1633,9 @@ async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     is_joined = await check_user_in_channel(uid, context)
     print(f"check_joined_cb: User {uid} is_joined {is_joined} - ALWAYS True - Fix Not joined yet! FINAL!")
-    #  FIX: Always allow - Show Joined! Welcome!
-    if uid in users_db:
-        await q.message.reply_text(f"✅ Thanks for joining! Welcome back {users_db[uid].get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
+    user_key, user = _get_existing_user_record(uid, q.from_user)
+    if user is not None:
+        await q.message.reply_text(f"✅ Thanks for joining! Welcome back {user.get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
         return ConversationHandler.END
     await q.message.reply_text("✅ Thanks for joining! What is your Name?")
     return NAME
