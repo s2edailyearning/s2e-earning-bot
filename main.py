@@ -185,10 +185,14 @@ def get_tasks_for_today_filtered(uid):
     filtered = []
     for task in today_tasks:
         audience = task.get('audience', 'all')
-        if audience == 'all' or str(audience).lower() == 'free' or audience == 0 or audience == 'all':
+        # Audience filtering: 'free' / plan 0 means FREE MEMBERS ONLY.
+        if audience == 'all' or audience == 'all':
             filtered.append(task)
+        elif str(audience).lower() == 'free' or audience == 0:
+            if plan_id == 0:
+                filtered.append(task)
         elif isinstance(audience, list):
-            if plan_id in audience or 0 in audience:
+            if plan_id in audience:
                 filtered.append(task)
         elif isinstance(audience, int):
             if audience == 0 or audience == plan_id:
@@ -2208,7 +2212,7 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
                     [InlineKeyboardButton(f"✅ Approve ALL Task {task.get('task_number','')}", callback_data=f"bulk_approve_{task.get('task_number','')}")]
                 ]
                 mk = InlineKeyboardMarkup(kb)
-                cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_reward_for_user(uid, task.get('reward',5))} (Plan based)\nTime: {get_ist_now()}"
+                cap = f"📸 NEW SUBMISSION - Task {task.get('task_number','')} {task.get('title','')}\nUser {uid} {users_db.get(uid,{}).get('name','')} @{users_db.get(uid,{}).get('username','')}\nReward: Rs{get_task_reward_for_user(task, uid)} (Task/plan based)\nTime: {get_ist_now()}"
                 try:
                     if 'file_id' in locals() and file_id:
                         await context.bot.send_photo(chat_id=screenshot_ch, photo=file_id, caption=cap, reply_markup=mk)
@@ -2454,8 +2458,9 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: return
     if target_id in pending_daily:
         is_first=tasks_db.get(target_id,0)==0
-        base_reward=pending_daily[target_id].get('task',{}).get('reward',5)
-        reward=get_reward_for_user(target_id, base_reward)
+        task=pending_daily[target_id].get('task',{})
+        base_reward=int(task.get('reward',5) or 5)
+        reward=get_task_reward_for_user(task, target_id)
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
         if target_id not in daily_task_count: daily_task_count[target_id]={}
@@ -3805,8 +3810,8 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if uid not in pending_daily: continue
         try:
             pdata=pending_daily[uid]; task=pdata.get('task',{})
-            base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
-            reward=get_reward_for_user(uid,base_reward)
+            base_reward=int(task.get('reward',5) or 5)
+            reward=get_task_reward_for_user(task, uid)
             tasks_db[uid]=tasks_db.get(uid,0)+1
             today=str(get_ist_today())
             daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
@@ -3853,8 +3858,8 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if uid not in pending_daily: continue
         try:
             pdata=pending_daily[uid]; task=pdata.get('task',{})
-            base_reward=int(pdata.get('task',{}).get('reward',5) or 5)
-            reward=get_reward_for_user(uid,base_reward)
+            base_reward=int(task.get('reward',5) or 5)
+            reward=get_task_reward_for_user(task, uid)
             tasks_db[uid]=tasks_db.get(uid,0)+1
             today=str(get_ist_today())
             daily_task_count.setdefault(uid,{})[today]=daily_task_count.setdefault(uid,{}).get(today,0)+1
@@ -4047,8 +4052,9 @@ async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         for uid in to_approve:
             try:
                 if uid in pending_daily:
-                    base_reward = pending_daily[uid].get('task',{}).get('reward',5)
-                    reward = get_reward_for_user(uid, base_reward)
+                    task = pending_daily[uid].get('task',{})
+                    base_reward = int(task.get('reward',5) or 5)
+                    reward = get_task_reward_for_user(task, uid)
                     tasks_db[uid] = tasks_db.get(uid,0) + 1
                     bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward != 5 else bonus_balance.get(uid,0)
                     del pending_daily[uid]
@@ -4084,8 +4090,9 @@ async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_
     approved = 0
     for uid in list(pending_daily.keys()):
         try:
-            base_reward = pending_daily[uid].get('task',{}).get('reward',5)
-            reward = get_reward_for_user(uid, base_reward)
+            task = pending_daily[uid].get('task',{})
+            base_reward = int(task.get('reward',5) or 5)
+            reward = get_task_reward_for_user(task, uid)
             tasks_db[uid] = tasks_db.get(uid,0) + 1
             if reward != 5:
                 bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5)
@@ -4479,9 +4486,24 @@ async def add_task_5plans_cmd(update, context):
                 "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all"
             )
             return
-        open_time, close_time, title, link = args[0], args[1], args[2], args[3]
-        reward_arg = args[4]
-        audience_arg = args[5].lower() if len(args) >= 6 else 'all'
+        open_time, close_time = args[0], args[1]
+        # Allow task titles with spaces: find the URL/link token, then use the
+        # tokens after it for reward and optional audience.
+        audience_tokens = {'all','free','basic','premium','0','1','2','3','4'}
+        audience_arg = 'all'
+        end_idx = len(args)
+        if len(args) >= 6 and (args[-1].lower() in audience_tokens or ',' in args[-1]):
+            audience_arg = args[-1].lower()
+            end_idx -= 1
+        if end_idx < 4:
+            raise ValueError('Missing link/reward')
+        reward_arg = args[end_idx-1]
+        link_idx = next((i for i in range(2, end_idx-1) if str(args[i]).startswith(('http://','https://','t.me/','www.'))), None)
+        if link_idx is None:
+            # Backward-compatible format: single-word title + link.
+            link_idx = 3
+        title = ' '.join(args[2:link_idx])
+        link = args[link_idx]
         rewards_dict = {}
         base_reward = 5
         if ':' in reward_arg:
