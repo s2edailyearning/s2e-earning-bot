@@ -5842,7 +5842,8 @@ def main():
                     ],
                 },
                 fallbacks=[CommandHandler("cancel", cancel)],
-                per_user=True, per_chat=True, per_message=False
+                per_user=True, per_chat=True, per_message=False,
+                allow_reentry=True
             )
             app.add_handler(MessageHandler(PlanImageUploadFilter(), handle_plan_image_upload), group=-3)
             # IMPORTANT: Do not register a catch-all PHOTO handler here.
