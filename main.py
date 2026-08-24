@@ -255,12 +255,24 @@ async def plan_proof_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Admin will verify it manually."
     )
 
+async def _send_support_banner(message):
+    """Send the saved Support Plans banner if one has been configured."""
+    try:
+        file_id = support_banner_db.get("file_id")
+        if file_id:
+            await message.reply_photo(photo=file_id)
+            return True
+    except Exception as e:
+        print(f"Support banner send error: {e}")
+    return False
+
 async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try: await q.answer()
     except Exception: pass
     uid = q.from_user.id
     normalize_support_plans()
+    await _send_support_banner(q.message)
     info = _canonical_plan_info(uid)
     if info["active"]:
         text = (
@@ -542,6 +554,7 @@ promo_earnings_db = {}
 promo_views_db = {}
 promo_pending = {}
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
+support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
     global promo_campaign_counter
@@ -1858,6 +1871,79 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop('promo_screenshot_file_id', None)
     context.user_data.pop('promo_screenshot_campaign_id', None)
     return ConversationHandler.END
+
+# === SUPPORT PLANS BANNER IMAGE ===
+async def set_support_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set the Support Plans banner image. Supports command-only then photo, or photo with caption."""
+    try:
+        uid = update.effective_user.id
+        if not is_admin(uid):
+            await update.message.reply_text("❌ Admin only!")
+            return
+
+        # If Telegram delivered the command together with a photo/document caption, save it directly.
+        if update.message.photo or update.message.document:
+            file_id = None
+            if update.message.photo:
+                file_id = update.message.photo[-1].file_id
+            elif update.message.document:
+                file_id = update.message.document.file_id
+
+            if file_id:
+                support_banner_db["file_id"] = file_id
+                save_data()
+                context.user_data.pop("awaiting_support_banner", None)
+                await update.message.reply_text(
+                    "✅ Support Plans banner image saved successfully!\n\n"
+                    "Open 💎 Support Plans to check it."
+                )
+                print(f"Support banner saved directly by admin {uid}: {file_id[:20]}...")
+                return
+
+        context.user_data["awaiting_support_banner"] = True
+        await update.message.reply_text(
+            "🖼️ Now send the Support Plans banner image as a PHOTO.\n\n"
+            "You can also send the image with caption /set_support_image."
+        )
+    except Exception as e:
+        print(f"set_support_image_cmd error: {e}")
+        try:
+            await update.message.reply_text(f"❌ Error setting Support Plans image: {e}")
+        except Exception:
+            pass
+
+async def support_banner_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """High-priority admin photo handler for /set_support_image."""
+    try:
+        uid = update.effective_user.id
+        if not is_admin(uid):
+            return
+
+        caption = update.message.caption or ""
+        waiting = bool(context.user_data.get("awaiting_support_banner"))
+        if "/set_support_image" not in caption and not waiting:
+            return
+
+        file_id = None
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+        elif update.message.document:
+            file_id = update.message.document.file_id
+
+        if not file_id:
+            return
+
+        support_banner_db["file_id"] = file_id
+        save_data()
+        context.user_data.pop("awaiting_support_banner", None)
+
+        await update.message.reply_text(
+            "✅ Support Plans banner image saved successfully!\n\n"
+            "Open 💎 Support Plans to check it."
+        )
+        print(f"Support banner saved by admin {uid}: {file_id[:20]}...")
+    except Exception as e:
+        print(f"support_banner_photo_handler error: {e}")
 
 # === NEW IMAGE POSTER COMMANDS ===
 async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3473,7 +3559,7 @@ def save_data():
             'scheduled_tasks_db': scheduled_tasks_db, 'scheduled_task_counter': scheduled_task_counter,
             'support_plans_db': support_plans_db, 'user_plans': user_plans, 'pending_plans': pending_plans,
             'missed_tasks_db': missed_tasks_db, 'skip_db': skip_db, 'warnings_db': warnings_db,
-            'banned_users': banned_users, 'task_images_db': task_images_db, 'screenshot_hashes': screenshot_hashes,
+            'banned_users': banned_users, 'task_images_db': task_images_db, 'support_banner_db': support_banner_db, 'screenshot_hashes': screenshot_hashes,
             'promo_campaigns_db': promo_campaigns_db, 'promo_campaign_counter': promo_campaign_counter,
             'promo_earnings_db': promo_earnings_db, 'promo_views_db': promo_views_db, 'REFERRAL_PLAN_COMMISSION_PERCENT': REFERRAL_PLAN_COMMISSION_PERCENT, 'L1_TASK_COMMISSION_PERCENT': L1_TASK_COMMISSION_PERCENT, 'L2_TASK_COMMISSION_PERCENT': L2_TASK_COMMISSION_PERCENT, 'promo_pending': promo_pending,
             'pending_daily': pending_daily, 'ADMIN_ID_LIST': ADMIN_ID_LIST, 'ADMIN_NAMES_DB': admin_names_db, 'MISSED_ENABLED': MISSED_ENABLED,
@@ -3495,7 +3581,7 @@ def _apply_loaded_data(data):
     map_names=['users_db','tasks_db','bonus_balance','referral_earnings','referral_commission_ledger','daily_task_earnings','referrals_db','referral_map','pending_referrals',
                'withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','daily_task_count','user_task_status',
                'support_plans_db','user_plans','pending_plans','missed_tasks_db','skip_db','warnings_db','promo_earnings_db',
-               'promo_views_db','promo_pending','pending_daily','task_images_db','promo_campaigns_db']
+               'promo_views_db','promo_pending','pending_daily','task_images_db','support_banner_db','promo_campaigns_db']
     for name in map_names:
         obj=data.get(name)
         if obj is not None and name in globals():
@@ -4726,6 +4812,14 @@ def main():
                         return
                     if not update.message.photo and not update.message.document:
                         return
+
+                    # Support Plans banner upload after /set_support_image.
+                    # This check must happen before task-poster logic so the banner
+                    # image can never be mistaken for a task poster.
+                    if (context.user_data.get("awaiting_support_banner")
+                            or (update.message.caption and "/set_support_image" in update.message.caption)):
+                        await support_banner_photo_handler(update, context)
+                        return
                     task_id = context.user_data.get('set_image_task_id')
                     if not task_id and update.message.caption:
                         import re
@@ -4914,6 +5008,9 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            # Support Plans banner command. Photo handling is integrated into the
+            # existing high-priority admin photo handler so normal task posters remain safe.
+            app.add_handler(CommandHandler("set_support_image", set_support_image_cmd))
             app.add_handler(CommandHandler("set_task_image", set_task_image_cmd))
             app.add_handler(CommandHandler("set_payment_upi", set_payment_upi_cmd))
             app.add_handler(CommandHandler("set_contact_username", set_contact_username_cmd))
