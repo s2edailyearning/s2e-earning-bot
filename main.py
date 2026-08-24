@@ -19,17 +19,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# V56 FINAL HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
+# Final HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
 CHANNEL_ID = "-1004352241439"
 CHANNEL_LINK = "https://t.me/S2E_Daily_Earning"
 SCREENSHOT_CHANNEL = -1004295034675
 WITHDRAW_CHANNEL = -1004319888475
 JOIN_CHANNEL = -1004352241439
-print(f"V56 CHANNELS HARDCODED SEPARATE: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
-print(f"V56 Task Screenshots Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs - SEPARATE!")
-print(f"V56 Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
-print(f"V56 Join Channel {JOIN_CHANNEL} = -1004352241439 - SEPARATE!")
-print(f"V56 Main Link {CHANNEL_LINK} - Task->TASK ONLY, Withdraw->Withdraw ONLY! FINAL!")
+print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
+print(f"Screenshot Channel {SCREENSHOT_CHANNEL} = -1004295034675 TASK Screenshots 2 subs - SEPARATE!")
+print(f"Withdraw Channel {WITHDRAW_CHANNEL} = -1004319888475 - SEPARATE!")
+print(f"Join Channel {JOIN_CHANNEL} = -1004352241439 - SEPARATE!")
+print(f"Main Link {CHANNEL_LINK} - Task->TASK ONLY, Withdraw->Withdraw ONLY! FINAL!")
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
 WITHDRAW_LINK = "https://t.me/S2E_Daily_Earning"
 JOIN_LINK = "https://t.me/S2E_Daily_Earning"
@@ -1130,15 +1130,15 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
 async def check_user_in_channel(user_id, context):
-    # V56 FINAL FIX: ALWAYS True - Fix join in channel error alane undi - Yenduvalla ala vastundi!
+    # Final FIX: ALWAYS True - Fix join in channel error alane undi - Yenduvalla ala vastundi!
     # Reason: CHANNEL_ID = -1004352241439 but CHANNEL_LINK = https://t.me/S2E_Daily_Earning - ID mismatch!
     # Bot not admin in -1004352241439 - get_chat_member fails - Always Not joined!
     # Fix: ALWAYS True bypass for testing - No join check!
     try:
-        print(f"V56 check_user_in_channel: User {user_id} - ALWAYS True bypass - Fix redirect loop! FINAL! Yenduvalla: ID mismatch + Bot not admin!")
+        print(f"check_user_in_channel: User {user_id} - ALWAYS True bypass - Fix redirect loop! FINAL! Yenduvalla: ID mismatch + Bot not admin!")
         return True
     except Exception as e:
-        print(f"V56 check err {e} - Return True!")
+        print(f"check err {e} - Return True!")
         return True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1168,7 +1168,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return NAME
 
 async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # V56 FINAL FIX: Join channel error fix - Always show Joined!
+    # Final FIX: Join channel error fix - Always show Joined!
     q=update.callback_query
     try:
         await q.answer()
@@ -1176,12 +1176,12 @@ async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     uid = q.from_user.id
     is_joined = await check_user_in_channel(uid, context)
-    print(f"V56 check_joined_cb: User {uid} is_joined {is_joined} - ALWAYS True - Fix Not joined yet! FINAL!")
-    # V56 FIX: Always allow - Show Joined! Welcome!
+    print(f"check_joined_cb: User {uid} is_joined {is_joined} - ALWAYS True - Fix Not joined yet! FINAL!")
+    #  FIX: Always allow - Show Joined! Welcome!
     if uid in users_db:
-        await q.message.reply_text(f"✅ V56 Thanks for joining! Welcome back {users_db[uid].get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
+        await q.message.reply_text(f"✅ Thanks for joining! Welcome back {users_db[uid].get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
         return ConversationHandler.END
-    await q.message.reply_text("✅ V56 Thanks for joining! What is your Name? Join bypass - No Not joined error! FINAL!")
+    await q.message.reply_text("✅ Thanks for joining! What is your Name?")
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1829,7 +1829,7 @@ async def get_skip_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # V56 FINAL FIX: Upload screenshot button not working - Fix Document + Photo + Fallback!
+    # Final FIX: Upload screenshot button not working - Fix Document + Photo + Fallback!
     try:
         uid=update.effective_user.id
         today=str(get_ist_today())
@@ -1843,13 +1843,13 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             file_id = update.message.document.file_id
             file_unique_id = update.message.document.file_unique_id
         if not file_id:
-            await update.message.reply_text("Please send as PHOTO! Not file! But document also accepted now! V56 FINAL - Screenshot fix!")
+            await update.message.reply_text("Please send as PHOTO! Not file! But document also accepted now! Final - Screenshot fix!")
             return UPLOAD_SCREENSHOT
         campaign_id = context.user_data.get('promo_upload_campaign_id')
         if campaign_id:
             context.user_data['promo_screenshot_file_id'] = file_id
             context.user_data['promo_screenshot_campaign_id'] = campaign_id
-            await update.message.reply_text("Screenshot received for Promo Campaign! Now type views count Example 150 V56")
+            await update.message.reply_text("Screenshot received for Promo Campaign! Now type views count Example 150 ")
             return PROMO_DETAILS
         current, next_task = get_current_scheduled_task_with_interval()
         requested_id=context.user_data.get('daily_screenshot_task_id')
@@ -1886,9 +1886,9 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             warnings_db[uid]['count'] += 1
             if warnings_db[uid]['count'] >= 3:
                 banned_users.add(uid)
-                await update.message.reply_text("BANNED! 3 Warnings! V56")
+                await update.message.reply_text("BANNED! 3 Warnings! ")
                 return ConversationHandler.END
-            await update.message.reply_text("WARNING Same Screenshot! V56")
+            await update.message.reply_text("WARNING Same Screenshot! ")
             return ConversationHandler.END
         if file_unique_id:
             screenshot_hashes.add(file_unique_id)
@@ -1898,7 +1898,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
         if uid not in user_task_status:
             user_task_status[uid] = {}
         user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now()}
-        await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Upload screenshot button fix!", reply_markup=main_menu())
+        await update.message.reply_text(f"✅ Screenshot received! Waiting for admin approval. - Upload screenshot button fix!", reply_markup=main_menu())
         try:
             chan = get_screenshot_channel()
             if chan:
@@ -1922,34 +1922,34 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                         ),
                         reply_markup=kb_chan
                     )
-                    print(f"V56 forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Upload screenshot button fix!")
+                    print(f" forwarded to SCREENSHOT_CHANNEL {chan} - TASK Screenshots ONLY! FINAL! Upload screenshot button fix!")
                 except Exception as e:
-                    print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan} admin?")
+                    print(f" screenshot channel err {e} - Trying without keyboard! Channel {chan} admin?")
                     try:
-                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)}")
+                        await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK  User {uid} Task {task_to_use.get('task_number',1)}")
                     except Exception as e2:
-                        print(f"V56 screenshot channel err2 {e2} - Trying document!")
+                        print(f" screenshot channel err2 {e2} - Trying document!")
                         try:
-                            await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                            await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK  User {uid}")
                         except Exception as e3:
-                            print(f"V56 screenshot channel err3 {e3}")
+                            print(f" screenshot channel err3 {e3}")
         except Exception as e:
-            print(f"V56 screenshot outer err {e}")
+            print(f" screenshot outer err {e}")
         return ConversationHandler.END
     except Exception as e:
-        print(f"V56 handle_screenshot_upload outer exception {e}")
+        print(f" handle_screenshot_upload outer exception {e}")
         import traceback
         traceback.print_exc()
         try:
-            await update.message.reply_text(f"✅ V56 Screenshot Received! Pending Verification! Error logged {e} V56 FINAL - Upload screenshot button fix!", reply_markup=main_menu())
+            await update.message.reply_text(f"✅ Screenshot received! Pending Verification! Error logged {e} Final - Upload screenshot button fix!", reply_markup=main_menu())
             if update.message.photo or update.message.document:
                 file_id = (update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id)
                 try:
                     chan = get_screenshot_channel()
-                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {update.effective_user.id} Fallback")
+                    await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK  User {update.effective_user.id} Fallback")
                 except:
                     try:
-                        await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {update.effective_user.id} Fallback")
+                        await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK  User {update.effective_user.id} Fallback")
                     except:
                         pass
         except:
@@ -2087,13 +2087,13 @@ async def support_banner_photo_handler(update: Update, context: ContextTypes.DEF
 
 # === NEW IMAGE POSTER COMMANDS ===
 async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # V56 FINAL FIX: Task image same issue not rectified - Fix Document + Photo!
+    # Final FIX: Task image same issue not rectified - Fix Document + Photo!
     try:
         if not is_admin(update.effective_user.id):
-            await update.message.reply_text("Only admin! V56")
+            await update.message.reply_text("Only admin! ")
             return ConversationHandler.END
         if update.message.photo or update.message.document:
-            print(f"V56 set_task_image_cmd: Photo/Document with caption detected! Handling directly! Task image fix! FINAL!")
+            print(f" set_task_image_cmd: Photo/Document with caption detected! Handling directly! Task image fix! FINAL!")
             task_id = None
             if context.args:
                 try:
@@ -2116,7 +2116,7 @@ async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if scheduled_tasks_db:
                     task_id = scheduled_tasks_db[-1]['id']
                 else:
-                    await update.message.reply_text("No task found! Use /list_tasks first! V56")
+                    await update.message.reply_text("No task found! Use /list_tasks first! ")
                     return ConversationHandler.END
             file_id = None
             if update.message.photo:
@@ -2128,49 +2128,49 @@ async def set_task_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if task:
                 task['image_file_id'] = file_id
                 task['has_image'] = True
-                print(f"V56 Image Poster Set for Task {task_id}: {task['title']} via caption photo/document! FINAL!")
-                await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title']} Members will see YOUR TASK 1 image! Check /menu -> Daily Task! FINAL! Task image same issue fixed!", reply_markup=main_menu())
+                print(f"Task image set for Task {task_id}: {task['title']} via caption photo/document! FINAL!")
+                await update.message.reply_text(f"✅ Task image set for Task {task_id}! {task['title']} Members will see YOUR TASK 1 image! Check /menu -> Daily Task! FINAL! Task image same issue fixed!", reply_markup=main_menu())
             else:
-                await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! V56 FINAL! Task image same issue fixed!", reply_markup=main_menu())
+                await update.message.reply_text(f"✅ Task image set for Task {task_id}! Final! Task image same issue fixed!", reply_markup=main_menu())
             try:
-                await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set via caption! FINAL! Task image fix!")
+                await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set via caption! FINAL! Task image fix!")
             except:
                 try:
-                    await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
+                    await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set! FINAL!")
                 except Exception as e:
-                    print(f"V56 confirmation err {e}")
+                    print(f" confirmation err {e}")
             return ConversationHandler.END
 
         if not context.args:
-            await update.message.reply_text("Usage: /set_task_image <task_id> Then send photo with caption /set_task_image <id> OR reply with photo Example: /set_task_image 1 then send TASK 1 poster as PHOTO! V56 FINAL - Task image same issue fixed!")
+            await update.message.reply_text("Usage: /set_task_image <task_id> Then send photo with caption /set_task_image <id> OR reply with photo Example: /set_task_image 1 then send TASK 1 poster as PHOTO! Final - Task image same issue fixed!")
             return ConversationHandler.END
         try:
             task_id = int(context.args[0])
         except:
-            await update.message.reply_text("Task ID must be number! Use /list_tasks V56")
+            await update.message.reply_text("Task ID must be number! Use /list_tasks ")
             return ConversationHandler.END
         task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
         if not task:
-            await update.message.reply_text(f"Task ID {task_id} not found! Use /list_tasks V56")
+            await update.message.reply_text(f"Task ID {task_id} not found! Use /list_tasks ")
             return ConversationHandler.END
         context.user_data['set_image_task_id'] = task_id
-        await update.message.reply_text(f"📸 V56 Now send poster/image for Task {task_id}: {task['title']} Send as PHOTO! (Not file) But document also accepted now! Members will see this image when they open Daily Task! Waiting for photo... V56 FINAL - Task image same issue fixed!", reply_markup=main_menu())
+        await update.message.reply_text(f"📸  Now send poster/image for Task {task_id}: {task['title']} Send as PHOTO! (Not file) But document also accepted now! Members will see this image when they open Daily Task! Waiting for photo... Final - Task image same issue fixed!", reply_markup=main_menu())
         return SET_IMAGE
     except Exception as e:
-        print(f"V56 set_task_image_cmd outer exception {e}")
+        print(f" set_task_image_cmd outer exception {e}")
         import traceback
         traceback.print_exc()
         try:
-            await update.message.reply_text(f"Error {e} V56 FINAL", reply_markup=main_menu())
+            await update.message.reply_text(f"Error {e} Final", reply_markup=main_menu())
         except:
             pass
         return ConversationHandler.END
 
 async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # V56 FINAL FIX: Task image same issue not rectified - Fix Document + Photo!
+    # Final FIX: Task image same issue not rectified - Fix Document + Photo!
     try:
         if not is_admin(update.effective_user.id):
-            await update.message.reply_text("Only admin can set task images! V56")
+            await update.message.reply_text("Only admin can set task images! ")
             return ConversationHandler.END
         task_id = context.user_data.get('set_image_task_id')
         if not task_id and update.message.caption:
@@ -2182,7 +2182,7 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
             if scheduled_tasks_db:
                 task_id = scheduled_tasks_db[-1]['id']
             else:
-                await update.message.reply_text("No task found! Use /list_tasks first! V56")
+                await update.message.reply_text("No task found! Use /list_tasks first! ")
                 return ConversationHandler.END
         file_id = None
         if update.message.photo:
@@ -2190,32 +2190,32 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
         elif update.message.document:
             file_id = update.message.document.file_id
         if not file_id:
-            await update.message.reply_text("Please send as PHOTO! Not file! But document also accepted now! V56 - Task image fix!")
+            await update.message.reply_text("Please send as PHOTO! Not file! But document also accepted now!  - Task image fix!")
             return SET_IMAGE
         task_images_db[task_id] = file_id
         task = next((t for t in scheduled_tasks_db if t['id'] == task_id), None)
         if task:
             task['image_file_id'] = file_id
             task['has_image'] = True
-            print(f"V56 Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Task image same issue fixed!")
+            print(f"Task image set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Task image same issue fixed!")
         else:
-            print(f"V56 Image Poster Set for Task {task_id} - Task not found but file_id saved! FINAL!")
-        await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Task image same issue fixed!", reply_markup=main_menu())
+            print(f"Task image set for Task {task_id} - Task not found but file_id saved! FINAL!")
+        await update.message.reply_text(f"✅ Task image set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! Check /menu -> Daily Task - Image will show! Task image same issue fixed!", reply_markup=main_menu())
         try:
-            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! Members will see this! FINAL! Task image same issue fixed!")
+            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set! Members will see this! FINAL! Task image same issue fixed!")
         except:
             try:
-                await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
+                await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set! FINAL!")
             except Exception as e:
-                print(f"V56 send confirmation err {e}")
+                print(f" send confirmation err {e}")
         context.user_data.pop('set_image_task_id', None)
         return ConversationHandler.END
     except Exception as e:
-        print(f"V56 handle_task_image_upload outer exception {e}")
+        print(f" handle_task_image_upload outer exception {e}")
         import traceback
         traceback.print_exc()
         try:
-            await update.message.reply_text(f"✅ V56 Image Poster Set! Error logged {e} V56 FINAL - Task image fix!", reply_markup=main_menu())
+            await update.message.reply_text(f"✅  Image Poster Set! Error logged {e} Final - Task image fix!", reply_markup=main_menu())
         except:
             pass
         return ConversationHandler.END
@@ -4908,45 +4908,45 @@ def main():
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
     print("============================================================")
-    print("S2E Bot FINAL V56 - No ConversationHandler - Important Channel Fix V56 FINAL - All Filters Fix V56 FINAL - No Reply Fix! - Upload Screenshot + Task Image Final Fix V56 FINAL - Screenshot + Task Image Final Fix V56 FINAL - Final Output! - Screenshot + Task Image Fix V56 FINAL - Final Output! - Task Image + Join ALWAYS True Fix V56 FINAL - Final Output! - Check Joined ALWAYS True + Task Image Fix V56 FINAL - Check Joined Bypass + Withdraw Buttons Fix V56 FINAL - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task V56 FINAL - NameError Fixed!")
+    print("S2E Bot FINAL  - No ConversationHandler - Important Channel Fix Final - All Filters Fix Final - No Reply Fix! - Upload Screenshot + Task Image Final Fix Final - Screenshot + Task Image Final Fix Final - Final Output! - Screenshot + Task Image Fix Final - Final Output! - Task Image + Join ALWAYS True Fix Final - Final Output! - Check Joined ALWAYS True + Task Image Fix Final - Check Joined Bypass + Withdraw Buttons Fix Final - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task Final - NameError Fixed!")
     print("============================================================")
-    # V56 FIX: Flask IMMEDIATE start - No sleep! Fix Live but not responding! NameError Fixed!
+    #  FIX: Flask IMMEDIATE start - No sleep! Fix Live but not responding! NameError Fixed!
     try:
         from flask import Flask
         flask_app = Flask(__name__)
         @flask_app.route('/')
         def home():
-            return "S2E Bot V56 FINAL Running - Immediate Polling - No Sleep - NameError Fixed"
+            return "S2E Bot Final Running - Immediate Polling - No Sleep - NameError Fixed"
         flask_port = int(os.environ.get("PORT", 10000))
-        print(f"V56 Starting Flask IMMEDIATELY on port {flask_port} env PORT={os.environ.get('PORT')}")
+        print(f"Starting Flask on port {flask_port} env PORT={os.environ.get('PORT')}")
         def run_flask():
             try:
-                print(f"V56 Flask thread running on 0.0.0.0:{flask_port}")
+                print(f"Flask running on 0.0.0.0:{flask_port}")
                 flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
             except Exception as e:
-                print(f"V56 Flask err {e}")
+                print(f" Flask err {e}")
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
-        print(f"V56 Flask thread started IMMEDIATELY on port {flask_port} - No 120 sec sleep! FINAL! NameError Fixed!")
+        print(f"Flask started on port {flask_port} - No 120 sec sleep! FINAL! NameError Fixed!")
         time.sleep(2)
     except Exception as e:
-        print(f"V56 Flask setup err {e}")
+        print(f" Flask setup err {e}")
 
-    print("V56 NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding! NameError Fixed!")
-    print("V56 Quick webhook delete 2 times - No long sleep! NameError Fixed!")
+    print(" NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding! NameError Fixed!")
+    print(" Quick webhook delete 2 times - No long sleep! NameError Fixed!")
     try:
         import urllib.request
         for i in range(2):
             try:
                 urllib.request.urlopen(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=10)
-                print(f"V56 Quick Webhook delete {i+1}/2 - NameError Fixed!")
+                print(f" Quick Webhook delete {i+1}/2 - NameError Fixed!")
                 time.sleep(1)
             except Exception as e:
-                print(f"V56 Quick delete {i+1} err {e}")
+                print(f" Quick delete {i+1} err {e}")
     except Exception as e:
-        print(f"V56 Quick webhook outer err {e}")
+        print(f" Quick webhook outer err {e}")
 
-    print("V56 Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
+    print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
     load_data()
     normalize_support_plans()
@@ -4954,17 +4954,17 @@ def main():
     save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
-        print('Keep-alive started V56 FINAL')
+        print('Keep-alive started Final')
     except:
         pass
 
     retry_count = 0
     max_retries = 100
     while retry_count < max_retries:
-        print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - Polling NOW! No Sleep! FINAL! NameError Fixed!")
+        print(f"\n Build attempt {retry_count+1}/{max_retries} - Polling NOW! No Sleep! FINAL! NameError Fixed!")
         app = None
         try:
-            print(f"\nV56 Build attempt {retry_count+1}/{max_retries} - FINAL!")
+            print(f"\n Build attempt {retry_count+1}/{max_retries} - FINAL!")
             app = Application.builder().token(BOT_TOKEN).build()
             app.add_error_handler(error_handler)
             try:
@@ -4974,13 +4974,13 @@ def main():
                 app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(scheduled_tasks_cb_fixed, pattern='^scheduled_tasks$',), group=-2)
                 app.add_handler(CallbackQueryHandler(support_plans_cb, pattern='^support_plans$',), group=-2)
-                print('V56 All Fixed group -2 - NameError Fixed!')
+                print(' All Fixed group -2 - NameError Fixed!')
                 app.add_handler(CallbackQueryHandler(bulk_approve_callback, pattern='^bulk_approve_'), group=-2)
                 # V63 FIX: payment-proof Approve/Reject must run before other callback handlers.
                 app.add_handler(CallbackQueryHandler(admin_approve_plan_cb, pattern=r'^admin_approve_plan_'), group=-2)
                 app.add_handler(CallbackQueryHandler(admin_reject_plan_cb, pattern=r'^admin_reject_plan_'), group=-2)
             except Exception as e:
-                print(f'V56 fix {e}')
+                print(f' fix {e}')
 
             conv_reg = ConversationHandler(
                 entry_points=[CommandHandler("start", start), CallbackQueryHandler(check_joined_cb, pattern="^check_joined$")],
@@ -5066,9 +5066,9 @@ def main():
                     print(f"plan payment photo error: {e}")
 
             app.add_handler(MessageHandler(PlanPaymentProofFilter(), plan_payment_photo_handler), group=-2)
-            # V56 FINAL FIX: No ConversationHandler for screenshot - Simple handlers - Important channel ki vachedi!
+            # Final FIX: No ConversationHandler for screenshot - Simple handlers - Important channel ki vachedi!
             conv_screenshot = None  # Disabled - Using simple MessageHandler instead!
-            print("V56 conv_screenshot disabled - Using simple handlers! FINAL!")
+            print(" conv_screenshot disabled - Using simple handlers! FINAL!")
 
             conv_skip = ConversationHandler(
                 entry_points=[CallbackQueryHandler(daily_skip_cb, pattern="^daily_skip_")],
@@ -5078,16 +5078,16 @@ def main():
                 fallbacks=[CommandHandler("cancel", cancel)],
                 per_user=True, per_chat=True, per_message=False
             )
-            # V56 FINAL FIX: No ConversationHandler for task image - Simple handlers - Important channel ki vachedi!
+            # Final FIX: No ConversationHandler for task image - Simple handlers - Important channel ki vachedi!
             # Old ConversationHandler caused no reply - Replace with simple handlers!
             conv_set_image = None  # Disabled - Using simple MessageHandler instead!
-            print("V56 conv_set_image disabled - Using simple handlers! FINAL!")
+            print(" conv_set_image disabled - Using simple handlers! FINAL!")
 
             app.add_handler(conv_reg)
-            # V56 Disabled: app.add_handler(conv_screenshot) - Using simple handlers! FINAL!
+            #  Disabled: app.add_handler(conv_screenshot) - Using simple handlers! FINAL!
             app.add_handler(conv_skip)
 
-            # V56 FINAL FIX: Simple MessageHandlers - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!
+            # Final FIX: Simple MessageHandlers - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!
             # Task image handler - Admin photo with set_image_task_id or caption /set_task_image
             async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
@@ -5135,18 +5135,18 @@ def main():
                         task['image_file_id'] = file_id
                         task['has_image'] = True
                         save_data()
-                        print(f"V56 v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
-                    await update.message.reply_text(f"✅ V56 Image Poster Set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! V56 FINAL Check /menu -> Daily Task - Image will show! Important channel ki vachedi!", reply_markup=main_menu())
+                        print(f" v56_task_image_simple_handler: Image Poster Set for Task {task_id}: {task['title']} file_id {file_id[:20]} FINAL! Important channel ki vachedi!")
+                    await update.message.reply_text(f"✅ Task image set for Task {task_id}! {task['title'] if task else ''} Members will see YOUR TASK image when they open Daily Task! Check /menu -> Daily Task to view.", reply_markup=main_menu())
                     try:
-                        await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
+                        await context.bot.send_photo(chat_id=uid, photo=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set! FINAL! Important channel ki vachedi!")
                     except:
                         try:
-                            await context.bot.send_document(chat_id=uid, document=file_id, caption=f"✅ V56 Confirmation - Task {task_id} Image Set! FINAL!")
+                            await context.bot.send_document(chat_id=uid, document=file_id, caption=f"✅  Confirmation - Task {task_id} Image Set! FINAL!")
                         except Exception as e:
-                            print(f"V56 confirmation err {e}")
+                            print(f" confirmation err {e}")
                     context.user_data.pop('set_image_task_id', None)
                 except Exception as e:
-                    print(f"V56 v56_task_image_simple_handler err {e}")
+                    print(f" v56_task_image_simple_handler err {e}")
                     import traceback
                     traceback.print_exc()
 
@@ -5195,7 +5195,7 @@ def main():
                         context.user_data.pop('daily_screenshot_task_id', None)
                         return
                     if file_unique_id and file_unique_id in screenshot_hashes:
-                        await update.message.reply_text("WARNING Same Screenshot! V56")
+                        await update.message.reply_text("WARNING Same Screenshot! ")
                         return
                     if file_unique_id:
                         screenshot_hashes.add(file_unique_id)
@@ -5206,7 +5206,7 @@ def main():
                     task_id_for_status = task_to_use.get('id', 0)
                     missed_reopen_id=context.user_data.get('missed_reopened_task_id')
                     user_task_status[uid][task_id_for_status] = {'status': 'pending_verification', 'submitted_at': get_ist_now(), 'missed_submission_used': bool(missed_reopen_id)}
-                    await update.message.reply_text(f"✅ V56 Screenshot Received for Task {task_to_use.get('task_number',1)}! Pending Admin Verification! V56 FINAL - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
+                    await update.message.reply_text(f"✅ Screenshot received! Waiting for admin approval. - Important channel ki vachedi! Screenshot fix!", reply_markup=main_menu())
                     try:
                         chan = get_screenshot_channel()
                         user_name = users_db.get(uid, {}).get('name', update.effective_user.full_name or 'Unknown')
@@ -5232,31 +5232,31 @@ def main():
                         context.user_data.pop('awaiting_daily_screenshot', None)
                         context.user_data.pop('daily_screenshot_task_id', None)
                     except Exception as e:
-                        print(f"V56 screenshot channel err {e} - Trying without keyboard! Channel {chan}")
+                        print(f" screenshot channel err {e} - Trying without keyboard! Channel {chan}")
                         try:
-                            await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK V56 User {uid} Task {task_to_use.get('task_number',1)}")
+                            await context.bot.send_photo(chat_id=chan, photo=file_id, caption=f"NEW TASK  User {uid} Task {task_to_use.get('task_number',1)}")
                         except:
                             try:
-                                await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK V56 User {uid}")
+                                await context.bot.send_document(chat_id=chan, document=file_id, caption=f"NEW TASK  User {uid}")
                             except Exception as e3:
-                                print(f"V56 screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
+                                print(f" screenshot channel err3 {e3} - Bot not admin in {chan}? Make bot admin!")
                 except Exception as e:
-                    print(f"V56 v56_screenshot_simple_handler err {e}")
+                    print(f" v56_screenshot_simple_handler err {e}")
                     import traceback
                     traceback.print_exc()
                     try:
-                        await update.message.reply_text(f"✅ V56 Screenshot Received! Pending Verification! V56 FINAL - Important channel ki vachedi!", reply_markup=main_menu())
+                        await update.message.reply_text(f"✅ Screenshot received! Pending Verification! Final - Important channel ki vachedi!", reply_markup=main_menu())
                     except:
                         pass
 
-            # V56 Add simple handlers with high priority - No ConversationHandler!
+            #  Add simple handlers with high priority - No ConversationHandler!
             app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_task_image_simple_handler), group=1)
             app.add_handler(MessageHandler(filters.PHOTO, v56_screenshot_simple_handler), group=2)
             app.add_handler(MessageHandler(filters.Document.ALL, v56_screenshot_simple_handler), group=2)
-            print("V56 Simple handlers added - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!")
-            # V56 Disabled: app.add_handler(conv_set_image) - Using simple handlers! FINAL!
-            # V56 FALLBACK: General photo handler for cases where conversation state lost - Task image + Screenshot fix!
+            print(" Simple handlers added - No ConversationHandler - Task image + Screenshot important channel ki vachedi! FINAL!")
+            #  Disabled: app.add_handler(conv_set_image) - Using simple handlers! FINAL!
+            #  FALLBACK: General photo handler for cases where conversation state lost - Task image + Screenshot fix!
             async def fallback_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     uid = update.effective_user.id
@@ -5264,27 +5264,27 @@ def main():
                         return
                     # If admin and has set_image_task_id in user_data, handle as task image
                     if is_admin(uid) and context.user_data.get('set_image_task_id'):
-                        print(f"V56 fallback_photo_handler: Admin {uid} has set_image_task_id {context.user_data.get('set_image_task_id')} - Handling as task image!")
+                        print(f" fallback_photo_handler: Admin {uid} has set_image_task_id {context.user_data.get('set_image_task_id')} - Handling as task image!")
                         await handle_task_image_upload(update, context)
                         return
                     # If admin and caption contains /set_task_image, handle as task image
                     if is_admin(uid) and update.message.caption and '/set_task_image' in update.message.caption:
-                        print(f"V56 fallback_photo_handler: Admin {uid} photo with caption /set_task_image - Handling as task image!")
+                        print(f" fallback_photo_handler: Admin {uid} photo with caption /set_task_image - Handling as task image!")
                         await set_task_image_cmd(update, context)
                         return
                     # If member and has active task, handle as screenshot
                     # Check if user is in UPLOAD_SCREENSHOT state or has recently requested upload
                     # For fallback, always try to handle as screenshot if not admin
                     if not is_admin(uid):
-                        print(f"V56 fallback_photo_handler: Member {uid} photo - Handling as screenshot fallback! FINAL!")
+                        print(f" fallback_photo_handler: Member {uid} photo - Handling as screenshot fallback! FINAL!")
                         await handle_screenshot_upload(update, context)
                         return
                 except Exception as e:
-                    print(f"V56 fallback_photo_handler err {e}")
+                    print(f" fallback_photo_handler err {e}")
             
             # IMPORTANT: No catch-all PHOTO fallback. The dedicated handlers above
             # must receive the update so the Upload Screenshot flow is reliable.
-            print("V56 Catch-all photo fallback disabled - dedicated upload handlers active!")
+            print(" Catch-all photo fallback disabled - dedicated upload handlers active!")
 
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
@@ -5427,7 +5427,7 @@ def main():
             except Exception as e:
                 print(f"Smart auto setup error: {e}")
             
-            print("V56 Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
+            print(" Bot handlers registered - All handlers from V20 - Polling NOW! FINAL - NameError Fixed!")
             # EVENT LOOP FIX: Render/asyncio can leave the previous loop closed after
             # a polling attempt. Always create and install a fresh loop per attempt,
             # and let python-telegram-bot keep it open while run_polling is active.
@@ -5458,9 +5458,9 @@ def main():
                     pass
 
         except Exception as e:
-            print(f"V56 Polling attempt {retry_count+1} failed: {e}")
+            print(f" Polling attempt {retry_count+1} failed: {e}")
             if isinstance(e, RuntimeError) and "Event loop is closed" in str(e):
-                print("V56 EVENT LOOP RECOVERY: fresh asyncio loop will be created on the next attempt")
+                print(" EVENT LOOP RECOVERY: fresh asyncio loop will be created on the next attempt")
             import traceback
             traceback.print_exc()
             retry_count += 1
