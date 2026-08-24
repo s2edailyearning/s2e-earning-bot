@@ -4681,6 +4681,97 @@ async def list_tasks_audience_cmd(update, context):
     await update.message.reply_text(msg)
 
 
+
+async def clear_missed_all_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    total = 0
+    for uid in list(missed_tasks_db.keys()):
+        total += len(missed_tasks_db[uid])
+        missed_tasks_db[uid] = []
+    save_data()
+    await update.message.reply_text(f"✅ Cleared all missed tasks!\nTotal cleared: {total} tasks from {len(missed_tasks_db)} users.")
+
+async def clear_missed_user_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /clear_missed_user <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+        if uid in missed_tasks_db:
+            count = len(missed_tasks_db[uid])
+            missed_tasks_db[uid] = []
+            save_data()
+            await update.message.reply_text(f"✅ Cleared {count} missed tasks for user {uid}")
+        else:
+            await update.message.reply_text(f"No missed tasks for user {uid}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def clear_scheduled_all_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    count = len(scheduled_tasks_db)
+    scheduled_tasks_db.clear()
+    save_data()
+    await update.message.reply_text(f"✅ Cleared all {count} scheduled tasks! Now add fresh tasks without overlap.")
+
+async def clear_duplicates_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    # Clear duplicate missed tasks (same ID)
+    cleaned = 0
+    for uid in list(missed_tasks_db.keys()):
+        seen = set()
+        new_list = []
+        for task in missed_tasks_db[uid]:
+            tid = task.get('id')
+            if tid not in seen:
+                seen.add(tid)
+                new_list.append(task)
+            else:
+                cleaned += 1
+        missed_tasks_db[uid] = new_list
+    # Clear duplicate scheduled tasks (same time overlap)
+    # Keep only first task per time slot
+    seen_times = set()
+    new_scheduled = []
+    dup_count = 0
+    for task in scheduled_tasks_db:
+        key = (task.get('date'), task.get('open_time'), task.get('close_time'))
+        if key not in seen_times:
+            seen_times.add(key)
+            new_scheduled.append(task)
+        else:
+            dup_count += 1
+    scheduled_tasks_db[:] = new_scheduled
+    save_data()
+    await update.message.reply_text(f"✅ Duplicates cleaned!\nMissed duplicates: {cleaned}\nScheduled duplicates: {dup_count}\nNow only unique tasks remain.")
+
+# Auto-clean on startup - remove duplicate missed tasks
+def auto_clean_duplicates():
+    try:
+        cleaned = 0
+        for uid in list(missed_tasks_db.keys()):
+            seen = set()
+            new_list = []
+            for task in missed_tasks_db[uid]:
+                tid = task.get('id')
+                if tid not in seen:
+                    seen.add(tid)
+                    new_list.append(task)
+                else:
+                    cleaned += 1
+            missed_tasks_db[uid] = new_list
+        if cleaned > 0:
+            print(f"Auto-cleaned {cleaned} duplicate missed tasks on startup")
+            save_data()
+    except Exception as e:
+        print(f"Auto-clean error: {e}")
+
+
 async def add_task_manual_cmd(update, context):
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
