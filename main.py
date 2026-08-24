@@ -5574,7 +5574,6 @@ def main():
             app.add_handler(CommandHandler("clear_scheduled_all", clear_scheduled_all_cmd))
             app.add_handler(CommandHandler("clear_duplicates", clear_duplicates_cmd))
             app.add_handler(CommandHandler("clear_duplicate", clear_duplicates_cmd))
-            app.add_handler(CommandHandler("fix_duplicates", clear_duplicates_simple_cmd))
             app.add_handler(CommandHandler("list_tasks_audience", list_tasks_audience_cmd))
             app.add_handler(CommandHandler("add_task_5plans", add_task_5plans_cmd))
             app.add_handler(CommandHandler("add_task_5p", add_task_5plans_cmd))
