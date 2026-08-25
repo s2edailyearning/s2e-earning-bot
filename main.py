@@ -3651,11 +3651,89 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
          f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
          f"📋 Today's tasks: {count}/{limit}\n💰 Total earning: ₹{total_earned}\n"
          f"🎯 Plan withdrawal cap: ₹{cap}\n💸 Total withdrawn: ₹{approved_withdrawn}\n📉 Withdrawal cap remaining: ₹{cap_remaining}")
-    await q.message.reply_text(msg,reply_markup=main_menu())
+    # V41: If Gender/Mobile N/A, show update button
+    _gender = user.get('gender','N/A')
+    _mobile = user.get('mobile','N/A')
+    if _gender == 'N/A' or _mobile == 'N/A':
+        _kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Update Details", callback_data="update_details")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+        ])
+        await q.message.reply_text(msg, reply_markup=_kb)
+    else:
+        await q.message.reply_text(msg, reply_markup=main_menu())
+
+
+async def update_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query; await q.answer()
+    context.user_data['awaiting_details'] = True
+    await q.message.reply_text(
+        "📝 UPDATE DETAILS\n\nSend your details in ONE message like this:\n\nName: Venkataswamy K\nGender: Male\nDOB: 01-01-1990\nMobile: 9876543210\nUPI: 9876543210@paytm",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]])
+    )
+
+async def handle_details_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('awaiting_details'):
+        return
+    uid=update.effective_user.id
+    text=update.message.text or ""
+    if "Name:" not in text:
+        return
+    data={}
+    for line in text.split("\n"):
+        if ":" in line:
+            k,v=line.split(":",1)
+            k=k.strip().lower()
+            v=v.strip()
+            if "name" in k: data["name"]=v
+            elif "gender" in k: data["gender"]=v
+            elif "dob" in k: data["dob"]=v
+            elif "mobile" in k or "phone" in k: data["mobile"]=v
+            elif "upi" in k: data["upi"]=v
+    if data:
+        users_db.setdefault(uid, {}).update(data)
+        users_db[uid]['joined']=users_db[uid].get('joined') or str(get_ist_today())
+        save_data()
+        context.user_data.pop('awaiting_details', None)
+        await update.message.reply_text(f"✅ Details Saved!\nName: {data.get('name','')}\nCheck My Details now!", reply_markup=main_menu())
+
+
 
 async def back_menu_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     await q.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
+
+
+def reset_tasks_on_plan_upgrade(uid, daily_limit=20):
+    today = str(get_ist_today())
+    daily_task_count[uid] = {today: 0}
+    task_open_time.pop(uid, None)
+    print(f"V41: Tasks reset {uid} to 0/{daily_limit}")
+    save_data()
+
+async def check_plan_expiry_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        today = get_ist_today()
+        for uid, plan in list(user_plans.items()):
+            try:
+                expiry_str = plan.get('expiry') or plan.get('expires_at')
+                if not expiry_str: continue
+                exp_date = date.fromisoformat(str(expiry_str)[:10])
+                days_left = (exp_date - today).days
+                if days_left in (3,2,1):
+                    bal = get_balance(uid)
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"⚠️ PLAN EXPIRY - {days_left} days left!\nPlan: {plan.get('plan_name','Plan')}\nExpiry: {expiry_str}\nBalance Safe: ₹{bal:.2f}\nRenew now! After expiry 3 days free again!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Renew", callback_data="support_plans")]]))
+                    except: pass
+                elif days_left < 0:
+                    bal = get_balance(uid)
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"⏰ PLAN EXPIRED!\nBalance Safe: ₹{bal:.2f}\n🆓 3 DAYS FREE again! 0/4 daily, Total 10 tasks", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade", callback_data="support_plans")]]))
+                    except: pass
+            except: pass
+    except Exception as e:
+        print(f"expiry job err {e}")
+
 
 async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -4639,6 +4717,38 @@ async def back_menu_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE)
         print(f"back_menu error {e}")
 
 # === USER MENU FIXED HANDLERS V25 ===
+
+def reset_tasks_on_plan_upgrade(uid, daily_limit=20):
+    today = str(get_ist_today())
+    daily_task_count[uid] = {today: 0}
+    task_open_time.pop(uid, None)
+    print(f"V41: Tasks reset {uid} to 0/{daily_limit}")
+    save_data()
+
+async def check_plan_expiry_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        today = get_ist_today()
+        for uid, plan in list(user_plans.items()):
+            try:
+                expiry_str = plan.get('expiry') or plan.get('expires_at')
+                if not expiry_str: continue
+                exp_date = date.fromisoformat(str(expiry_str)[:10])
+                days_left = (exp_date - today).days
+                if days_left in (3,2,1):
+                    bal = get_balance(uid)
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"⚠️ PLAN EXPIRY - {days_left} days left!\nPlan: {plan.get('plan_name','Plan')}\nExpiry: {expiry_str}\nBalance Safe: ₹{bal:.2f}\nRenew now! After expiry 3 days free again!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Renew", callback_data="support_plans")]]))
+                    except: pass
+                elif days_left < 0:
+                    bal = get_balance(uid)
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"⏰ PLAN EXPIRED!\nBalance Safe: ₹{bal:.2f}\n🆓 3 DAYS FREE again! 0/4 daily, Total 10 tasks", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade", callback_data="support_plans")]]))
+                    except: pass
+            except: pass
+    except Exception as e:
+        print(f"expiry job err {e}")
+
+
 async def withdraw_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("WITHDRAW FIXED CLICKED")
     try:
@@ -6579,6 +6689,11 @@ def main():
             app.add_handler(CallbackQueryHandler(missed_upload_cb, pattern=r"^missed_upload_-?\d+$"))
             app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
+            app.add_handler(CallbackQueryHandler(update_details_cb, pattern="^update_details$"))
+            try:
+                app.job_queue.run_daily(check_plan_expiry_job, time=time(hour=3, minute=30), name="expiry_check")
+            except Exception as _e:
+                print(f"expiry job schedule fail {_e}")
             app.add_handler(CommandHandler("remove_user", remove_user_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
@@ -6591,6 +6706,7 @@ def main():
             app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
             app.add_handler(CallbackQueryHandler(wd_edit_upi_cb, pattern="^wd_edit_upi$"))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_details_text), group=2)
             app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
             app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
             app.add_handler(CallbackQueryHandler(buy_support_plan_cb, pattern=r"^buy_support_\d+$"))
