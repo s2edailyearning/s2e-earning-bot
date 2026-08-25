@@ -1,4 +1,4 @@
-print("V46 FINAL - DAILY COUNT SAVE FIX + MISSED STATUS FIX - 2026-08-25 16:25 IST")
+print("V47 FINAL - PERSISTENCE + DYNAMIC TASK LIMIT + BALANCE BREAKDOWN + MISSED PRESERVE - 2026-08-25 20:30 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -1539,13 +1539,17 @@ def mark_task_completed_with_interval(uid, task_id):
         daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
         # total tasks
         tasks_db[uid] = tasks_db.get(uid, 0) + 1
+        # Remove only the task that was just completed from the missed list.
+        # Never clear the user's entire missed-task history.
         try:
-            if uid in missed_tasks_db:
-                try:
-                    missed_tasks_db[uid] = {}
-                    save_data()
-                except: pass
-        except: pass
+            if uid in missed_tasks_db and isinstance(missed_tasks_db.get(uid), list):
+                _completed_id = int(task_id)
+                missed_tasks_db[uid] = [
+                    t for t in missed_tasks_db[uid]
+                    if not (isinstance(t, dict) and str(t.get('id', '')).lstrip('-').isdigit() and int(t.get('id')) == _completed_id)
+                ]
+        except Exception as _missed_remove_e:
+            print(f"Missed task remove fail {_missed_remove_e}")
         # earning ₹5 per task
         reward = 5
         add_today_task_earning(uid, reward, day=today)
@@ -1854,7 +1858,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
     if uid in users_db:
-        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
+        _start_info = _canonical_plan_info(uid)
+        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/{_start_info['daily']}", reply_markup=main_menu())
         return ConversationHandler.END
     await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
     return NAME
@@ -1988,7 +1993,7 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
     users_db[uid]['reg_date']=get_ist_today()
-    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
+    await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/{_canonical_plan_info(uid)['daily']} | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
 async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2009,7 +2014,7 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Gender: {users_db[uid].get('gender','-')}\nProfession: {value}\n\n"
         "💰 Earn: Rs10 per referral + 10% plan commission\n"
         "🏪 Promo: Earn Rs10 per 100 status views!\n"
-        "📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!",
+        f"📋 Tasks: 0/{_canonical_plan_info(uid)['daily']} | Withdraw Min Rs200\n\nClick /menu for options!",
         reply_markup=main_menu()
     )
     return ConversationHandler.END
@@ -2265,6 +2270,11 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hold_balance = max(0, bal - cap) if cap < bal else 0
     withdrawable = min(bal, cap) - withdrawn
     withdrawable = max(0, withdrawable)
+    # The balance includes historical earnings, while the lines above mostly show
+    # today's task/referral values. Show the remaining amount explicitly so the
+    # displayed breakdown can be reconciled with the actual wallet balance.
+    known_breakdown = direct_amount + referral_today + promo_rs
+    previous_other = round(bal - known_breakdown, 2)
     msg=(
         "💰 WALLET\n\n"
         f"Balance: ₹{bal:.2f}\n"
@@ -2274,6 +2284,7 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Today's Plan Activation Commission: ₹{plan_today:.2f}\n"
         f"Today's Referral Commission: ₹{referral_today:.2f}\n"
         f"Promo + Product Promo: ₹{promo_rs:.2f}\n"
+        f"Previous / Other Balance: ₹{previous_other:.2f}\n"
         f"Total: ₹{bal:.2f}\n\n"
         f"📋 Plan: {info['display']}\n"
         f"Daily Tasks: {direct_today}/{info['daily']}\n"
@@ -3828,7 +3839,7 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 Balance: ₹{_bal:.2f}\n"
                 f"📋 Plan: {_info['display']}\n"
                 f"📅 Free Days Remaining: {_free_days} days\n"
-                f"📊 Your Tasks: {_total_tasks}/10\n"
+                f"📊 Total Free Tasks: {_total_tasks}/10\n"
                 f"🎯 Free Cap: ₹100\n\n"
                 f"❌ Free members cannot withdraw!\n"
                 f"💎 Need to upgrade plan!",
@@ -4326,7 +4337,7 @@ async def set_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target not in daily_task_count:
             daily_task_count[target]={}
         daily_task_count[target][today]=count
-        await update.message.reply_text(f"Tasks set User {target} Today {count}/15")
+        await update.message.reply_text(f"Tasks set User {target} Today {count}/{check_daily_limits(target)[1]}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
@@ -4361,7 +4372,7 @@ async def test_withdraw_setup_cmd(update: Update, context: ContextTypes.DEFAULT_
     bonus_balance[target]=325
     if target in last_withdraw_date_db:
         del last_withdraw_date_db[target]
-    await update.message.reply_text(f"TEST User {target} 15/15 Balance Rs{get_balance(target)}")
+    await update.message.reply_text(f"TEST User {target} {get_tasks(target)}/{check_daily_limits(target)[1]} Balance Rs{get_balance(target)}")
 
 
 
@@ -4992,16 +5003,14 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     user_task_status[uid] = {}
                 user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
                 try:
-                    # V46: Force clear missed and save
-                    if uid in missed_tasks_db:
-                        missed_tasks_db[uid] = {}
-                    save_data()
-                    print(f"V46 SAVED after approval uid={uid} reward={reward}")
+                    # Remove only this approved task from missed tasks.
+                    if uid in missed_tasks_db and isinstance(missed_tasks_db.get(uid), list):
+                        missed_tasks_db[uid] = [
+                            t for t in missed_tasks_db[uid]
+                            if not (isinstance(t, dict) and str(t.get('id', '')).lstrip('-').isdigit() and int(t.get('id')) == int(task_id))
+                        ]
                 except Exception as se:
-                    print(f"V46 save fail {se}")
-                # Remove from missed_tasks_db
-                if uid in missed_tasks_db:
-                    missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
+                    print(f"V46 missed-task remove fail {se}")
             else:
                 # Fallback: mark any pending_verification as completed
                 for tid, sdata in list(user_task_status.get(uid, {}).items()):
@@ -6076,7 +6085,7 @@ async def set_task_count_cmd(update, context):
         daily_task_count[target][today]=new_count
         tasks_db[target]=new_count
         save_data()
-        await update.message.reply_text(f"{target} -> {new_count}/15")
+        await update.message.reply_text(f"{target} -> {new_count}/{check_daily_limits(target)[1]}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
