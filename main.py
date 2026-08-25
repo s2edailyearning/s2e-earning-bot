@@ -3664,18 +3664,43 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     uid = update.effective_user.id
-    # V37 FREE CHECK
+    # V38 FREE CHECK - Telugu + Correct Balance
     try:
         _info = _canonical_plan_info(uid)
         if _info['type'] in ('free', 'free_expired') or not _info.get('active'):
             _bal = get_balance(uid)
+            _total_tasks = tasks_db.get(uid, 0)
+            _free_days = 3
+            try:
+                _joined = users_db.get(uid, {}).get('joined') or users_db.get(uid, {}).get('reg_date')
+                if _joined:
+                    from datetime import date as _d
+                    _jd = _d.fromisoformat(str(_joined)[:10])
+                    _used = (get_ist_today() - _jd).days
+                    _free_days = max(0, 3 - _used)
+            except:
+                pass
             await q.message.reply_text(
-                f"🔒 WITHDRAWAL LOCKED\n\n💰 Balance: ₹{_bal:.2f}\n📋 Plan: {_info['display']}\n\n❌ Free members cannot withdraw!\n💎 Need to upgrade plan!\n\n10/10 tasks = ₹200 instant withdraw!\nWallet ₹200 ayyaka withdraw cheyochu!",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+                f"🔒 WITHDRAWAL LOCKED\n\n"
+                f"💰 Balance: ₹{_bal:.2f}\n"
+                f"📋 Plan: {_info['display']}\n"
+                f"📅 Free Days Remaining: {_free_days} days\n"
+                f"📊 Your Tasks: {_total_tasks}/10\n"
+                f"🎯 Free Cap: ₹100\n\n"
+                f"❌ Free members cannot withdraw!\n"
+                f"💎 Need to upgrade plan!\n\n"
+                f"✅ After Upgrade:\n"
+                f"• 10/10 tasks = ₹200 instant withdraw!\n"
+                f"• Wallet ₹200 = eligible to withdraw!\n"
+                f"• Tasks will restart from 0/20!\n"
+                f"• Daily 10-20 tasks available!\n\n"
+                f"👇 Click Support Plans to upgrade!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Support Plans - Upgrade", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
             )
             return
     except Exception as _e:
         print(f"free withdraw check fail {_e}")
+        import traceback; traceback.print_exc()
     today = str(get_ist_today())
 
     # One withdrawal per day. Only a real request for TODAY blocks a new request.
