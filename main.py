@@ -1,4 +1,4 @@
-print("V51 FINAL - EMERGENCY FIX COUNT + PERSIST FIX - 2026-08-25 18:30 IST")
+print("V52 FINAL - SIMPLE PROMOTE MSG + PERSIST FIX - 2026-08-25 18:30 IST")
 print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
 print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
 print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
@@ -2422,7 +2422,7 @@ async def promo_upload_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    msg = "📢 Promote Your Shop via S2E Network!\n\nYou have shop in Kavali/Palmaner? Want customers? We have members!\n\nMembers put your poster on WhatsApp Status, you get views!\n\n💰 Pricing:\nRs200 per 1000 views\nMembers earn Rs10 per 100 views\nYour profit Rs10 per 100 views\n\nExample: 5000 views = Shop pays Rs1000, Members get Rs500, You profit Rs500\n\nContact @s2edayincome to start!\n\nAdmin command:\n/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
+    msg = "📢 Mee Shop Promotion 📢\n\nMee shop ni memu ma digital channels dwara promote chestam!\n\n✅ Mee poster ni ma members WhatsApp Status lo pedataru\n✅ Meeru ekkuva customers ni pondataru\n\n💬 Vivaranalaki sampradinchandi: @s2edayincome\n\nAdmin: /add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
     await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
