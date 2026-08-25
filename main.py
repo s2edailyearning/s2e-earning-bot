@@ -1469,6 +1469,11 @@ def mark_task_completed_with_interval(uid, task_id):
     if uid not in user_task_status:
         user_task_status[uid] = {}
     user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
+    try:
+        save_data()
+        print(f"V30 Task {task_id} completed for {uid} - saved")
+    except Exception as _e:
+        print(f"Save after task fail {_e}")
 
 def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
