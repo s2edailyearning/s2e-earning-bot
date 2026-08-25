@@ -7,9 +7,9 @@ warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
-# VERSION: V4.1 - GITHUB FORCE UPDATE - 2026-08-24 01:56:58 IST
-# FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
-# TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
+# VERSION: V4.4 - RENDER 2 MIN SLEEP FIX - FINAL PERFECT - 2026-08-25 08:55 IST - FORCE UPDATE
+# FIX: V4.4 - Flask KeepAlive + drop_pending=False + Product Timeout + 2min Idle Fix - FINAL
+# TIMESTAMP: 2026-08-25 08:55:00 IST - FORCE NEW COMMIT FOR RENDER
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -32,8 +32,8 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.2 - DATA PERSISTENCE + PRODUCT BULK + DUPLICATE FIX - 2026-08-24 08:30:00 IST")
-print("FIXED: _db_init + Daily Task + Duplicate + Bulk")
+print("FINAL V4.4 - RENDER 2 MIN SLEEP FIX + DROP_PENDING FIX + FLASK FIX - 2026-08-25 08:55 IST")
+print("FIXED: Flask KeepAlive + 2min Sleep + Product Timeout + Drop Pending")
 print("="*60)
 
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
