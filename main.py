@@ -132,7 +132,7 @@ def setup_smart_auto(application):
     global idle_check_job
     try:
         idle_check_job = application.job_queue.run_repeating(idle_checker, interval=60, first=60)
-        print("🧠 Smart Idle Checker started")
+        print("🧠 Smart Idle Checker started (does not prevent Render Free spin-down)")
     except Exception as e:
         print(f"Idle checker error: {e}")
 
@@ -234,7 +234,7 @@ def keep_alive_pinger():
     url = "https://s2e-earning-bot.onrender.com/"
     while True:
         try:
-            time.sleep(240)
+            time.sleep(300)
             try:
                 import httpx
                 httpx.get(url, timeout=10)
@@ -716,13 +716,12 @@ task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
 
-# === PERSISTENT STORAGE - SUPABASE + LOCAL FALLBACK ===
-# Runtime state is stored in Supabase when SUPABASE_URL and SUPABASE_KEY are set.
-# A local JSON file remains as a fallback and as a one-time migration source.
-import urllib.request
-import urllib.parse
-import urllib.error
-
+# === PERSISTENT STORAGE - RESTORED / SAFE JSON VERSION ===
+# The previous build called load_data()/save_data() from main(), but those
+# functions were missing from this file. That caused Render to stop with:
+# NameError: name 'load_data' is not defined
+# Persistent storage path. On Render, mount a Persistent Disk at /var/data.
+# DATA_FILE can still override the path through an environment variable.
 _render_disk = "/var/data"
 _default_data_file = os.path.join(_render_disk, "bot_data.json") if os.path.isdir(_render_disk) else "bot_data.json"
 DATA_FILE = os.getenv("DATA_FILE", _default_data_file)
@@ -730,14 +729,8 @@ DATA_DIR = os.path.dirname(DATA_FILE) or "."
 try:
     os.makedirs(DATA_DIR, exist_ok=True)
 except Exception as _e:
-    print(f"Local data directory unavailable: {_e}")
-
-SUPABASE_URL = str(os.getenv("SUPABASE_URL", "")).rstrip("/")
-SUPABASE_KEY = str(os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
-SUPABASE_STATE_TABLE = os.getenv("SUPABASE_STATE_TABLE", "bot_state")
-SUPABASE_STATE_ID = os.getenv("SUPABASE_STATE_ID", "main")
-USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
-print(f"DATA_FILE={DATA_FILE} | Supabase={'YES' if USE_SUPABASE else 'NO'} | State table={SUPABASE_STATE_TABLE}")
+    print(f"Persistent data directory unavailable: {_e}")
+print(f"DATA_FILE={DATA_FILE} | Persistent Disk={'YES' if DATA_FILE.startswith('/var/data/') else 'NO'}")
 
 
 def _json_safe(value):
@@ -768,7 +761,11 @@ def _restore_scheduled_task_times():
     for task in scheduled_tasks_db:
         if not isinstance(task, dict):
             continue
-        for field, obj_field in (("open_time", "open_time_obj"), ("close_time", "close_time_obj"), ("next_time", "next_time_obj")):
+        for field, obj_field in (
+            ("open_time", "open_time_obj"),
+            ("close_time", "close_time_obj"),
+            ("next_time", "next_time_obj"),
+        ):
             if not task.get(obj_field):
                 raw = task.get(field)
                 if raw:
@@ -778,185 +775,150 @@ def _restore_scheduled_task_times():
 
 
 def _restore_loaded_sets_and_times():
+    """Restore non-JSON native containers used by the bot."""
     _restore_scheduled_task_times()
     for campaign in promo_campaigns_db:
         if isinstance(campaign, dict):
             members = campaign.get("members_joined", set())
             if isinstance(members, list):
                 campaign["members_joined"] = set(members)
-    try:
-        if not isinstance(screenshot_hashes, set):
+    if not isinstance(screenshot_hashes, set):
+        try:
             screenshot_hashes.clear()
             screenshot_hashes.update([])
-    except Exception:
-        pass
-    try:
-        if not isinstance(task_notifications_sent, set):
-            task_notifications_sent.clear()
-            task_notifications_sent.update([])
-    except Exception:
-        pass
-
-
-def _state_snapshot():
-    state_names = [
-        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-        "banned_users", "warnings_db", "pending_daily", "user_plans",
-        "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
-        "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-        "withdraw_history", "withdraw_done_date", "daily_task_count",
-        "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
-        "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
-        "user_task_status", "task_notifications_sent", "skip_db",
-        "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
-        "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter",
-        "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db",
-        "admin_names_db", "support_plans_db", "pending_plan_purchases",
-        "support_plan_image_file_id", "PAYMENT_UPI",
-    ]
-    data = {}
-    for name in state_names:
-        if name in globals():
-            data[name] = _json_safe(globals()[name])
-    return data
-
-
-def _supabase_request(method, path, payload=None, timeout=12):
-    if not USE_SUPABASE:
-        return None
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_STATE_TABLE}{path}"
-    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-    if method.upper() == "POST":
-        headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
-    req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
-        return json.loads(raw) if raw else None
-
-
-def _supabase_load_state():
-    if not USE_SUPABASE:
-        return None
-    try:
-        q = urllib.parse.quote(str(SUPABASE_STATE_ID), safe="")
-        rows = _supabase_request("GET", f"?id=eq.{q}&select=data")
-        if isinstance(rows, list) and rows:
-            data = rows[0].get("data")
-            if isinstance(data, dict):
-                print(f"Supabase state loaded OK - {len(data)} state sections")
-                return data
-        print("Supabase state row not found - will use local state for first migration")
-        return None
-    except Exception as e:
-        print(f"Supabase load error: {e}")
-        return None
-
-
-def _supabase_save_state(data):
-    if not USE_SUPABASE:
-        return False
-    try:
-        _supabase_request("POST", "", {"id": SUPABASE_STATE_ID, "data": data})
-        print(f"Supabase state saved OK - {len(data)} state sections")
-        return True
-    except Exception as e:
-        print(f"Supabase save error: {e}")
-        return False
+        except Exception:
+            pass
+    if not isinstance(task_notifications_sent, set):
+        try:
+            task_notifications_sent = set(task_notifications_sent or [])
+        except Exception:
+            pass
 
 
 def save_data():
-    """Persist runtime state to Supabase; also keep local JSON as fallback."""
-    data = _state_snapshot()
-    supabase_ok = _supabase_save_state(data)
+    """Persist the bot's important runtime state to bot_data.json."""
     try:
+        state_names = [
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "banned_users", "warnings_db", "pending_daily", "user_plans",
+            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
+            "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
+            "user_task_status", "task_notifications_sent", "skip_db",
+            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
+            "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db",
+            "admin_names_db", "support_plans_db", "pending_plan_purchases",
+            "support_plan_image_file_id", "pending_plans",
+        ]
+        data = {}
+        for name in state_names:
+            if name in globals():
+                data[name] = _json_safe(globals()[name])
+
+        # Atomic-ish write: finish a temporary file first, then replace the old file.
         temp_file = DATA_FILE + ".tmp"
         with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(temp_file, DATA_FILE)
-        print(f"Local backup saved OK - {len(data)} state sections")
+        print(f"Data saved OK - {len(data)} state sections")
+        return True
     except Exception as e:
-        print(f"Local backup save error: {e}")
-    return supabase_ok or os.path.exists(DATA_FILE)
-
-
-def _apply_loaded_state(data):
-    if not isinstance(data, dict):
+        print(f"Save error: {e}")
         return False
-    container_names = [
-        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-        "warnings_db", "pending_daily", "user_plans", "pending_plans",
-        "referral_map", "pending_referrals", "referral_earnings",
-        "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-        "withdraw_history", "withdraw_done_date", "daily_task_count",
-        "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
-        "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db", "product_promo_db",
-        "promo_earnings_db", "promo_views_db", "promo_pending", "product_promo_pending",
-        "product_promo_approved", "task_images_db", "support_banner_db", "admin_names_db", "support_plans_db",
-    ]
-    for name in container_names:
-        if name not in data or name not in globals():
-            continue
-        current = globals()[name]
-        loaded = data[name]
-        if isinstance(current, dict) and isinstance(loaded, dict):
-            current.clear(); current.update(loaded)
-        elif isinstance(current, list) and isinstance(loaded, list):
-            current.clear(); current.extend(loaded)
-    if "banned_users" in data:
-        banned_users.clear(); banned_users.update(data.get("banned_users") or [])
-    if "screenshot_hashes" in data:
-        screenshot_hashes.clear(); screenshot_hashes.update(data.get("screenshot_hashes") or [])
-    if "task_notifications_sent" in data:
-        task_notifications_sent.clear(); task_notifications_sent.update(data.get("task_notifications_sent") or [])
-    for counter_name in ("scheduled_task_counter", "product_promo_counter", "promo_campaign_counter"):
-        if counter_name in data:
-            try: globals()[counter_name] = int(data[counter_name])
-            except Exception: pass
-    if "PAYMENT_UPI" in data and data["PAYMENT_UPI"]:
-        globals()["PAYMENT_UPI"] = str(data["PAYMENT_UPI"])
-    for name in (
-        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance", "warnings_db",
-        "pending_daily", "user_plans", "pending_plans", "referral_map", "pending_referrals",
-        "referral_earnings", "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
-        "withdraw_history", "withdraw_done_date", "daily_task_count", "missed_tasks_db",
-        "last_withdraw_date_db", "task_open_time", "user_task_status", "skip_db", "promo_earnings_db",
-        "promo_views_db", "promo_pending", "product_promo_approved", "admin_names_db",
-    ):
-        if name in globals() and isinstance(globals()[name], dict):
-            _restore_int_keys(globals()[name])
-    _restore_loaded_sets_and_times()
-    print(f"Data applied - Users: {len(users_db)} | Scheduled: {len(scheduled_tasks_db)} | Plans: {len(support_plans_db)} | UserPlans: {len(user_plans)}")
-    return True
 
 
 def load_data():
-    """Load Supabase state first; if empty, migrate the existing local JSON once."""
-    data = _supabase_load_state()
-    if data is not None:
-        return _apply_loaded_state(data)
+    """Load persisted state if bot_data.json exists; otherwise keep defaults."""
     try:
         if not os.path.exists(DATA_FILE):
-            print("No local bot_data.json found - starting with fresh/default data")
+            print("No bot_data.json found - starting with fresh/default data")
             return False
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            local_data = json.load(f)
-        if not isinstance(local_data, dict):
-            print("Local load error: bot_data.json is not a JSON object")
+            data = json.load(f)
+        if not isinstance(data, dict):
+            print("Load error: bot_data.json is not a JSON object")
             return False
-        ok = _apply_loaded_state(local_data)
-        if ok and USE_SUPABASE:
-            _supabase_save_state(local_data)
-            print("✅ Existing local data migrated to Supabase")
-        return ok
+
+        # Dictionaries/lists that should be updated in-place so existing references
+        # used by handlers remain valid.
+        container_names = [
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "warnings_db", "pending_daily", "user_plans", "pending_plans",
+            "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
+            "scheduled_tasks_db", "user_task_status", "skip_db", "promo_campaigns_db", "product_promo_db",
+            "promo_earnings_db", "promo_views_db", "promo_pending", "product_promo_pending", "product_promo_approved", "task_images_db",
+            "support_banner_db", "admin_names_db", "support_plans_db",
+        ]
+
+        for name in container_names:
+            if name not in data or name not in globals():
+                continue
+            current = globals()[name]
+            loaded = data[name]
+            if isinstance(current, dict) and isinstance(loaded, dict):
+                current.clear()
+                current.update(loaded)
+            elif isinstance(current, list) and isinstance(loaded, list):
+                current.clear()
+                current.extend(loaded)
+
+        # Sets are saved as lists.
+        if "banned_users" in data:
+            banned_users.clear()
+            banned_users.update(data.get("banned_users") or [])
+        if "screenshot_hashes" in data:
+            screenshot_hashes.clear()
+            screenshot_hashes.update(data.get("screenshot_hashes") or [])
+        if "task_notifications_sent" in data:
+            task_notifications_sent.clear()
+            task_notifications_sent.update(data.get("task_notifications_sent") or [])
+
+        if "scheduled_task_counter" in data:
+            try:
+                globals()["scheduled_task_counter"] = int(data["scheduled_task_counter"])
+            except Exception:
+                pass
+        if "product_promo_counter" in data:
+            try:
+                globals()["product_promo_counter"] = int(data["product_promo_counter"])
+            except Exception:
+                pass
+        if "promo_campaign_counter" in data:
+            try:
+                globals()["promo_campaign_counter"] = int(data["promo_campaign_counter"])
+            except Exception:
+                pass
+
+        # JSON changes Telegram/user IDs to strings. Restore integer keys where
+        # the rest of this bot expects integer user IDs.
+        for name in (
+            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "warnings_db", "pending_daily", "user_plans", "pending_plans",
+            "referral_map", "pending_referrals", "referral_earnings",
+            "referral_commission_ledger", "daily_task_earnings", "withdraw_requests",
+            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "missed_tasks_db", "last_withdraw_date_db", "task_open_time",
+            "user_task_status", "skip_db", "promo_earnings_db", "promo_views_db",
+            "promo_pending", "product_promo_approved", "admin_names_db",
+        ):
+            if name in globals() and isinstance(globals()[name], dict):
+                _restore_int_keys(globals()[name])
+
+        _restore_loaded_sets_and_times()
+        print(
+            f"Data loaded - Users: {len(users_db)} | Scheduled: {len(scheduled_tasks_db)} "
+            f"| Plans: {len(support_plans_db)} | UserPlans: {len(user_plans)}"
+        )
+        return True
     except Exception as e:
         print(f"Load error: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return False
 
 def add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views=10000, per_100_views_price=20, per_view_member_earning=10):
@@ -1431,10 +1393,11 @@ def admin_panel_keyboard():
          InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"),
          InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
-        [InlineKeyboardButton("💾 Backup", callback_data="admin_backup"),
-         InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin")],
-        [InlineKeyboardButton("🔗 Referral", callback_data="admin_referral"),
-         InlineKeyboardButton(missed_label, callback_data="admin_missed_toggle")],
+        [InlineKeyboardButton("📢 Product Promotion", callback_data="admin_product_promo"),
+         InlineKeyboardButton("💾 Backup", callback_data="admin_backup")],
+        [InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin"),
+         InlineKeyboardButton("🔗 Referral", callback_data="admin_referral")],
+        [InlineKeyboardButton(missed_label, callback_data="admin_missed_toggle")],
         [InlineKeyboardButton("📋 Menu", callback_data="back_menu")]
     ])
 
@@ -1724,6 +1687,48 @@ async def admin_view_promos_cb(update: Update, context: ContextTypes.DEFAULT_TYP
         msg += f"ID {c['id']}: {c['shop_name']} {c['place']} - {c['title']} Target {c['target_views']} Views {c['total_views']} Members {len(c['members_joined'])}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
+async def admin_product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer("Opening Product Promotion...")
+    except Exception:
+        pass
+    if not q or not q.from_user or not is_admin(q.from_user.id):
+        return
+    uid = q.from_user.id
+    live = get_active_product_promo_for_user(uid)
+    pending = len(product_promo_pending)
+    if live:
+        t = live[0] if isinstance(live, list) else live
+        reward_text = _product_reward_text(t, uid)
+        msg = (
+            "📢 PRODUCT PROMOTION ADMIN\n\n"
+            f"ID: {t.get('id')}\n"
+            f"Title: {t.get('title','Product Promotion')}\n"
+            f"Status: {t.get('status','active')}\n"
+            f"Download deadline: {t.get('download_deadline','-')}\n"
+            f"Screenshot window: {t.get('screenshot_open','-')} → {t.get('screenshot_close','-')}\n"
+            f"{reward_text}\n"
+            f"Pending screenshots: {pending}\n\n"
+            "Create/replace today's campaign:\n"
+            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
+            "Then send the promotion VIDEO to this bot."
+        )
+    else:
+        msg = (
+            "📢 PRODUCT PROMOTION ADMIN\n\n"
+            "No active Product Promotion for today.\n"
+            f"Pending screenshots: {pending}\n\n"
+            "Create one with:\n"
+            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
+            "Then send the promotion VIDEO to this bot."
+        )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🚀 Approve ALL Product Pending ({pending})", callback_data="product_bulk_approve_all")],
+        [InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]
+    ])
+    await q.message.reply_text(msg[:4000], reply_markup=kb)
+
 async def admin_view_stats_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
@@ -1743,8 +1748,37 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    await admin_panel(q, context)
+    """Safe Back-to-Admin handler; CallbackQuery is never passed to admin_panel()."""
+    q = update.callback_query
+    if not q or not q.from_user:
+        return
+    try:
+        await q.answer("Opening Admin...")
+    except Exception:
+        pass
+    uid = q.from_user.id
+    if not is_admin(uid):
+        return
+    active_promos = len(get_active_promo_campaigns())
+    total_views = sum(c.get('total_views', 0) for c in promo_campaigns_db)
+    msg = (
+        "🔐 ADMIN PANEL - S2E Ultimate + Poster\n\n"
+        f"👥 Users: {len(users_db)}\n"
+        f"📋 Pending Daily: {len(pending_daily)}\n"
+        f"💰 Pending Withdraw: {len([w for w in withdraw_requests.values() if w.get('status')=='processing'])}\n"
+        f"📢 Promo Campaigns: {len(promo_campaigns_db)} | Active: {active_promos}\n"
+        f"🛍️ Product Pending: {len(product_promo_pending)}\n"
+        f"👁️ Total Promo Views: {total_views}\n"
+        f"⏰ Scheduled Today: {len(get_tasks_for_today())}\n"
+        f"🖼️ Tasks with Poster: {len(task_images_db)}\n"
+        f"⏭️ Skipped Today: {sum(len(v) for v in skip_db.values())}\n"
+        f"🚫 Banned: {len(banned_users)}\n\n"
+        "Commands:\n/add_task open close next title link reward\n"
+        "/set_task_image <id> - Then send poster image!\n"
+        "/add_product_promo ... - Then send promotion VIDEO\n"
+        "/list_tasks /list_promos /skipped all /warnings /banned"
+    )
+    await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=admin_panel_keyboard())
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -2885,19 +2919,10 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         ADMIN_ID_LIST.append(uid)
         return
     try:
-        text = update.message.text.replace('/add_task','',1).strip()
+        text = update.message.text.replace('/add_task','').strip()
         if not text:
-            await update.message.reply_text("Usage: /add_task open close next Title Link Reward | Instructions")
+            await update.message.reply_text("Usage: /add_task open close next title")
             return
-
-        # Optional instruction separator: everything after the first | is stored
-        # as task instructions instead of accidentally becoming part of the title.
-        description = ""
-        if "|" in text:
-            text, description = text.split("|", 1)
-            text = text.strip()
-            description = description.strip()
-
         import re
         urls = re.findall(r'https?://\S+', text)
         link = urls[0] if urls else CHANNEL_LINK
@@ -2928,10 +2953,7 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         title = remaining if remaining else f"Task at {open_str}"
         success, result = add_scheduled_task_with_interval(open_str, close_str, next_str, title, link, reward)
         if success:
-            if description:
-                result['description'] = description
-                save_data()
-            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}" + ("\n📝 Instructions saved" if description else ""))
+            await update.message.reply_text(f"✅ Added Task ID {result['id']} No {result['task_number']}\n{result['open_time']}→{result['close_time']} Next {result['next_time']}\nTitle: {title}\nReward: Rs{reward}")
         else:
             await update.message.reply_text(f"❌ Failed: {result}")
     except Exception as e:
@@ -3991,25 +4013,92 @@ async def remove_support_plan_cmd(update: Update, context: ContextTypes.DEFAULT_
 
 # === FIXED BACK HANDLERS V24 ===
 async def back_admin_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Safe Back-to-Admin handler for CallbackQuery updates.
+
+    IMPORTANT: admin_panel() expects a normal Update and therefore uses
+    update.effective_user / update.message. A CallbackQuery does not have
+    effective_user, which caused:
+        AttributeError: 'CallbackQuery' object has no attribute 'effective_user'
+    """
     print("BACK ADMIN FIXED")
     try:
         q = update.callback_query
         if q:
             try:
                 await q.answer("Opening Admin...")
-            except:
+            except Exception:
                 pass
-        uid = update.effective_user.id
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        txt = "ADMIN PANEL\n\n/add_task open close next title link reward"
-        kb = [
-            [InlineKeyboardButton("Pending Daily", callback_data="admin_view_pending"), InlineKeyboardButton("Withdraw", callback_data="admin_view_withdraw")],
-            [InlineKeyboardButton("Todays Tasks", callback_data="admin_view_tasks"), InlineKeyboardButton("Promo", callback_data="admin_view_promos")],
-            [InlineKeyboardButton("Stats", callback_data="admin_stats"), InlineKeyboardButton("Banned", callback_data="admin_banned")],
-            [InlineKeyboardButton("Menu", callback_data="back_menu")]
-        ]
-        mk = InlineKeyboardMarkup(kb)
-        await context.bot.send_message(chat_id=uid, text=txt, reply_markup=mk)
+
+        # CallbackQuery -> user id must come from q.from_user, not update.effective_user.
+        if not q or not q.from_user:
+            return
+        uid = q.from_user.id
+
+        if not is_admin(uid):
+            await context.bot.send_message(chat_id=uid, text="You are not admin!")
+            return
+
+        active_promos = len(get_active_promo_campaigns())
+        total_views = sum(c.get('total_views', 0) for c in promo_campaigns_db)
+
+        msg = (
+            "🔐 ADMIN PANEL - S2E Ultimate + Poster\n\n"
+            f"👥 Users: {len(users_db)}\n"
+            f"📋 Pending Daily: {len(pending_daily)}\n"
+            f"💰 Pending Withdraw: {len([w for w in withdraw_requests.values() if w.get('status') == 'processing'])}\n"
+            f"📢 Promo Campaigns: {len(promo_campaigns_db)} | Active: {active_promos}\n"
+            f"🛍️ Product Pending: {len(product_promo_pending)}\n"
+            f"👁️ Total Promo Views: {total_views}\n"
+            f"⏰ Scheduled Today: {len(get_tasks_for_today())}\n"
+            f"🖼️ Tasks with Poster: {len(task_images_db)}\n"
+            f"⏭️ Skipped Today: {sum(len(v) for v in skip_db.values())}\n"
+            f"🚫 Banned: {len(banned_users)}\n\n"
+            f"Plan Limits: Basic {DAILY_TASK_LIMIT_BASIC}/day Rs{DAILY_EARNING_CAP_BASIC} cap | "
+            f"Premium {DAILY_TASK_LIMIT_PREMIUM}/day Rs{DAILY_EARNING_CAP_PREMIUM} cap\n\n"
+            "Commands:\n"
+            "/add_task open close next title link reward\n"
+            "/set_task_image <id> - Then send poster image!\n"
+            "/list_tasks /list_promos /skipped all /warnings /banned"
+        )
+
+        missed_label = "⏰ Missed: ON" if MISSED_ENABLED else "⏰ Missed: OFF"
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"📋 Pending Daily ({len(pending_daily)})", callback_data="admin_view_pending"),
+                InlineKeyboardButton(
+                    f"💰 Withdraw ({len([w for w in withdraw_requests.values() if w.get('status') == 'processing'])})",
+                    callback_data="admin_view_withdraw"
+                )
+            ],
+            [
+                InlineKeyboardButton("⏰ Today's Tasks", callback_data="admin_view_tasks"),
+                InlineKeyboardButton(f"🏪 Promo Campaigns ({len(promo_campaigns_db)})", callback_data="admin_view_promos")
+            ],
+            [
+                InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"),
+                InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")
+            ],
+            [
+                InlineKeyboardButton("📢 Product Promotion", callback_data="admin_product_promo"),
+                InlineKeyboardButton("💾 Backup", callback_data="admin_backup")
+            ],
+            [
+                InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin"),
+                InlineKeyboardButton("🔗 Referral", callback_data="admin_referral")
+            ],
+            [
+                InlineKeyboardButton(missed_label, callback_data="admin_missed_toggle")
+            ],
+            [
+                InlineKeyboardButton("📋 Menu", callback_data="back_menu")
+            ]
+        ])
+
+        await context.bot.send_message(
+            chat_id=uid,
+            text=msg[:4000],
+            reply_markup=kb
+        )
     except Exception as e:
         print(f"BACK ADMIN ERROR {e}")
 
@@ -5506,7 +5595,7 @@ def main():
     save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
-        print('Keep-alive started Final')
+        print('Keep-alive started Final (backup only; Render Free needs inbound external traffic)')
     except:
         pass
 
@@ -5908,6 +5997,7 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_withdraw_cb, pattern="^admin_view_withdraw$"))
             app.add_handler(CallbackQueryHandler(admin_view_tasks_cb, pattern="^admin_view_tasks$"))
             app.add_handler(CallbackQueryHandler(admin_view_promos_cb, pattern="^admin_view_promos$"))
+            app.add_handler(CallbackQueryHandler(admin_product_promo_cb, pattern="^admin_product_promo$"))
             app.add_handler(CallbackQueryHandler(admin_view_stats_cb, pattern="^admin_view_stats$"))
             app.add_handler(CallbackQueryHandler(admin_view_banned_cb, pattern="^admin_view_banned$"))
             app.add_handler(CallbackQueryHandler(back_menu_cb, pattern="^back_menu$"))
@@ -5916,7 +6006,7 @@ def main():
             app.add_handler(CallbackQueryHandler(missed_upload_cb, pattern=r"^missed_upload_-?\d+$"))
             app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
-            app.add_handler(CallbackQueryHandler(back_admin_cb, pattern="^back_admin$"))
+            # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
             app.add_handler(CallbackQueryHandler(promo_approve_cb, pattern="^promo_approve_"))
