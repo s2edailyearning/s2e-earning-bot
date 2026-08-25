@@ -1304,69 +1304,80 @@ def get_current_scheduled_task_with_interval():
     if not today_tasks:
         return None, None
     import datetime as _dt2
-    # Ensure now is time object
-    try:
-        if isinstance(now, str):
-            now = _dt2.time.fromisoformat(now)
-    except:
-        pass
+    # normalize now
+    if isinstance(now, str):
+        try:
+            now = _dt2.datetime.strptime(now, "%H:%M").time() if ":" in now else _dt2.time.fromisoformat(now)
+        except:
+            pass
     for i, task in enumerate(today_tasks):
-        open_time = task.get('open_time_obj') or task.get('open_time')
-        close_time = task.get('close_time_obj') or task.get('close_time')
-        # V26 FIX: convert str to time
-        try:
-            if isinstance(open_time, str):
-                # try HH:MM format
-                if ':' in open_time:
-                    open_time = _dt2.datetime.strptime(open_time, "%H:%M").time()
-                else:
-                    open_time = _dt2.time.fromisoformat(open_time)
-            if isinstance(close_time, str):
-                if ':' in close_time:
-                    close_time = _dt2.datetime.strptime(close_time, "%H:%M").time()
-                else:
-                    close_time = _dt2.time.fromisoformat(close_time)
-        except Exception as _e:
-            print(f"V26 time parse fail {task.get('id')} {_e}")
-            continue
-        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
-        # Ensure next_task times also safe for later
-        try:
-            if open_time and close_time and now:
-                if open_time <= now <= close_time:
-                    return task, next_task
-        except Exception as _te:
-            print(f"V26 compare fail {open_time} {close_time} {now} {_te}")
+        open_time = task.get('open_time_obj')
+        close_time = task.get('close_time_obj')
+        # fallback to string fields
+        if open_time is None:
+            ot_str = task.get('open_time')
             try:
-                if str(open_time) <= str(now) <= str(close_time):
+                open_time = _dt2.datetime.strptime(ot_str, "%H:%M").time() if ot_str and ":" in ot_str else _dt2.time.fromisoformat(ot_str) if ot_str else None
+            except:
+                open_time = None
+        if close_time is None:
+            ct_str = task.get('close_time')
+            try:
+                close_time = _dt2.datetime.strptime(ct_str, "%H:%M").time() if ct_str and ":" in ct_str else _dt2.time.fromisoformat(ct_str) if ct_str else None
+            except:
+                close_time = None
+        if isinstance(open_time, str):
+            try:
+                open_time = _dt2.datetime.strptime(open_time, "%H:%M").time()
+            except:
+                try:
+                    open_time = _dt2.time.fromisoformat(open_time)
+                except:
+                    continue
+        if isinstance(close_time, str):
+            try:
+                close_time = _dt2.datetime.strptime(close_time, "%H:%M").time()
+            except:
+                try:
+                    close_time = _dt2.time.fromisoformat(close_time)
+                except:
+                    continue
+        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
+        if open_time and close_time and now:
+            try:
+                if open_time <= now <= close_time:
                     return task, next_task
             except:
                 pass
-        try:
-            if close_time and now and close_time < now:
-                if next_task:
+        if close_time and now:
+            try:
+                if close_time < now and next_task:
                     nt_open = next_task.get('open_time_obj') or next_task.get('open_time')
                     if isinstance(nt_open, str):
                         try:
                             nt_open = _dt2.datetime.strptime(nt_open, "%H:%M").time()
                         except:
                             nt_open = _dt2.time.fromisoformat(nt_open)
-                    if now < nt_open:
+                    if isinstance(nt_open, _dt2.time) and now < nt_open:
                         return None, next_task
-        except:
-            pass
-    try:
-        if today_tasks:
+            except:
+                pass
+    if today_tasks:
+        try:
             first_open = today_tasks[0].get('open_time_obj') or today_tasks[0].get('open_time')
             if isinstance(first_open, str):
-                first_open = _dt2.datetime.strptime(first_open, "%H:%M").time() if ':' in first_open else _dt2.time.fromisoformat(first_open)
-            if now < first_open:
+                first_open = _dt2.datetime.strptime(first_open, "%H:%M").time() if ":" in first_open else _dt2.time.fromisoformat(first_open)
+            if isinstance(first_open, _dt2.time) and now < first_open:
                 return None, today_tasks[0]
-    except:
-        pass
+        except:
+            pass
     return None, None
 
-
+    for i, task in enumerate(today_tasks):
+        open_time = task['open_time_obj']
+        close_time = task['close_time_obj']
+        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
+        if open_time <= now <= close_time:
             return task, next_task
         if close_time < now:
             if next_task and now < next_task['open_time_obj']:
@@ -1384,17 +1395,7 @@ def check_missed_tasks_with_interval(uid):
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        _ct = task.get('close_time_obj') or task.get('close_time')
-        try:
-            import datetime as _dt3
-            if isinstance(_ct, str):
-                _ct = _dt3.datetime.strptime(_ct, "%H:%M").time() if ':' in _ct else _dt3.time.fromisoformat(_ct)
-        except:
-            _ct = task.get('close_time_obj')
-        try:
-            close_dt = datetime.combine(get_ist_today(), _ct, tzinfo=IST)
-        except:
-            continue
+        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'], tzinfo=IST)
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
