@@ -3688,13 +3688,7 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 Your Tasks: {_total_tasks}/10\n"
                 f"🎯 Free Cap: ₹100\n\n"
                 f"❌ Free members cannot withdraw!\n"
-                f"💎 Need to upgrade plan!\n\n"
-                f"✅ After Upgrade:\n"
-                f"• 10/10 tasks = ₹200 instant withdraw!\n"
-                f"• Wallet ₹200 = eligible to withdraw!\n"
-                f"• Tasks will restart from 0/20!\n"
-                f"• Daily 10-20 tasks available!\n\n"
-                f"👇 Click Support Plans to upgrade!",
+                f"💎 Need to upgrade plan!",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Support Plans - Upgrade", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
             )
             return
