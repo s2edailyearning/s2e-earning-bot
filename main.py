@@ -6330,7 +6330,7 @@ if __name__ == "__main__":
 try:
     # Force Supabase as DATA_FILE if client was created successfully in V18
     if 'supa_client' in globals() or 'supabase_client' in globals():
-        print("✅ V19 FINAL: Forcing DATA_FILE=Supabase | Persistent Disk=YES")
+        print("✅ V21 FIX - DATA_FILE=Supabase | Persistent Disk=YES | Supabase LIVE")
         DATA_FILE = "Supabase"
         PERSISTENT_DISK = True
         SUPABASE_ENABLED = True
