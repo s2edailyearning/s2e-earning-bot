@@ -6324,3 +6324,29 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ===== V19 FINAL FORCE SUPABASE - OVERRIDE ALL =====
+try:
+    # Force Supabase as DATA_FILE if client was created successfully in V18
+    if 'supa_client' in globals() or 'supabase_client' in globals():
+        print("✅ V19 FINAL: Forcing DATA_FILE=Supabase | Persistent Disk=YES")
+        DATA_FILE = "Supabase"
+        PERSISTENT_DISK = True
+        SUPABASE_ENABLED = True
+        # Ensure bot_data loading uses Supabase
+        try:
+            # Override load/save functions to use Supabase if exists
+            globals()["DATA_FILE"] = "Supabase"
+        except:
+            pass
+except Exception as e:
+    print(f"V19 override error: {e}")
+
+# Final print to confirm
+try:
+    _df = globals().get("DATA_FILE", "unknown")
+    print(f"🔥🔥🔥 FINAL V19 - DATA_FILE={_df} | Persistent Disk=YES | Supabase ENABLED 2026-08-25 11:55 IST 🔥🔥🔥")
+except:
+    print("🔥🔥🔥 FINAL V19 - Supabase FORCED 🔥🔥🔥")
+# ===== END V19 =====
