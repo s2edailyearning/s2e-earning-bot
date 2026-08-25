@@ -1469,9 +1469,37 @@ def mark_task_completed_with_interval(uid, task_id):
     if uid not in user_task_status:
         user_task_status[uid] = {}
     user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
+    # V31 FIX: Increment daily_task_count and earnings so wallet shows 1/1
+    try:
+        today = str(get_ist_today())
+        # daily count
+        if uid not in daily_task_count:
+            daily_task_count[uid] = {}
+        daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+        # total tasks
+        tasks_db[uid] = tasks_db.get(uid, 0) + 1
+        # earning ₹5 per task
+        reward = 5
+        add_today_task_earning(uid, reward, day=today)
+        # referral commission
+        try:
+            ref_id = referral_map.get(uid)
+            if ref_id:
+                l1_reward = reward * float(L1_TASK_COMMISSION_PERCENT) / 100.0 if 'L1_TASK_COMMISSION_PERCENT' in globals() else reward * 0.10
+                add_referral_commission(ref_id, l1_reward, "task", 1, uid, f"L1 task commission from {uid}", source_amount=reward)
+                l2 = referral_map.get(ref_id)
+                if l2:
+                    l2_reward = reward * float(L2_TASK_COMMISSION_PERCENT) / 100.0 if 'L2_TASK_COMMISSION_PERCENT' in globals() else reward * 0.05
+                    add_referral_commission(l2, l2_reward, "task", 2, uid, f"L2 task commission from {uid}", source_amount=reward)
+        except Exception as _ref_e:
+            print(f"Referral commission fail {_ref_e}")
+        print(f"V31 Task {task_id} completed for {uid} - count {daily_task_count[uid][today]} - earning {reward}")
+    except Exception as _e:
+        print(f"V31 increment fail {_e}")
+        import traceback; traceback.print_exc()
     try:
         save_data()
-        print(f"V30 Task {task_id} completed for {uid} - saved")
+        print(f"V31 Task {task_id} completed for {uid} - saved")
     except Exception as _e:
         print(f"Save after task fail {_e}")
 
@@ -6099,6 +6127,9 @@ def main():
             async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     uid = update.effective_user.id
+                    # V32 FIX: If user is waiting to submit task screenshot, don't treat as task image setting
+                    if context.user_data.get('awaiting_daily_screenshot'):
+                        return
                     if not is_admin(uid):
                         return
                     if not update.message.photo and not update.message.document:
@@ -6160,7 +6191,9 @@ def main():
             async def v56_screenshot_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     uid = update.effective_user.id
-                    if is_admin(uid):
+                    # V32 FIX: Admin can also submit missed tasks - check awaiting flag first
+                    is_awaiting = context.user_data.get('awaiting_daily_screenshot')
+                    if is_admin(uid) and not is_awaiting:
                         return
                     if not update.message.photo and not update.message.document:
                         return
