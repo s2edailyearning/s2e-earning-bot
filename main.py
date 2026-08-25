@@ -7,13 +7,13 @@ warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
-# === V4.5 FINAL FIX: Flask + Keep Alive (Stops Render 2-min sleep) - FULL DEFINITION ===
+# === V4.6 FINAL FIX: Flask + Keep Alive (Stops Render 2-min sleep) ===
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
     try:
-        return f"S2E Bot Alive V4.5 - {get_ist_now()} - OK", 200
+        return f"S2E Bot Alive V4.6 - {get_ist_now()} - OK", 200
     except:
         return "S2E Bot Alive - OK", 200
 
@@ -57,7 +57,7 @@ def start_self_ping_loop():
     print("✅ Self-ping loop started")
 
 
-# VERSION: V4.5 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:02 IST - FORCE
+# VERSION: V4.6 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:08 IST
 # FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
 # TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
 
@@ -82,8 +82,8 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.5 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:02 IST")
-print("FIXED: V4.5 Flask + KeepAlive + DropPending + Product Timeout - FINAL")
+print("FINAL V4.6 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:08 IST")
+print("FIXED: V4.6 Flask + KeepAlive + DropPending - FINAL NO EXIT")
 print("="*60)
 
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
@@ -5615,13 +5615,13 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
+    # V4.6 FIX: Start Flask FIRST, before anything else
     try:
         start_flask_in_thread()
         start_self_ping_loop()
+        print("✅ V4.6 Flask + Self-ping started in main()")
     except Exception as e:
         print(f'Flask start fail in main: {e}')
-
-def main_original_backup():
 
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
