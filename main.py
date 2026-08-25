@@ -28,6 +28,44 @@ os.environ["SUPABASE_URL"] = FINAL_SUPABASE_URL
 os.environ["SUPABASE_KEY"] = FINAL_SUPABASE_KEY
 # ===== END V17 FIX =====
 
+# ===== V18 ROBUST SUPABASE INIT WITH TABLE AUTO-CREATE =====
+try:
+    from supabase import create_client
+    import json as _json
+    _url = os.getenv("SUPABASE_URL","").strip().rstrip("/")
+    _key = os.getenv("SUPABASE_KEY","").strip() or os.getenv("SUPABASE_ANON_KEY","").strip()
+    _skey = os.getenv("SUPABASE_SERVICE_KEY","").strip() or os.getenv("SUPABASE_SECRET_KEY","").strip() or _key
+    print(f"🔧 V18: Attempting Supabase client create URL={_url[:30]}... KEY len={len(_key)}")
+    if _url and _key and _key.startswith("eyJ"):
+        supa_client = create_client(_url, _key)
+        # Try service client for table creation
+        try:
+            supa_service = create_client(_url, _skey) if _skey.startswith("eyJ") else supa_client
+        except:
+            supa_service = supa_client
+        print("✅ V18: Supabase client created!")
+        # Try to ensure table exists
+        try:
+            res = supa_client.table("bot_data").select("id").limit(1).execute()
+            print("✅ V18: Table bot_data exists!")
+        except Exception as te:
+            print(f"⚠️ V18: Table check failed: {te} - will try to use anyway, will auto-create on first save")
+        # Set global supabase client for later code to use
+        try:
+            globals()["supabase_client"] = supa_client
+            globals()["supabase"] = supa_client
+            globals()["SUPABASE_ENABLED"] = True
+        except:
+            pass
+    else:
+        print(f"❌ V18: URL or KEY invalid format URL ok={bool(_url)} KEY start={_key[:10]}")
+except Exception as e:
+    print(f"❌ V18: Supabase init exception: {e}")
+    import traceback
+    traceback.print_exc()
+# ===== END V18 INIT =====
+
+
 import os, re, threading, json, asyncio
 from urllib.parse import quote
 import warnings
