@@ -935,8 +935,9 @@ def _restore_loaded_sets_and_times():
 
 
 def save_data():
-    """V4.12 - Save to Supabase if enabled else local JSON"""
+    """V25 - FORCE SUPABASE SAVE WITH UPDATED_AT"""
     try:
+        from datetime import datetime, timezone
         state_names = [
             "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
@@ -955,33 +956,59 @@ def save_data():
         for name in state_names:
             if name in globals():
                 try:
-                    data[name] = _json_safe(globals()[name])
-                except:
-                    data[name] = globals()[name]
+                    val = globals()[name]
+                    # Force json safe
+                    data[name] = _json_safe(val)
+                except Exception as ex:
+                    print(f"json_safe fail for {name}: {ex}")
+                    try:
+                        # try convert sets to lists
+                        v = globals()[name]
+                        if isinstance(v, set):
+                            data[name] = list(v)
+                        elif isinstance(v, dict):
+                            data[name] = {str(k): (list(val) if isinstance(val, set) else val) for k,val in v.items()}
+                        else:
+                            data[name] = str(v)
+                    except:
+                        data[name] = {}
 
-        # Try Supabase first
-        if SUPABASE_ENABLED and supabase_client:
+        # Try Supabase first - ALWAYS
+        if 'supabase_client' in globals() and globals()['supabase_client']:
             try:
-                payload = {"id": 1, "data": data}
+                from datetime import datetime
+                payload = {"id": 1, "data": data, "updated_at": datetime.utcnow().isoformat()}
+                print(f"🔄 Attempting Supabase upsert {len(data)} sections...")
                 try:
-                    supabase_client.table("bot_data").upsert(payload).execute()
-                    print(f"✅ Data saved to Supabase bot_data - {len(data)} sections")
+                    res = globals()['supabase_client'].table("bot_data").upsert(payload).execute()
+                    print(f"✅✅✅ V25 SAVED to Supabase bot_data - {len(data)} sections - {datetime.utcnow()}")
                     return True
                 except Exception as e1:
-                    print(f"bot_data fail {e1} trying bot_data_storage")
-                    supabase_client.table("bot_data_storage").upsert(payload).execute()
-                    print(f"✅ Data saved to bot_data_storage - {len(data)} sections")
-                    return True
+                    print(f"❌ bot_data fail {e1} trying bot_data_storage: {e1}")
+                    import traceback; traceback.print_exc()
+                    try:
+                        res2 = globals()['supabase_client'].table("bot_data_storage").upsert(payload).execute()
+                        print(f"✅ SAVED to bot_data_storage")
+                        return True
+                    except Exception as e2:
+                        print(f"❌ both tables fail {e2}")
+                        traceback.print_exc()
             except Exception as se:
-                print(f"⚠️ Supabase save failed {se}, fallback to local")
+                print(f"⚠️ Supabase save exception {se}")
+                import traceback; traceback.print_exc()
 
-        # Fallback local
-        temp_file = DATA_FILE + ".tmp"
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(temp_file, DATA_FILE)
-        print(f"💾 Data saved local {DATA_FILE} - {len(data)} sections")
-        return True
+        print(f"⚠️ Supabase client missing, saving local fallback")
+        # Fallback local only if DATA_FILE is a file path
+        try:
+            if DATA_FILE != "Supabase" and "/" not in str(DATA_FILE) or str(DATA_FILE).endswith(".json"):
+                temp_file = str(DATA_FILE) + ".tmp"
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(temp_file, DATA_FILE)
+                print(f"💾 Data saved local {DATA_FILE}")
+        except Exception as le:
+            print(f"Local save fail {le}")
+        return False
     except Exception as e:
         print(f"Save error {e}")
         import traceback; traceback.print_exc()
