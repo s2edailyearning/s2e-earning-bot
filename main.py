@@ -1,4 +1,5 @@
-print("V41 FINAL - MYDETAILS UPDATE + SHORT WITHDRAW + NEXT STEPS - 2026-08-25 15:50 IST")
+print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
+
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
 # - Supports sb_publishable_ and sb_secret_ new keys (supabase 2.15.3)
 # - Supports both SUPABASE and SUPABASE env spelling
@@ -178,7 +179,7 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("V41 FINAL - MYDETAILS UPDATE + SHORT WITHDRAW + NEXT STEPS + V35 FIX - 2026-08-25 15:50 IST")
+
 print("="*60)
 print("="*60)
 print("FINAL V17 - SUPABASE NEW KEYS sb_secret_ SUPPORT - 2026-08-25 11:25 IST + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
@@ -865,7 +866,7 @@ task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
 
-# === PERSISTENT STORAGE - RESTORED / SAFE JSON VERSION ===
+# === PERSISTENT STORAGE - RESTORED / SAFE JSON 
 # The previous build called load_data()/save_data() from main(), but those
 # functions were missing from this file. That caused Render to stop with:
 # NameError: name 'load_data' is not defined
@@ -1484,7 +1485,10 @@ def mark_task_completed_with_interval(uid, task_id):
         tasks_db[uid] = tasks_db.get(uid, 0) + 1
         try:
             if uid in missed_tasks_db:
-                missed_tasks_db[uid] = {}
+                try:
+                    missed_tasks_db[uid] = {}
+                    save_data()
+                except: pass
         except: pass
         # earning ₹5 per task
         reward = 5
