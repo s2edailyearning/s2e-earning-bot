@@ -1,3 +1,4 @@
+print("V51 FINAL - EMERGENCY FIX COUNT + PERSIST FIX - 2026-08-25 18:30 IST")
 print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
 print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
 print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
@@ -6369,6 +6370,81 @@ async def bulk_task_image_handler(update, context):
 
 
 
+
+# === V51 EMERGENCY FIX COMMAND ===
+async def fix_user_count_cmd(update, context):
+    """Admin: /fix_count 8709635130 1 - manually fix today's count and clear missed"""
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /fix_count <user_id> <count>\nEx: /fix_count 8709635130 1")
+        return
+    try:
+        uid_str = context.args[0].strip()
+        count = int(context.args[1])
+        today = str(get_ist_today())
+        # Fix in daily_task_count
+        # Handle both string and int keys
+        for k in [uid_str, int(uid_str) if uid_str.isdigit() else uid_str]:
+            if k in daily_task_count:
+                if today not in daily_task_count[k]:
+                    daily_task_count[k][today] = {}
+                daily_task_count[k][today] = count
+            # Try str
+            if str(k) in daily_task_count:
+                daily_task_count[str(k)][today] = count
+        # Ensure entry exists
+        if uid_str not in daily_task_count:
+            daily_task_count[uid_str] = {today: count}
+        else:
+            daily_task_count[uid_str][today] = count
+        
+        # Clear missed
+        if uid_str in missed_tasks_db:
+            missed_tasks_db[uid_str] = []
+        if int(uid_str) in missed_tasks_db if uid_str.isdigit() else False:
+            missed_tasks_db[int(uid_str)] = []
+        # Also string variations
+        for k in list(missed_tasks_db.keys()):
+            if str(k) == uid_str:
+                missed_tasks_db[k] = []
+        
+        # Clear user_task_status missed entries for today
+        for k in list(user_task_status.keys()):
+            if str(k) == uid_str:
+                for tid in list(user_task_status[k].keys()):
+                    st = user_task_status[k][tid]
+                    if isinstance(st, dict) and st.get('status') == 'missed':
+                        del user_task_status[k][tid]
+        
+        save_data()
+        await update.message.reply_text(f"✅ Fixed {uid_str}: today {today} count={count}, missed cleared. Ask user to check My Details.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Fix error: {e}")
+        import traceback; traceback.print_exc()
+
+async def fix_all_missed_cmd(update, context):
+    """Admin: /fix_all_missed - clear all missed for today"""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        cleared = 0
+        for uid in list(missed_tasks_db.keys()):
+            if missed_tasks_db[uid]:
+                cleared += len(missed_tasks_db[uid]) if isinstance(missed_tasks_db[uid], list) else 0
+                missed_tasks_db[uid] = []
+        # Also clear user_task_status missed
+        for uid in list(user_task_status.keys()):
+            for tid in list(user_task_status[uid].keys()):
+                st = user_task_status[uid][tid]
+                if isinstance(st, dict) and st.get('status') == 'missed':
+                    del user_task_status[uid][tid]
+        save_data()
+        await update.message.reply_text(f"✅ Cleared all missed tasks. Total entries cleared: {cleared}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 def main():
     # V4.6 FIX: Start Flask FIRST, before anything else
     try:
@@ -6947,6 +7023,8 @@ def main():
             app.add_handler(CommandHandler("add_task_premium", add_task_premium_cmd))
             app.add_handler(CommandHandler("add_task_all", add_task_all_cmd))
             app.add_handler(CommandHandler("clear_missed_all", clear_missed_all_cmd))
+            app.add_handler(CommandHandler("fix_count", fix_user_count_cmd))
+            app.add_handler(CommandHandler("fix_all_missed", fix_all_missed_cmd))
             app.add_handler(CommandHandler("clear_missed", clear_missed_all_cmd))
             app.add_handler(CommandHandler("clear_missed_user", clear_missed_user_cmd))
             app.add_handler(CommandHandler("clear_scheduled_all", clear_scheduled_all_cmd))
