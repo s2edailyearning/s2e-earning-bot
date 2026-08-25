@@ -1,3 +1,7 @@
+print("V59 FINAL - CORRECT AMOUNT 200 + TASK PERSIST - 2026-08-25 19:55 IST - V57 FINAL - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
+print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
+print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
+print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
 print("V46 FINAL - DAILY COUNT SAVE FIX + MISSED STATUS FIX - 2026-08-25 16:25 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
@@ -128,6 +132,100 @@ def start_self_ping_loop():
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
+
+def mask_mobile(mobile):
+    """V47 Privacy: Show first 3 + *** + last 2 - Hide full number"""
+    try:
+        m = str(mobile).strip()
+        if not m or len(m) < 4:
+            return "***"
+        if len(m) >= 10:
+            return f"{m[:3]}*****{m[-2:]}"  # 987*****21
+        elif len(m) >= 6:
+            return f"{m[:3]}***{m[-2:]}"
+        else:
+            return f"{m[:2]}***"
+    except:
+        return "***"
+
+def format_user_display(uid):
+    """V47: Name + masked mobile"""
+    try:
+        name = user_details.get(uid, {}).get('name', 'User')
+        mobile = user_details.get(uid, {}).get('mobile', '')
+        if mobile:
+            masked = mask_mobile(mobile)
+            return f"{name} ({masked})"
+        else:
+            return f"{name}"
+    except:
+        return f"User {str(uid)[-4:]}"
+
+
+
+def get_effective_daily_limit(uid):
+    """V49: Get daily limit with snapshot + festival bonus - Existing user not affected by price change"""
+    try:
+        # Check if user has snapshot (purchased plan)
+        user_plan = user_plans.get(str(uid)) or user_plans.get(uid)
+        if user_plan and 'snapshot_daily_limit' in user_plan:
+            base_limit = int(user_plan.get('snapshot_daily_limit', 0))
+            # Add festival bonus if active
+            plan_id = user_plan.get('plan_id')
+            if plan_id and plan_id in plans_db:
+                pdata = plans_db[plan_id]
+                fest_extra = pdata.get('festival_extra_tasks', 0)
+                fest_expiry = pdata.get('festival_expiry')
+                if fest_extra and fest_expiry:
+                    try:
+                        if str(get_ist_today()) <= str(fest_expiry):
+                            base_limit += int(fest_extra)
+                    except:
+                        pass
+            return base_limit
+        
+        # Fallback to current plan db
+        plan_id = get_user_plan_id(uid)
+        if plan_id in plans_db:
+            pdata = plans_db[plan_id]
+            base = int(pdata.get('daily_limit', pdata.get('daily_tasks', 0)))
+            # Festival bonus
+            fest_extra = pdata.get('festival_extra_tasks', 0)
+            fest_expiry = pdata.get('festival_expiry')
+            if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                base += int(fest_extra)
+            return base
+        return 0
+    except:
+        return 0
+
+def get_effective_daily_earning_cap(uid):
+    """V49: Daily earning cap with snapshot + festival"""
+    try:
+        user_plan = user_plans.get(str(uid)) or user_plans.get(uid)
+        if user_plan and 'snapshot_daily_earning' in user_plan:
+            base = int(user_plan.get('snapshot_daily_earning', 0))
+            plan_id = user_plan.get('plan_id')
+            if plan_id and plan_id in plans_db:
+                pdata = plans_db[plan_id]
+                fest_extra = pdata.get('festival_extra_earning', 0)
+                fest_expiry = pdata.get('festival_expiry')
+                if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                    base += int(fest_extra)
+            return base
+        plan_id = get_user_plan_id(uid)
+        if plan_id in plans_db:
+            pdata = plans_db[plan_id]
+            base = int(pdata.get('daily_earning', 0))
+            fest_extra = pdata.get('festival_extra_earning', 0)
+            fest_expiry = pdata.get('festival_expiry')
+            if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                base += int(fest_extra)
+            return base
+        return 0
+    except:
+        return 0
+
 def get_ist_now():
     return datetime.now(IST)
 def get_ist_today():
@@ -719,19 +817,31 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
             str(e.get("type")) == "plan" and e.get("source_uid") == uid and e.get("description", "").endswith(f"Plan {int(plan.get('id',0))} activation")
             for e in referral_commission_ledger.get(ref_id, [])
         ) if ref_id else False
+# V49 L2 PLAN COMMISSION - When L2 joins, L1 gets 10%, L2 (root) gets 3%
         if ref_id and not already_plan_commission:
+            # L1 gets 10%
             add_referral_commission(ref_id, price * float(REFERRAL_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 1, uid, f"Plan {int(plan.get('id',0))} activation")
+            # L2 gets 3% - Find L1's referrer
+            l2_referrer = referral_map.get(ref_id)
+            if l2_referrer:
+                add_referral_commission(l2_referrer, price * float(L2_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 2, uid, f"L2 Plan {int(plan.get('id',0))} activation via {ref_id}")
             save_data()
 
-        user_plans[str(uid)] = {
+        # V49 PLAN SNAPSHOT - Existing user plan won't change when admin changes price
+        plan_snapshot = {
             "plan": name.lower(),
             "plan_id": int(plan.get("id", 0)),
             "status": "active",
             "price": price,
             "daily_limit": daily,
+            "daily_earning": plan.get('daily_earning', 0),
             "date": str(get_ist_today()),
             "expiry": str(expiry),
+            "snapshot_price": price,  # Snapshot at purchase time
+            "snapshot_daily_limit": daily,
+            "snapshot_daily_earning": plan.get('daily_earning', 0),
         }
+        user_plans[str(uid)] = plan_snapshot
         pending_plans.pop(uid, None)
         pending_plans.pop(str(uid), None)
         save_data()
@@ -802,8 +912,16 @@ PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 1
 DEFAULT_DAILY_TASK_ID = -1
 REFERRAL_BONUS_PER_TASK = 10
-REFERRAL_PLAN_COMMISSION_PERCENT = 10
-L1_TASK_COMMISSION_PERCENT = 2.0
+# V49 COMMISSION SETTINGS - Changeable anytime
+REFERRAL_PLAN_COMMISSION_PERCENT = 10  # L1 Plan 10%
+L2_PLAN_COMMISSION_PERCENT = 3  # V49 NEW: L2 Plan 3%
+L1_TASK_COMMISSION_PERCENT = 2.0  # L1 Task 2%
+L2_TASK_COMMISSION_PERCENT = 0.5  # L2 Task 0.5%
+L1_PRODUCT_COMMISSION_PERCENT = 2.0  # V49 NEW: Product Promo L1 2%
+L2_PRODUCT_COMMISSION_PERCENT = 0.5  # V49 NEW: Product Promo L2 0.5%
+# OLD VARS BELOW FOR COMPAT
+REFERRAL_PLAN_COMMISSION_PERCENT_OLD = 10
+L1_TASK_COMMISSION_PERCENT_OLD = 2.0
 L2_TASK_COMMISSION_PERCENT = 0.5
 DAILY_TASK_LIMIT_BASIC = 10
 DAILY_TASK_LIMIT_PREMIUM = 20
@@ -882,8 +1000,20 @@ supabase_client = None
 SUPABASE_ENABLED = False
 
 def init_supabase():
-    global supabase_client, SUPABASE_ENABLED
+    global supabase_client, SUPABASE_ENABLED, SUPABASE_URL, SUPABASE_KEY
     try:
+        # V50 FIX: Reuse V18 client if already created (supports sb_secret_ new keys)
+        if 'supa_client' in globals() and globals().get('supa_client'):
+            try:
+                supabase_client = globals()['supa_client']
+                SUPABASE_ENABLED = True
+                print(f"✅ V50: Reusing V18 Supabase client - data will persist")
+                return True
+            except Exception as e:
+                print(f"V50 reuse failed {e}")
+        if 'supabase_client' in globals() and globals().get('supabase_client') and globals().get('SUPABASE_ENABLED'):
+            print(f"✅ V50: Supabase already enabled - keeping")
+            return True
         if SUPABASE_URL and SUPABASE_KEY:
             from supabase import create_client
             supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -891,6 +1021,15 @@ def init_supabase():
             print(f"✅ Supabase enabled URL {SUPABASE_URL[:40]}...")
             return True
         else:
+            # Try to get from V18 globals
+            _url = os.getenv("SUPABASE_URL","")
+            _key = os.getenv("SUPABASE_KEY","") or os.getenv("SUPABASE_ANON_KEY","")
+            if _url and _key:
+                from supabase import create_client
+                supabase_client = create_client(_url, _key)
+                SUPABASE_ENABLED = True
+                print(f"✅ V50: Supabase enabled from env fallback")
+                return True
             print("ℹ️ SUPABASE_URL/KEY not set - using local JSON (data will LOST on deploy)")
             return False
     except ImportError as e:
@@ -898,6 +1037,7 @@ def init_supabase():
         return False
     except Exception as e:
         print(f"⚠️ Supabase init failed: {e}")
+        import traceback; traceback.print_exc()
         return False
 
 _render_disk = "/var/data"
@@ -974,6 +1114,27 @@ def _restore_loaded_sets_and_times():
 
 
 def save_data():
+    """V53 - FINAL PERSIST GUARD - Never overwrite Supabase with empty data"""
+    # V53 CRITICAL GUARD: If users_db is empty, DON'T save to Supabase
+    try:
+        if 'users_db' in globals() and len(globals().get('users_db', {})) == 0:
+            # Check if Supabase has existing data
+            if SUPABASE_ENABLED and supabase_client:
+                try:
+                    r = supabase_client.table("bot_data").select("id").eq("id", 1).execute()
+                    if r and r.data and len(r.data) > 0:
+                        print("🛑 V53 GUARD: users_db empty but Supabase has data - ABORTING SAVE to prevent reset!")
+                        return False
+                except Exception as ge:
+                    print(f"V53 guard check fail {ge}")
+            print("🛑 V53 GUARD: users_db empty - skipping save")
+            # Allow local save only if truly first run
+            if not SUPABASE_ENABLED:
+                pass
+            else:
+                return False
+    except Exception as e:
+        print(f"V53 guard error {e}")
     """V25 - FORCE SUPABASE SAVE WITH UPDATED_AT"""
     try:
         from datetime import datetime, timezone
@@ -1487,7 +1648,12 @@ def mark_task_completed_with_interval(uid, task_id):
         try:
             if uid in missed_tasks_db:
                 try:
-                    missed_tasks_db[uid] = {}
+                    # V50 FIX: Don't wipe to dict, clear list correctly
+                    if isinstance(missed_tasks_db[uid], list):
+                        # remove only completed task ids from missed list if needed
+                        pass
+                    else:
+                        missed_tasks_db[uid] = []
                     save_data()
                 except: pass
         except: pass
@@ -1520,7 +1686,22 @@ def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
     today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
-def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
+def get_balance(uid):
+    # V58 FIX: NO double count - single key only - exact amount
+    try:
+        total_task_earning = 0.0
+        d = None
+        if uid in daily_task_earnings and isinstance(daily_task_earnings[uid], dict):
+            d = daily_task_earnings[uid]
+        elif str(uid) in daily_task_earnings and isinstance(daily_task_earnings[str(uid)], dict):
+            d = daily_task_earnings[str(uid)]
+        if d:
+            total_task_earning = sum(float(v or 0) for v in d.values())
+        bal = total_task_earning + float(bonus_balance.get(uid, 0) or bonus_balance.get(str(uid), 0) or 0) + float(referral_earnings.get(uid, 0) or referral_earnings.get(str(uid), 0) or 0) + float(promo_earnings_db.get(uid, 0) or promo_earnings_db.get(str(uid), 0) or 0)
+        return round(bal, 2)
+    except Exception as e:
+        print(f"V58 get_balance error {e}")
+        return 0.0
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
     """Credit referral commission once and keep a dated ledger for Wallet/My Referrals."""
@@ -2277,7 +2458,7 @@ async def promo_upload_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    msg = "📢 Promote Your Shop via S2E Network!\n\nYou have shop in Kavali/Palmaner? Want customers? We have members!\n\nMembers put your poster on WhatsApp Status, you get views!\n\n💰 Pricing:\nRs200 per 1000 views\nMembers earn Rs10 per 100 views\nYour profit Rs10 per 100 views\n\nExample: 5000 views = Shop pays Rs1000, Members get Rs500, You profit Rs500\n\nContact @s2edayincome to start!\n\nAdmin command:\n/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
+    msg = "📢 Promote Your Shop 📢\n\nWe will promote your shop through our digital channels!\n\n✅ Your poster will be shared by our members on WhatsApp Status\n✅ You will get more customers\n\n💬 Contact for details: @s2edayincome\n\nAdmin: /add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
     await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4287,7 +4468,7 @@ async def set_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target=int(args[0]); amount=int(args[1])
         tasks_db_cur=tasks_db.get(target,0)
-        bonus_balance[target]=amount - tasks_db_cur*5
+        bonus_balance[target]=0  # V57
         await update.message.reply_text(f"Balance set Rs{get_balance(target)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
@@ -4327,7 +4508,12 @@ def track_missed_tasks_for_user(uid):
     user_status=user_task_status.get(uid,{})
     skip_status=skip_db.get(uid,{})
     missed_tasks_db.setdefault(uid,[])
-    existing={int(t.get('id')):t for t in missed_tasks_db[uid] if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
+    # V50 FIX: Handle both list and dict cases safely
+    _missed_list = missed_tasks_db.get(uid, [])
+    if isinstance(_missed_list, dict):
+        _missed_list = []
+        missed_tasks_db[uid] = []
+    existing={int(t.get('id')):t for t in _missed_list if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
     now = _safe_time(now) or now
     for task in today_tasks:
         close_obj=task.get('close_time_obj')
@@ -4768,7 +4954,7 @@ async def withdraw_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
         uid = update.effective_user.id
-        total = tasks_db.get(uid, 0) * 5 + bonus_balance.get(uid, 0) + referral_earnings.get(uid, 0)
+        total = 0 + bonus_balance.get(uid, 0) + referral_earnings.get(uid, 0)
         txt = f"WITHDRAW\n\nEarnings: Rs{total}\nMin: Rs{WITHDRAW_OPTIONS[0]}\nUse: /withdraw <amount>"
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         mk = InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="back_menu")]])
@@ -6220,6 +6406,113 @@ async def bulk_task_image_handler(update, context):
 
 
 
+
+# === V51 EMERGENCY FIX COMMAND ===
+async def fix_user_count_cmd(update, context):
+    """V59 FINAL - CORRECT AMOUNT 200 + TASK PERSIST - 2026-08-25 19:55 IST - V57 FINAL - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL FIX: Fix count + earning + task status permanently"""
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /fix_count <user_id> <count> [reward]\nEx: /fix_count 8709635130 1 200")
+        return
+    try:
+        uid_str = context.args[0].strip()
+        uid_int = int(uid_str) if uid_str.isdigit() else 0
+        count = int(context.args[1])
+        reward = int(context.args[2]) if len(context.args) >=3 else 200
+        today = str(get_ist_today())
+        
+        # 1. Fix daily_task_count for both int and str keys
+        for k in [uid_int, uid_str]:  # V59 unique
+            if not k:
+                continue
+            if k not in daily_task_count:
+                daily_task_count[k] = {}
+            # Handle if value is dict or int
+            if isinstance(daily_task_count[k], dict):
+                daily_task_count[k][today] = count
+            else:
+                daily_task_count[k] = {today: count}
+        
+        # 2. Fix tasks_db total count
+        for k in [uid_int, uid_str]:  # V59 unique
+            if not k:
+                continue
+            if k in tasks_db:
+                # Ensure at least count
+                if tasks_db[k] < count:
+                    tasks_db[k] = count
+        
+        # 3. Fix earning - add to bonus_balance and daily_task_earnings
+        # Find today's tasks and mark them completed in user_task_status
+        today_tasks = [t for t in scheduled_tasks_db if str(t.get('date')) == today]
+        fixed_task_ids = []
+        for task in today_tasks[:count]:
+            tid = task.get('id')
+            fixed_task_ids.append(tid)
+            for k in [uid_int, uid_str]:  # V59 unique
+                if not k:
+                    continue
+                if k not in user_task_status:
+                    user_task_status[k] = {}
+                user_task_status[k][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'task_number': task.get('task_number')}
+        
+        # If no scheduled tasks found today, create dummy completed status for task 1
+        if not fixed_task_ids:
+            dummy_id = 1
+            for k in [uid_int, uid_str]:  # V59 unique
+                if not k:
+                    continue
+                if k not in user_task_status:
+                    user_task_status[k] = {}
+                user_task_status[k][dummy_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'task_number': 1}
+        
+        # 4. Fix earnings
+        for k in [uid_int, uid_str]:  # V59 unique
+            if not k:
+                continue
+            # daily_task_earnings
+            if k not in daily_task_earnings:
+                daily_task_earnings[k] = {}
+            daily_task_earnings[k][today] = max(float(daily_task_earnings[k].get(today, 0) or 0), float(reward))  # V59 no double
+        
+        # 5. Clear missed completely
+        for k in list(missed_tasks_db.keys()):
+            if str(k) == uid_str:
+                missed_tasks_db[k] = []
+        if uid_int in missed_tasks_db:
+            missed_tasks_db[uid_int] = []
+        if uid_str in missed_tasks_db:
+            missed_tasks_db[uid_str] = []
+        
+        save_data()
+        await update.message.reply_text(f"✅ V55 FIXED {uid_str}: today {today} count={count}, reward ₹{reward}, tasks {fixed_task_ids}, missed cleared.\nNow My Details will show {count}/4 and ₹{reward}.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Fix error: {e}")
+        import traceback; traceback.print_exc()
+
+async def fix_all_missed_cmd(update, context):
+    """Admin: /fix_all_missed - clear all missed for today"""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        cleared = 0
+        for uid in list(missed_tasks_db.keys()):
+            if missed_tasks_db[uid]:
+                cleared += len(missed_tasks_db[uid]) if isinstance(missed_tasks_db[uid], list) else 0
+                missed_tasks_db[uid] = []
+        # Also clear user_task_status missed
+        for uid in list(user_task_status.keys()):
+            for tid in list(user_task_status[uid].keys()):
+                st = user_task_status[uid][tid]
+                if isinstance(st, dict) and st.get('status') == 'missed':
+                    del user_task_status[uid][tid]
+        save_data()
+        await update.message.reply_text(f"✅ Cleared all missed tasks. Total entries cleared: {cleared}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 def main():
     # V4.6 FIX: Start Flask FIRST, before anything else
     try:
@@ -6275,10 +6568,40 @@ def main():
 
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
-    load_data()
-    normalize_support_plans()
-    force_update_plans_to_new()
-    save_data()
+    # V59 FINAL - CORRECT AMOUNT 200 + TASK PERSIST - 2026-08-25 19:55 IST - V57 FINAL - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 FIX: Load with retry and NEVER save empty
+    print("V53: Starting protected load...")
+    loaded = load_data()
+    # V53: If loaded but users empty, try reload once more
+    if loaded and len(users_db)==0:
+        print("V53: Loaded but users_db empty, retrying load...")
+        import time as _t; _t.sleep(1)
+        loaded = load_data()
+    print(f"V50: load_data returned {loaded} - users {len(users_db) if 'users_db' in globals() else 0}")
+    if not loaded:
+        print("V50: No data loaded from Supabase, checking if Supabase has data...")
+        # Don't overwrite Supabase with empty local data
+        if SUPABASE_ENABLED and supabase_client:
+            try:
+                res = supabase_client.table("bot_data").select("id").eq("id", 1).execute()
+                if res and res.data:
+                    print("V50: Supabase has data, not saving empty")
+                else:
+                    print("V50: Supabase empty, initial save allowed")
+                    normalize_support_plans()
+                    force_update_plans_to_new()
+                    save_data()
+            except Exception as e:
+                print(f"V50 check error {e}")
+                normalize_support_plans()
+                force_update_plans_to_new()
+        else:
+            normalize_support_plans()
+            force_update_plans_to_new()
+            save_data()
+    else:
+        normalize_support_plans()
+        force_update_plans_to_new()
+        save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
         print('Keep-alive started Final (backup only; Render Free needs inbound external traffic)')
@@ -6774,6 +7097,8 @@ def main():
             app.add_handler(CommandHandler("add_task_premium", add_task_premium_cmd))
             app.add_handler(CommandHandler("add_task_all", add_task_all_cmd))
             app.add_handler(CommandHandler("clear_missed_all", clear_missed_all_cmd))
+            app.add_handler(CommandHandler("fix_count", fix_user_count_cmd))
+            app.add_handler(CommandHandler("fix_all_missed", fix_all_missed_cmd))
             app.add_handler(CommandHandler("clear_missed", clear_missed_all_cmd))
             app.add_handler(CommandHandler("clear_missed_user", clear_missed_user_cmd))
             app.add_handler(CommandHandler("clear_scheduled_all", clear_scheduled_all_cmd))
