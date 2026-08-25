@@ -9,15 +9,6 @@ warnings.filterwarnings('ignore')
 
 # ===== V17 SUPABASE NEW KEYS FIX - FORCE ENABLE =====
 import os
-
-# V19 FORCE TOP
-try:
-    DATA_FILE = "Supabase"
-    PERSISTENT_DISK = True
-    print("🔥🔥🔥 V19 TOP FORCE - DATA_FILE=Supabase | Persistent Disk=YES 🔥🔥🔥")
-except:
-    pass
-
 print("🔍 V17 DEBUG: Checking Supabase env...")
 SUPA_URL = os.getenv("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")
 SUPA_KEY = os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
@@ -150,14 +141,7 @@ CHANNEL_LINK = "https://t.me/S2E_Daily_Earning"
 SCREENSHOT_CHANNEL = -1004295034675
 WITHDRAW_CHANNEL = -1004319888475
 JOIN_CHANNEL = -1004352241439
-print(f"Channels configured:
-    # V19 FORCE AFTER CHANNELS
-    try:
-        DATA_FILE = "Supabase"
-        PERSISTENT_DISK = True
-        print("🔥 V19 AFTER CHANNELS - DATA_FILE=Supabase | Persistent Disk=YES")
-    except: pass
-    print("Channels configured:") VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
+print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
 print("FINAL V17 - SUPABASE NEW KEYS sb_secret_ SUPPORT - 2026-08-25 11:25 IST + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
@@ -6366,9 +6350,3 @@ try:
 except:
     print("🔥🔥🔥 FINAL V19 - Supabase FORCED 🔥🔥🔥")
 # ===== END V19 =====
-
-
-# ===== ULTIMATE V20 FORCE - LAST LINE =====
-DATA_FILE = "Supabase"
-PERSISTENT_DISK = True
-print(f"🔥🔥🔥 ULTIMATE V20 FINAL - DATA_FILE={DATA_FILE} | Persistent Disk=YES | SUPABASE LIVE 🔥🔥🔥")
