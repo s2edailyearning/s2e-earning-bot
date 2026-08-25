@@ -40,24 +40,20 @@ def start_flask_in_thread():
 def start_self_ping_loop():
     def loop():
         import time as tm
-        try:
-            import requests
-        except:
-            print("requests not available for self-ping")
-            return
+        import urllib.request
         url = os.getenv("RENDER_EXTERNAL_URL", "https://s2e-earning-bot-1.onrender.com")
         while True:
             tm.sleep(90)
             try:
-                requests.get(url, timeout=10)
+                urllib.request.urlopen(url, timeout=10)
                 print(f"[KEEP-ALIVE] Pinged {url}")
             except Exception as ex:
                 print(f"[KEEP-ALIVE FAIL] {ex}")
     threading.Thread(target=loop, daemon=True).start()
-    print("✅ Self-ping loop started")
+    print("✅ Self-ping loop started (urllib - no requests needed)")
 
 
-# VERSION: V4.6 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:08 IST
+# VERSION: V4.7 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:12 IST
 # FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
 # TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
 
@@ -82,7 +78,7 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.6 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:08 IST")
+print("FINAL V4.7 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
 print("FIXED: V4.6 Flask + KeepAlive + DropPending - FINAL NO EXIT")
 print("="*60)
 
@@ -5619,7 +5615,7 @@ def main():
     try:
         start_flask_in_thread()
         start_self_ping_loop()
-        print("✅ V4.6 Flask + Self-ping started in main()")
+        print("✅ V4.7 Flask + Self-ping started in main()")
     except Exception as e:
         print(f'Flask start fail in main: {e}')
 
