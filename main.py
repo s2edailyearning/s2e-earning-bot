@@ -2403,7 +2403,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Title: {task.get('title', '')}\n"
                     f"Reward: ₹{task.get('reward', 5)}\n"
                     f"Link: {task.get('link', '')}\n\n"
-                    f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
+                    f"{'📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10) if task.get('description') else ''}"
                     f"Tasks today: {count}/{limit}\n\n"
                     "Click Upload Screenshot after completing!",
                     reply_markup=InlineKeyboardMarkup([[
@@ -3939,7 +3939,7 @@ async def missed_reopen_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_id=tid
     text=(f"🔄 MISSED TASK {task.get('task_number','?')} REOPENED\n\n"
           f"Title: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
-          f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
+          f"{('📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10)) if task.get('description') else ''}"
           "Complete the task using the link above, then tap Upload Screenshot.")
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data=f"missed_upload_{task_id}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
     await q.message.reply_text(text, reply_markup=kb)
@@ -5655,13 +5655,10 @@ def main():
         start_flask_in_thread()
         start_self_ping_loop()
         print("✅ V4.12 Flask + Self-ping started in main()")
-    try:
         init_supabase()
         load_data()
     except Exception as e:
-        print(f"Supabase init in main fail {e}")
-    except Exception as e:
-        print(f'Flask start fail in main: {e}')
+        print(f'Flask/Supabase start fail in main: {e}')
 
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
@@ -6104,7 +6101,7 @@ def main():
                 context.user_data['daily_screenshot_task_id']=tid
                 context.user_data.pop('missed_reopened_task_id',None)
                 text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
-                      f"{('📝 Instructions:\n' + task.get('description', '') + '\n\n') if task.get('description') else ''}"
+                      f"{('📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10)) if task.get('description') else ''}"
                       "After completing, tap Upload Screenshot.")
                 kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
                 await q.message.reply_text(text, reply_markup=kb)
