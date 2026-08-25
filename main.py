@@ -1,4 +1,4 @@
-print("V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
+print("V57 FINAL - NO *5 BUG FIX - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
 print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
 print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
 print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
@@ -1687,20 +1687,17 @@ def calculate_age(d):
     today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
 def get_balance(uid):
-    # V56 FIX: Balance = actual task earnings (from daily_task_earnings) + bonus + referral + promo
+    # V57 FIX: NO *5 ANYWHERE - only real daily_task_earnings + bonus + referral + promo
     try:
         total_task_earning = 0.0
-        # Sum all daily earnings for this user (int and str keys)
         for k in [uid, str(uid)]:
             if k in daily_task_earnings and isinstance(daily_task_earnings[k], dict):
                 total_task_earning += sum(float(v or 0) for v in daily_task_earnings[k].values())
-        # Fallback to old tasks_db*5 if no daily earnings found
-        if total_task_earning == 0:
-            total_task_earning = float(tasks_db.get(uid, 0) or tasks_db.get(str(uid), 0) or 0) * 5
+        # If still 0, check promo/bonus/referral - tasks_db*5 REMOVED - bug was here
         bal = total_task_earning + float(bonus_balance.get(uid, 0) or bonus_balance.get(str(uid), 0) or 0) + float(referral_earnings.get(uid, 0) or referral_earnings.get(str(uid), 0) or 0) + float(promo_earnings_db.get(uid, 0) or promo_earnings_db.get(str(uid), 0) or 0)
         return round(bal, 2)
     except Exception as e:
-        print(f"get_balance error {e}")
+        print(f"V57 get_balance error {e}")
         return 0.0
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
@@ -4468,7 +4465,7 @@ async def set_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target=int(args[0]); amount=int(args[1])
         tasks_db_cur=tasks_db.get(target,0)
-        bonus_balance[target]=amount - tasks_db_cur*5
+        bonus_balance[target]=0  # V57
         await update.message.reply_text(f"Balance set Rs{get_balance(target)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
@@ -4954,7 +4951,7 @@ async def withdraw_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
         uid = update.effective_user.id
-        total = tasks_db.get(uid, 0) * 5 + bonus_balance.get(uid, 0) + referral_earnings.get(uid, 0)
+        total = 0 + bonus_balance.get(uid, 0) + referral_earnings.get(uid, 0)
         txt = f"WITHDRAW\n\nEarnings: Rs{total}\nMin: Rs{WITHDRAW_OPTIONS[0]}\nUse: /withdraw <amount>"
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         mk = InlineKeyboardMarkup([[InlineKeyboardButton("Menu", callback_data="back_menu")]])
@@ -6409,7 +6406,7 @@ async def bulk_task_image_handler(update, context):
 
 # === V51 EMERGENCY FIX COMMAND ===
 async def fix_user_count_cmd(update, context):
-    """V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL FIX: Fix count + earning + task status permanently"""
+    """V57 FINAL - NO *5 BUG FIX - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL FIX: Fix count + earning + task status permanently"""
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) < 2:
@@ -6568,7 +6565,7 @@ def main():
 
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
-    # V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 FIX: Load with retry and NEVER save empty
+    # V57 FINAL - NO *5 BUG FIX - 2026-08-25 19:45 IST - V57 FINAL - NO *5 BUG + TASK PERSIST + ANTI-RESET - 2026-08-25 19:40 IST - V56 FINAL - BALANCE 400 FIX + V55 - 2026-08-25 19:15 IST - V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 FIX: Load with retry and NEVER save empty
     print("V53: Starting protected load...")
     loaded = load_data()
     # V53: If loaded but users empty, try reload once more
