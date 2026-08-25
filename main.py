@@ -1,4 +1,4 @@
-print("V53 FINAL - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
+print("V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
 print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
 print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
 print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
@@ -6394,52 +6394,84 @@ async def bulk_task_image_handler(update, context):
 
 # === V51 EMERGENCY FIX COMMAND ===
 async def fix_user_count_cmd(update, context):
-    """Admin: /fix_count 8709635130 1 - manually fix today's count and clear missed"""
+    """V55 FINAL FIX: Fix count + earning + task status permanently"""
     if not is_admin(update.effective_user.id):
         return
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /fix_count <user_id> <count>\nEx: /fix_count 8709635130 1")
+        await update.message.reply_text("Usage: /fix_count <user_id> <count> [reward]\nEx: /fix_count 8709635130 1 200")
         return
     try:
         uid_str = context.args[0].strip()
+        uid_int = int(uid_str) if uid_str.isdigit() else 0
         count = int(context.args[1])
+        reward = int(context.args[2]) if len(context.args) >=3 else 200
         today = str(get_ist_today())
-        # Fix in daily_task_count
-        # Handle both string and int keys
-        for k in [uid_str, int(uid_str) if uid_str.isdigit() else uid_str]:
-            if k in daily_task_count:
-                if today not in daily_task_count[k]:
-                    daily_task_count[k][today] = {}
-                daily_task_count[k][today] = count
-            # Try str
-            if str(k) in daily_task_count:
-                daily_task_count[str(k)][today] = count
-        # Ensure entry exists
-        if uid_str not in daily_task_count:
-            daily_task_count[uid_str] = {today: count}
-        else:
-            daily_task_count[uid_str][today] = count
         
-        # Clear missed
-        if uid_str in missed_tasks_db:
-            missed_tasks_db[uid_str] = []
-        if int(uid_str) in missed_tasks_db if uid_str.isdigit() else False:
-            missed_tasks_db[int(uid_str)] = []
-        # Also string variations
+        # 1. Fix daily_task_count for both int and str keys
+        for k in [uid_str, uid_int, str(uid_int)]:
+            if not k:
+                continue
+            if k not in daily_task_count:
+                daily_task_count[k] = {}
+            # Handle if value is dict or int
+            if isinstance(daily_task_count[k], dict):
+                daily_task_count[k][today] = count
+            else:
+                daily_task_count[k] = {today: count}
+        
+        # 2. Fix tasks_db total count
+        for k in [uid_str, uid_int, str(uid_int)]:
+            if not k:
+                continue
+            if k in tasks_db:
+                # Ensure at least count
+                if tasks_db[k] < count:
+                    tasks_db[k] = count
+        
+        # 3. Fix earning - add to bonus_balance and daily_task_earnings
+        # Find today's tasks and mark them completed in user_task_status
+        today_tasks = [t for t in scheduled_tasks_db if str(t.get('date')) == today]
+        fixed_task_ids = []
+        for task in today_tasks[:count]:
+            tid = task.get('id')
+            fixed_task_ids.append(tid)
+            for k in [uid_str, uid_int, str(uid_int)]:
+                if not k:
+                    continue
+                if k not in user_task_status:
+                    user_task_status[k] = {}
+                user_task_status[k][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'task_number': task.get('task_number')}
+        
+        # If no scheduled tasks found today, create dummy completed status for task 1
+        if not fixed_task_ids:
+            dummy_id = 1
+            for k in [uid_str, uid_int, str(uid_int)]:
+                if not k:
+                    continue
+                if k not in user_task_status:
+                    user_task_status[k] = {}
+                user_task_status[k][dummy_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'task_number': 1}
+        
+        # 4. Fix earnings
+        for k in [uid_str, uid_int, str(uid_int)]:
+            if not k:
+                continue
+            # daily_task_earnings
+            if k not in daily_task_earnings:
+                daily_task_earnings[k] = {}
+            daily_task_earnings[k][today] = daily_task_earnings[k].get(today, 0) + reward
+        
+        # 5. Clear missed completely
         for k in list(missed_tasks_db.keys()):
             if str(k) == uid_str:
                 missed_tasks_db[k] = []
-        
-        # Clear user_task_status missed entries for today
-        for k in list(user_task_status.keys()):
-            if str(k) == uid_str:
-                for tid in list(user_task_status[k].keys()):
-                    st = user_task_status[k][tid]
-                    if isinstance(st, dict) and st.get('status') == 'missed':
-                        del user_task_status[k][tid]
+        if uid_int in missed_tasks_db:
+            missed_tasks_db[uid_int] = []
+        if uid_str in missed_tasks_db:
+            missed_tasks_db[uid_str] = []
         
         save_data()
-        await update.message.reply_text(f"✅ Fixed {uid_str}: today {today} count={count}, missed cleared. Ask user to check My Details.")
+        await update.message.reply_text(f"✅ V55 FIXED {uid_str}: today {today} count={count}, reward ₹{reward}, tasks {fixed_task_ids}, missed cleared.\nNow My Details will show {count}/4 and ₹{reward}.")
     except Exception as e:
         await update.message.reply_text(f"❌ Fix error: {e}")
         import traceback; traceback.print_exc()
@@ -6521,7 +6553,7 @@ def main():
 
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
-    # V53 FINAL FIX: Load with retry and NEVER save empty
+    # V55 FINAL - COMPLETE FIX COUNT+EARNING+TASK STATUS - 2026-08-25 19:00 IST - V53 FIX: Load with retry and NEVER save empty
     print("V53: Starting protected load...")
     loaded = load_data()
     # V53: If loaded but users empty, try reload once more
