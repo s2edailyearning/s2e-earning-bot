@@ -53,7 +53,7 @@ def start_self_ping_loop():
     print("✅ Self-ping loop started (urllib - no requests needed)")
 
 
-# VERSION: V4.9 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:12 IST
+# VERSION: V4.10 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:12 IST
 # FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
 # TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
 
@@ -78,7 +78,7 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.9 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
+print("FINAL V4.10 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
 print("FIXED: V4.6 Flask + KeepAlive + DropPending - FINAL NO EXIT")
 print("="*60)
 
@@ -711,7 +711,9 @@ TASK_COMPLETION_WINDOW_MINUTES = 15
 app_flask = Flask(__name__)
 @app_flask.route('/')
 def home(): return "S2E Super Fixed + Image Poster Support"
-# V4.9 removed duplicate app_flask runner
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
 
 NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS, SET_IMAGE = range(11)
 
@@ -5613,7 +5615,7 @@ def main():
     try:
         start_flask_in_thread()
         start_self_ping_loop()
-        print("✅ V4.9 Flask + Self-ping started in main()")
+        print("✅ V4.10 Flask + Self-ping started in main()")
     except Exception as e:
         print(f'Flask start fail in main: {e}')
 
@@ -5622,9 +5624,31 @@ def main():
     print("============================================================")
     print("S2E Bot FINAL  - No ConversationHandler - Important Channel Fix Final - All Filters Fix Final - No Reply Fix! - Upload Screenshot + Task Image Final Fix Final - Screenshot + Task Image Final Fix Final - Final Output! - Screenshot + Task Image Fix Final - Final Output! - Task Image + Join ALWAYS True Fix Final - Final Output! - Check Joined ALWAYS True + Task Image Fix Final - Check Joined Bypass + Withdraw Buttons Fix Final - No Sleep + Immediate Polling + Separate Channels + Withdraw 1 Task Final - NameError Fixed!")
     print("============================================================")
-    # V4.9 - Removed duplicate inner Flask - Using top Flask only
-    print(" V4.9 - Single Flask mode - No duplicate")
-        print(" Quick webhook delete 2 times - No long sleep! NameError Fixed!")
+    #  FIX: Flask IMMEDIATE start - No sleep! Fix Live but not responding! NameError Fixed!
+    try:
+        from flask import Flask
+        flask_app = Flask(__name__)
+        @flask_app.route('/')
+        def home():
+            return "S2E Bot Final Running - Immediate Polling - No Sleep - NameError Fixed"
+        flask_port = int(os.environ.get("PORT", 10000))
+        print(f"Starting Flask on port {flask_port} env PORT={os.environ.get('PORT')}")
+        def run_flask():
+            try:
+                print(f"Flask running on 0.0.0.0:{flask_port}")
+                flask_app.run(host='0.0.0.0', port=flask_port, debug=False, use_reloader=False)
+            except Exception as e:
+                print(f" Flask err {e}")
+        # V4.10 - Disabled duplicate inner Flask - using top Flask only
+        flask_thread = threading.Thread(target=lambda: print('Inner Flask disabled - V4.10 clean'), daemon=True)
+        flask_thread.start()
+        print(f"Flask started on port {flask_port} - No 120 sec sleep! FINAL! NameError Fixed!")
+        time.sleep(2)
+    except Exception as e:
+        print(f" Flask setup err {e}")
+
+    print(" NO 120 sec sleep! Starting bot IMMEDIATELY! Fix Live but not responding! NameError Fixed!")
+    print(" Quick webhook delete 2 times - No long sleep! NameError Fixed!")
     try:
         import urllib.request
         for i in range(2):
