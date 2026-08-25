@@ -403,7 +403,7 @@ def notification_thread_func():
             now = get_ist_now()
             for task in get_tasks_for_today():
                 try:
-                    open_dt = datetime.combine(get_ist_today(), task['open_time_obj'], tzinfo=IST)
+                    open_dt = datetime.combine(get_ist_today(), _safe_time(task.get('open_time_obj') or task.get('open_time')) or task['open_time_obj'], tzinfo=IST)
                 except Exception:
                     continue
                 diff = (open_dt - now).total_seconds()
@@ -1068,6 +1068,23 @@ def load_data():
                     data = loaded
                     print(f"✅ Data loaded from Supabase - {len(data) if isinstance(data, dict) else 0} sections")
                 
+
+                # V29 MIGRATION: fix old scheduled_tasks_db times from Supabase (str -> time obj)
+                try:
+                    if 'scheduled_tasks_db' in data and isinstance(data['scheduled_tasks_db'], list):
+                        for _t in data['scheduled_tasks_db']:
+                            try:
+                                if isinstance(_t.get('open_time_obj'), str):
+                                    _t['open_time_obj'] = _safe_time(_t['open_time_obj'])
+                                if isinstance(_t.get('close_time_obj'), str):
+                                    _t['close_time_obj'] = _safe_time(_t['close_time_obj'])
+                                if isinstance(_t.get('next_time_obj'), str):
+                                    _t['next_time_obj'] = _safe_time(_t['next_time_obj'])
+                            except:
+                                pass
+                except Exception as _mig_e:
+                    print(f"Migration fail {_mig_e}")
+
                 if data and isinstance(data, dict):
                     for name in list(data.keys()):
                         if name not in globals():
@@ -1196,9 +1213,9 @@ def get_active_product_promo_for_user(uid):
             shot_close_obj = parse_time_str(str(t.get('screenshot_close','')))
             if not video_deadline_obj or not shot_open_obj or not shot_close_obj:
                 continue
-            video_deadline = datetime.combine(get_ist_today(), video_deadline_obj, tzinfo=IST)
-            shot_open = datetime.combine(get_ist_today(), shot_open_obj, tzinfo=IST)
-            shot_close = datetime.combine(get_ist_today(), shot_close_obj, tzinfo=IST)
+            video_deadline = datetime.combine(get_ist_today(), _safe_time(video_deadline_obj) or video_deadline_obj, tzinfo=IST)
+            shot_open = datetime.combine(get_ist_today(), _safe_time(shot_open_obj) or shot_open_obj, tzinfo=IST)
+            shot_close = datetime.combine(get_ist_today(), _safe_time(shot_close_obj) or shot_close_obj, tzinfo=IST)
             if shot_close <= shot_open:
                 shot_close += timedelta(days=1)
             if now <= shot_close:
@@ -2503,8 +2520,12 @@ def get_current_task_for_user(uid):
             return task, "pending"
         if status in ("completed", "skipped", "missed"):
             continue
-        open_dt = datetime.combine(get_ist_today(), task["open_time_obj"], tzinfo=IST)
-        close_dt = datetime.combine(get_ist_today(), task["close_time_obj"], tzinfo=IST)
+        _ot = _safe_time(task.get("open_time_obj") or task.get("open_time"))
+        _ct = _safe_time(task.get("close_time_obj") or task.get("close_time"))
+        if not _ot or not _ct:
+            continue
+        open_dt = datetime.combine(get_ist_today(), _ot, tzinfo=IST)
+        close_dt = datetime.combine(get_ist_today(), _ct, tzinfo=IST)
         if open_dt <= now <= close_dt:
             return task, "active"
     return None, "none"
