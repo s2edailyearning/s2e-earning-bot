@@ -9,6 +9,15 @@ warnings.filterwarnings('ignore')
 
 # ===== V17 SUPABASE NEW KEYS FIX - FORCE ENABLE =====
 import os
+
+# V19 FORCE TOP
+try:
+    DATA_FILE = "Supabase"
+    PERSISTENT_DISK = True
+    print("🔥🔥🔥 V19 TOP FORCE - DATA_FILE=Supabase | Persistent Disk=YES 🔥🔥🔥")
+except:
+    pass
+
 print("🔍 V17 DEBUG: Checking Supabase env...")
 SUPA_URL = os.getenv("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")
 SUPA_KEY = os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
