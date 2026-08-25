@@ -1,4 +1,4 @@
-print("V52 FINAL - SIMPLE PROMOTE MSG + PERSIST FIX - 2026-08-25 18:30 IST")
+print("V53 FINAL - ENGLISH PROMOTE + ANTI-RESET GUARD - 2026-08-25 18:45 IST - 2026-08-25 18:30 IST")
 print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
 print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
 print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
@@ -1114,6 +1114,27 @@ def _restore_loaded_sets_and_times():
 
 
 def save_data():
+    """V53 - FINAL PERSIST GUARD - Never overwrite Supabase with empty data"""
+    # V53 CRITICAL GUARD: If users_db is empty, DON'T save to Supabase
+    try:
+        if 'users_db' in globals() and len(globals().get('users_db', {})) == 0:
+            # Check if Supabase has existing data
+            if SUPABASE_ENABLED and supabase_client:
+                try:
+                    r = supabase_client.table("bot_data").select("id").eq("id", 1).execute()
+                    if r and r.data and len(r.data) > 0:
+                        print("🛑 V53 GUARD: users_db empty but Supabase has data - ABORTING SAVE to prevent reset!")
+                        return False
+                except Exception as ge:
+                    print(f"V53 guard check fail {ge}")
+            print("🛑 V53 GUARD: users_db empty - skipping save")
+            # Allow local save only if truly first run
+            if not SUPABASE_ENABLED:
+                pass
+            else:
+                return False
+    except Exception as e:
+        print(f"V53 guard error {e}")
     """V25 - FORCE SUPABASE SAVE WITH UPDATED_AT"""
     try:
         from datetime import datetime, timezone
@@ -2422,7 +2443,7 @@ async def promo_upload_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
-    msg = "📢 Mee Shop Promotion 📢\n\nMee shop ni memu ma digital channels dwara promote chestam!\n\n✅ Mee poster ni ma members WhatsApp Status lo pedataru\n✅ Meeru ekkuva customers ni pondataru\n\n💬 Vivaranalaki sampradinchandi: @s2edayincome\n\nAdmin: /add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
+    msg = "📢 Promote Your Shop 📢\n\nWe will promote your shop through our digital channels!\n\n✅ Your poster will be shared by our members on WhatsApp Status\n✅ You will get more customers\n\n💬 Contact for details: @s2edayincome\n\nAdmin: /add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price"
     await q.message.reply_text(msg, reply_markup=main_menu())
 
 async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6500,8 +6521,14 @@ def main():
 
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
-    # V50 FIX: Load only once and don't save empty over real data
+    # V53 FINAL FIX: Load with retry and NEVER save empty
+    print("V53: Starting protected load...")
     loaded = load_data()
+    # V53: If loaded but users empty, try reload once more
+    if loaded and len(users_db)==0:
+        print("V53: Loaded but users_db empty, retrying load...")
+        import time as _t; _t.sleep(1)
+        loaded = load_data()
     print(f"V50: load_data returned {loaded} - users {len(users_db) if 'users_db' in globals() else 0}")
     if not loaded:
         print("V50: No data loaded from Supabase, checking if Supabase has data...")
