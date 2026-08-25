@@ -1482,6 +1482,10 @@ def mark_task_completed_with_interval(uid, task_id):
         daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
         # total tasks
         tasks_db[uid] = tasks_db.get(uid, 0) + 1
+        try:
+            if uid in missed_tasks_db:
+                missed_tasks_db[uid] = {}
+        except: pass
         # earning ₹5 per task
         reward = 5
         add_today_task_earning(uid, reward, day=today)
@@ -4927,6 +4931,7 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 if uid not in user_task_status:
                     user_task_status[uid] = {}
                 user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+                save_data()
                 # Remove from missed_tasks_db
                 if uid in missed_tasks_db:
                     missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
