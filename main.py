@@ -7,9 +7,59 @@ warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
-# VERSION: V4.4 - RENDER 2 MIN SLEEP FIX - FINAL PERFECT - 2026-08-25 08:55 IST - FORCE UPDATE
-# FIX: V4.4 - Flask KeepAlive + drop_pending=False + Product Timeout + 2min Idle Fix - FINAL
-# TIMESTAMP: 2026-08-25 08:55:00 IST - FORCE NEW COMMIT FOR RENDER
+# === V4.5 FINAL FIX: Flask + Keep Alive (Stops Render 2-min sleep) - FULL DEFINITION ===
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    try:
+        return f"S2E Bot Alive V4.5 - {get_ist_now()} - OK", 200
+    except:
+        return "S2E Bot Alive - OK", 200
+
+@flask_app.route('/health')
+def health_check():
+    return "OK", 200
+
+def run_flask_server():
+    try:
+        port = int(os.getenv("PORT", 10000))
+        print(f"🌐 Starting Flask on port {port} env PORT={port}")
+        flask_app.run(host="0.0.0.0", port=port, threaded=True)
+    except Exception as e:
+        print(f"run_flask error {e}")
+
+def start_flask_in_thread():
+    try:
+        t = threading.Thread(target=run_flask_server, daemon=True)
+        t.start()
+        print("✅ Flask health server started - Render will NOT sleep")
+    except Exception as e:
+        print(f"Flask thread error: {e}")
+
+def start_self_ping_loop():
+    def loop():
+        import time as tm
+        try:
+            import requests
+        except:
+            print("requests not available for self-ping")
+            return
+        url = os.getenv("RENDER_EXTERNAL_URL", "https://s2e-earning-bot-1.onrender.com")
+        while True:
+            tm.sleep(90)
+            try:
+                requests.get(url, timeout=10)
+                print(f"[KEEP-ALIVE] Pinged {url}")
+            except Exception as ex:
+                print(f"[KEEP-ALIVE FAIL] {ex}")
+    threading.Thread(target=loop, daemon=True).start()
+    print("✅ Self-ping loop started")
+
+
+# VERSION: V4.5 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:02 IST - FORCE
+# FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
+# TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -32,8 +82,8 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.4 - RENDER 2 MIN SLEEP FIX + DROP_PENDING FIX + FLASK FIX - 2026-08-25 08:55 IST")
-print("FIXED: Flask KeepAlive + 2min Sleep + Product Timeout + Drop Pending")
+print("FINAL V4.5 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:02 IST")
+print("FIXED: V4.5 Flask + KeepAlive + DropPending + Product Timeout - FINAL")
 print("="*60)
 
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
@@ -2037,17 +2087,20 @@ async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['awaiting_product_video']=task['id']
     try:
         async def _auto_cancel_job(ctx):
-            tid = ctx.job.data['tid']
-            still = [x for x in product_promo_db if int(x.get('id',-1))==int(tid) and x.get('status')=='waiting_video']
-            if still:
-                for x in still:
-                    try: product_promo_db.remove(x)
+            try:
+                tid = ctx.job.data['tid']
+                still = [x for x in product_promo_db if int(x.get('id',-1))==int(tid) and x.get('status')=='waiting_video']
+                if still:
+                    for x in still:
+                        try: product_promo_db.remove(x)
+                        except: pass
+                    try: save_data()
                     except: pass
-                try: save_data()
-                except: pass
-                try:
-                    await ctx.bot.send_message(chat_id=ctx.job.data['admin_id'], text=f"⏰ Promo {tid} auto-cancelled - video not sent in 5min")
-                except: pass
+                    try:
+                        await ctx.bot.send_message(chat_id=ctx.job.data['admin_id'], text=f"⏰ Promo {tid} auto-cancelled - video not sent in 5min")
+                    except: pass
+            except Exception as e:
+                print(f"auto cancel err {e}")
         context.job_queue.run_once(_auto_cancel_job, 300, data={'tid': task['id'], 'admin_id': uid}, name=f"cancel_promo_{task['id']}")
     except Exception as e:
         print(f"cancel job fail {e}")
@@ -5566,7 +5619,9 @@ def main():
         start_flask_in_thread()
         start_self_ping_loop()
     except Exception as e:
-        print(f'Flask start fail: {e}')
+        print(f'Flask start fail in main: {e}')
+
+def main_original_backup():
 
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
