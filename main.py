@@ -1,3 +1,6 @@
+print("V49 FINAL - PRODUCT COMMISSION + L2 PLAN 3% + FESTIVAL BONUS + SNAPSHOT - 2026-08-25 17:30 IST")
+print("V48 FINAL - MANUAL USER DETAILS & PLAN CHANGE + PRIVACY MASK - 2026-08-25 17:10 IST")
+print("V47 FINAL - PRIVACY MASK + FULL USER DELETE - 2026-08-25 17:00 IST")
 print("V46 FINAL - DAILY COUNT SAVE FIX + MISSED STATUS FIX - 2026-08-25 16:25 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
@@ -128,6 +131,100 @@ def start_self_ping_loop():
 
 # === IST TIMEZONE FIX ===
 IST = timezone(timedelta(hours=5, minutes=30))
+
+def mask_mobile(mobile):
+    """V47 Privacy: Show first 3 + *** + last 2 - Hide full number"""
+    try:
+        m = str(mobile).strip()
+        if not m or len(m) < 4:
+            return "***"
+        if len(m) >= 10:
+            return f"{m[:3]}*****{m[-2:]}"  # 987*****21
+        elif len(m) >= 6:
+            return f"{m[:3]}***{m[-2:]}"
+        else:
+            return f"{m[:2]}***"
+    except:
+        return "***"
+
+def format_user_display(uid):
+    """V47: Name + masked mobile"""
+    try:
+        name = user_details.get(uid, {}).get('name', 'User')
+        mobile = user_details.get(uid, {}).get('mobile', '')
+        if mobile:
+            masked = mask_mobile(mobile)
+            return f"{name} ({masked})"
+        else:
+            return f"{name}"
+    except:
+        return f"User {str(uid)[-4:]}"
+
+
+
+def get_effective_daily_limit(uid):
+    """V49: Get daily limit with snapshot + festival bonus - Existing user not affected by price change"""
+    try:
+        # Check if user has snapshot (purchased plan)
+        user_plan = user_plans.get(str(uid)) or user_plans.get(uid)
+        if user_plan and 'snapshot_daily_limit' in user_plan:
+            base_limit = int(user_plan.get('snapshot_daily_limit', 0))
+            # Add festival bonus if active
+            plan_id = user_plan.get('plan_id')
+            if plan_id and plan_id in plans_db:
+                pdata = plans_db[plan_id]
+                fest_extra = pdata.get('festival_extra_tasks', 0)
+                fest_expiry = pdata.get('festival_expiry')
+                if fest_extra and fest_expiry:
+                    try:
+                        if str(get_ist_today()) <= str(fest_expiry):
+                            base_limit += int(fest_extra)
+                    except:
+                        pass
+            return base_limit
+        
+        # Fallback to current plan db
+        plan_id = get_user_plan_id(uid)
+        if plan_id in plans_db:
+            pdata = plans_db[plan_id]
+            base = int(pdata.get('daily_limit', pdata.get('daily_tasks', 0)))
+            # Festival bonus
+            fest_extra = pdata.get('festival_extra_tasks', 0)
+            fest_expiry = pdata.get('festival_expiry')
+            if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                base += int(fest_extra)
+            return base
+        return 0
+    except:
+        return 0
+
+def get_effective_daily_earning_cap(uid):
+    """V49: Daily earning cap with snapshot + festival"""
+    try:
+        user_plan = user_plans.get(str(uid)) or user_plans.get(uid)
+        if user_plan and 'snapshot_daily_earning' in user_plan:
+            base = int(user_plan.get('snapshot_daily_earning', 0))
+            plan_id = user_plan.get('plan_id')
+            if plan_id and plan_id in plans_db:
+                pdata = plans_db[plan_id]
+                fest_extra = pdata.get('festival_extra_earning', 0)
+                fest_expiry = pdata.get('festival_expiry')
+                if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                    base += int(fest_extra)
+            return base
+        plan_id = get_user_plan_id(uid)
+        if plan_id in plans_db:
+            pdata = plans_db[plan_id]
+            base = int(pdata.get('daily_earning', 0))
+            fest_extra = pdata.get('festival_extra_earning', 0)
+            fest_expiry = pdata.get('festival_expiry')
+            if fest_extra and fest_expiry and str(get_ist_today()) <= str(fest_expiry):
+                base += int(fest_extra)
+            return base
+        return 0
+    except:
+        return 0
+
 def get_ist_now():
     return datetime.now(IST)
 def get_ist_today():
@@ -719,19 +816,31 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
             str(e.get("type")) == "plan" and e.get("source_uid") == uid and e.get("description", "").endswith(f"Plan {int(plan.get('id',0))} activation")
             for e in referral_commission_ledger.get(ref_id, [])
         ) if ref_id else False
+# V49 L2 PLAN COMMISSION - When L2 joins, L1 gets 10%, L2 (root) gets 3%
         if ref_id and not already_plan_commission:
+            # L1 gets 10%
             add_referral_commission(ref_id, price * float(REFERRAL_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 1, uid, f"Plan {int(plan.get('id',0))} activation")
+            # L2 gets 3% - Find L1's referrer
+            l2_referrer = referral_map.get(ref_id)
+            if l2_referrer:
+                add_referral_commission(l2_referrer, price * float(L2_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 2, uid, f"L2 Plan {int(plan.get('id',0))} activation via {ref_id}")
             save_data()
 
-        user_plans[str(uid)] = {
+        # V49 PLAN SNAPSHOT - Existing user plan won't change when admin changes price
+        plan_snapshot = {
             "plan": name.lower(),
             "plan_id": int(plan.get("id", 0)),
             "status": "active",
             "price": price,
             "daily_limit": daily,
+            "daily_earning": plan.get('daily_earning', 0),
             "date": str(get_ist_today()),
             "expiry": str(expiry),
+            "snapshot_price": price,  # Snapshot at purchase time
+            "snapshot_daily_limit": daily,
+            "snapshot_daily_earning": plan.get('daily_earning', 0),
         }
+        user_plans[str(uid)] = plan_snapshot
         pending_plans.pop(uid, None)
         pending_plans.pop(str(uid), None)
         save_data()
@@ -802,8 +911,16 @@ PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 1
 DEFAULT_DAILY_TASK_ID = -1
 REFERRAL_BONUS_PER_TASK = 10
-REFERRAL_PLAN_COMMISSION_PERCENT = 10
-L1_TASK_COMMISSION_PERCENT = 2.0
+# V49 COMMISSION SETTINGS - Changeable anytime
+REFERRAL_PLAN_COMMISSION_PERCENT = 10  # L1 Plan 10%
+L2_PLAN_COMMISSION_PERCENT = 3  # V49 NEW: L2 Plan 3%
+L1_TASK_COMMISSION_PERCENT = 2.0  # L1 Task 2%
+L2_TASK_COMMISSION_PERCENT = 0.5  # L2 Task 0.5%
+L1_PRODUCT_COMMISSION_PERCENT = 2.0  # V49 NEW: Product Promo L1 2%
+L2_PRODUCT_COMMISSION_PERCENT = 0.5  # V49 NEW: Product Promo L2 0.5%
+# OLD VARS BELOW FOR COMPAT
+REFERRAL_PLAN_COMMISSION_PERCENT_OLD = 10
+L1_TASK_COMMISSION_PERCENT_OLD = 2.0
 L2_TASK_COMMISSION_PERCENT = 0.5
 DAILY_TASK_LIMIT_BASIC = 10
 DAILY_TASK_LIMIT_PREMIUM = 20
