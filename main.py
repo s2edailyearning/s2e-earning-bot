@@ -1621,7 +1621,7 @@ def _canonical_plan_info(uid):
     """Return one consistent plan identity/limits - WITH DUAL END CONDITION: Days OR Amount Cap - 4 Plans 60 Days"""
     raw = _get_user_plan_record(uid)
     if not raw:
-        return {"active": False, "type": "free", "display": "No Plan", "expiry": None, "daily": 1, "cap": 10, "validity_days": 0}
+        return {"active": False, "type": "free", "display": "No Plan (Free - 3 Days)", "expiry": None, "daily": 4, "cap": 100, "validity_days": 3}
 
     plan = raw if isinstance(raw, dict) else {}
     name = str(plan.get("plan_name") or plan.get("name") or plan.get("plan") or "").strip()
@@ -2180,11 +2180,26 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     l2_today=get_referral_commission_total(uid, level=2, commission_type="task")
     plan_today=get_referral_commission_total(uid, commission_type="plan")
     referral_today=round(l1_today+l2_today+plan_today,2)
-    promo_rs=promo_earnings_db.get(uid,0)
+    promo_rs=float(promo_earnings_db.get(uid,0) or 0) + float(globals().get('product_promo_approved', {}).get(uid, 0) if isinstance(globals().get('product_promo_approved', {}).get(uid, 0), (int,float)) else 0)
+    # V36: Product promo earnings are in promo_earnings_db too, but also check product_promo_approved logic
+    try:
+        # Actual product promo total is promo_earnings_db already includes it, but double-check
+        prod_promo = 0
+        # promo_earnings_db contains product promo rewards too
+        promo_rs = float(promo_earnings_db.get(uid,0) or 0)
+        # Add separate product promo if any
+        if isinstance(globals().get('product_promo_approved', {}), dict):
+            # product_promo_approved stores timestamps, not amount, so ignore
+            pass
+    except:
+        promo_rs = float(promo_earnings_db.get(uid,0) or 0)
     info=_canonical_plan_info(uid)
     withdrawn=get_withdrawn_for_cap(uid)
     cap=info["cap"]
     cap_remaining=max(0, cap-withdrawn)
+    hold_balance = max(0, bal - cap) if cap < bal else 0
+    withdrawable = min(bal, cap) - withdrawn
+    withdrawable = max(0, withdrawable)
     msg=(
         "💰 WALLET\n\n"
         f"Balance: ₹{bal:.2f}\n"
@@ -2193,13 +2208,15 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Today's L2 Task Commission: ₹{l2_today:.2f}\n"
         f"Today's Plan Activation Commission: ₹{plan_today:.2f}\n"
         f"Today's Referral Commission: ₹{referral_today:.2f}\n"
-        f"Promo: ₹{promo_rs:.2f}\n"
+        f"Promo + Product Promo: ₹{promo_rs:.2f}\n"
         f"Total: ₹{bal:.2f}\n\n"
         f"📋 Plan: {info['display']}\n"
         f"Daily Tasks: {direct_today}/{info['daily']}\n"
         f"Plan Cap: ₹{cap}\n"
         f"Withdrawn: ₹{withdrawn:.2f}/₹{cap}\n"
-        f"Cap Remaining: ₹{cap_remaining:.2f}"
+        f"Cap Remaining: ₹{cap_remaining:.2f}\n"
+        f"Withdrawable Now: ₹{withdrawable:.2f}\n"
+        f"Hold (Upgrade plan to withdraw): ₹{hold_balance:.2f}"
     )
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Withdraw History", callback_data="withdraw_history")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
@@ -2582,6 +2599,31 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.message.reply_text(f"Please join channel {CHANNEL_ID} to do tasks!", reply_markup=kb)
                 return
         today=str(get_ist_today())
+        # V37 FREE 3-DAY & 10 TASKS CHECK
+        try:
+            _info_free = _canonical_plan_info(uid)
+            if _info_free['type'] in ('free', 'free_expired'):
+                _total_done = tasks_db.get(uid, 0)
+                _joined = users_db.get(uid, {}).get('joined') or users_db.get(uid, {}).get('reg_date')
+                _days_left = 3
+                if _joined:
+                    try:
+                        from datetime import date as _d
+                        _jd = _d.fromisoformat(str(_joined)[:10])
+                        _used = (get_ist_today() - _jd).days
+                        _days_left = max(0, 3 - _used)
+                    except:
+                        pass
+                if _days_left <= 0 or _total_done >= 10:
+                    _bal = get_balance(uid)
+                    _reason = "3 Days Completed!" if _days_left <=0 else "10/10 Tasks Completed!"
+                    await q.message.reply_text(
+                        f"⏰ FREE PLAN - {_reason}\n\n💰 Wallet Balance: ₹{_bal:.2f} (Safe!)\n❌ Free tasks stopped!\n\n💎 Paid Membership ki convert ayite tasks vastayi!\n• Wallet balance alane untundi\n• Plan teesukogane 0/20 tasks nundi start\n• 10/10 = ₹200 instant withdraw!",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Plan", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+                    )
+                    return
+        except Exception as _e:
+            print(f"free daily check fail {_e}")
         count, limit, cap = check_daily_limits(uid)
         if count >= limit and limit > 0:
             is_active, plan_name, _ = check_plan_active(uid)
@@ -3530,15 +3572,62 @@ async def contact_us_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Message Admin", url=get_contact_url(contact_message))],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
     await q.message.reply_text(f"📞 CONTACT US\n\nAdmin: {username}\n\nTap below to open Admin chat and send your message.", reply_markup=kb)
 
+
+async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """V36: Admin command to totally remove a user for referral testing"""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /remove_user <user_id> - Totally removes user data for referral testing")
+        return
+    try:
+        target = int(context.args[0])
+    except:
+        await update.message.reply_text("Invalid user_id")
+        return
+    # Remove from all DBs
+    removed = []
+    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans']:
+        db = globals().get(db_name)
+        if isinstance(db, dict) and (target in db or str(target) in db):
+            db.pop(target, None)
+            db.pop(str(target), None)
+            removed.append(db_name)
+    # Also remove from banned, warnings
+    try:
+        banned_users.discard(target)
+        warnings_db.pop(target, None)
+        warnings_db.pop(str(target), None)
+    except:
+        pass
+    save_data()
+    await update.message.reply_text(f"✅ User {target} totally removed from: {', '.join(removed)}\nNow they can join again via referral link to test referral!")
+
+
 async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query
     try: await q.answer()
     except: pass
     uid=q.from_user.id
     user=users_db.get(uid) or users_db.get(str(uid)) or {}
+    # V36 FIX: Also check user_profiles for N/A details
+    profile = globals().get('user_profiles', {}).get(uid) or globals().get('user_profiles', {}).get(str(uid)) or {}
+    # Merge profile into user for display
+    display_name = user.get('name') or profile.get('name') or 'N/A'
+    # If still N/A, try to get from Telegram
+    if display_name == 'N/A':
+        try:
+            display_name = update.effective_user.full_name or update.effective_user.first_name or 'N/A'
+            # Save it
+            if uid not in users_db: users_db[uid]={}
+            users_db[uid]['name']=display_name
+            if uid not in globals().get('user_profiles', {}): globals().get('user_profiles', {})[uid]={}
+            globals().get('user_profiles', {})[uid]['name']=display_name
+        except:
+            pass
     plan=_get_user_plan_record(uid)
     total_earned=get_balance(uid)
-    joined=user.get('joined') or user.get('reg_date') or 'N/A'
+    joined=user.get('joined') or profile.get('joined') or user.get('reg_date') or 'N/A'
     plan_name=plan.get('plan_name',plan.get('name',plan.get('plan','No Plan'))) if plan else 'No Plan'
     expiry=plan.get('expires_at',plan.get('expiry','N/A')) if plan else 'N/A'
     remaining='N/A'
@@ -3547,14 +3636,18 @@ async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
     count,limit,cap=check_daily_limits(uid)
     approved_withdrawn=sum(int(x.get('amount',0) or 0) for x in withdraw_history.get(uid,[]) if str(x.get('status','')).lower()=='approved')
-    # Backward compatibility: if history was not present, include the current approved request.
     current_req=withdraw_requests.get(uid,{})
     if approved_withdrawn==0 and str(current_req.get('status','')).lower()=='approved':
         approved_withdrawn=int(current_req.get('amount',0) or 0)
     cap_remaining=max(0, cap-approved_withdrawn)
-    msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {user.get('name','N/A')}\n"
-         f"Gender: {user.get('gender','N/A')}\nDOB: {user.get('dob','N/A')}\nMobile: {user.get('mobile','N/A')}\n"
-         f"UPI: {user.get('upi','N/A')}\nJoined: {joined}\n\n"
+    # V36: Show proper profile data
+    gender = user.get('gender') or profile.get('gender') or 'N/A'
+    dob = user.get('dob') or profile.get('dob') or 'N/A'
+    mobile = user.get('mobile') or profile.get('mobile') or 'N/A'
+    upi = user.get('upi') or profile.get('upi') or 'N/A'
+    msg=(f"👤 MY DETAILS\n\nUser ID: {uid}\nName: {display_name}\n"
+         f"Gender: {gender}\nDOB: {dob}\nMobile: {mobile}\n"
+         f"UPI: {upi}\nJoined: {joined}\n\n"
          f"💎 Plan: {plan_name}\nExpiry: {expiry}\nDays remaining: {remaining}\n"
          f"📋 Today's tasks: {count}/{limit}\n💰 Total earning: ₹{total_earned}\n"
          f"🎯 Plan withdrawal cap: ₹{cap}\n💸 Total withdrawn: ₹{approved_withdrawn}\n📉 Withdrawal cap remaining: ₹{cap_remaining}")
@@ -3570,8 +3663,19 @@ async def withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
     except Exception:
         pass
-
     uid = update.effective_user.id
+    # V37 FREE CHECK
+    try:
+        _info = _canonical_plan_info(uid)
+        if _info['type'] in ('free', 'free_expired') or not _info.get('active'):
+            _bal = get_balance(uid)
+            await q.message.reply_text(
+                f"🔒 WITHDRAWAL LOCKED\n\n💰 Balance: ₹{_bal:.2f}\n📋 Plan: {_info['display']}\n\n❌ Free members cannot withdraw!\n💎 Need to upgrade plan!\n\n10/10 tasks = ₹200 instant withdraw!\nWallet ₹200 ayyaka withdraw cheyochu!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
+            )
+            return
+    except Exception as _e:
+        print(f"free withdraw check fail {_e}")
     today = str(get_ist_today())
 
     # One withdrawal per day. Only a real request for TODAY blocks a new request.
@@ -6456,6 +6560,7 @@ def main():
             app.add_handler(CallbackQueryHandler(missed_upload_cb, pattern=r"^missed_upload_-?\d+$"))
             app.add_handler(CallbackQueryHandler(my_details_cb, pattern="^my_details$"))
             app.add_handler(CallbackQueryHandler(contact_us_cb, pattern="^contact_us$"))
+            app.add_handler(CommandHandler("remove_user", remove_user_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
