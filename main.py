@@ -3830,7 +3830,9 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
     uid=int(q.data.split("_")[-1])
     if uid in pending_daily:
         is_first=tasks_db.get(uid,0)==0
-        reward=pending_daily[uid].get('task',{}).get('reward',5)
+        task_obj=pending_daily[uid].get('task',{})
+        task_id=task_obj.get('id')
+        reward=task_obj.get('reward',5)
         today=pending_daily[uid].get('date')
         tasks_db[uid]=tasks_db.get(uid,0)+1
         if uid not in daily_task_count: daily_task_count[uid]={}
@@ -3839,37 +3841,46 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         if reward!=5: bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-5)
         del pending_daily[uid]
         task_open_time.pop(uid, None)
-        for tid, status_data in list(user_task_status.get(uid, {}).items()):
-            if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
-                mark_task_completed_with_interval(uid, tid)
-                break
+        # V34 FIX: Mark completed and clear missed
+        if task_id is not None:
+            if uid not in user_task_status: user_task_status[uid]={}
+            user_task_status[uid][task_id]={'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+            if uid in missed_tasks_db:
+                missed_tasks_db[uid]=[t for t in missed_tasks_db[uid] if int(t.get('id',-1))!=int(task_id)]
+        else:
+            for tid, status_data in list(user_task_status.get(uid, {}).items()):
+                if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
+                    user_task_status[uid][tid]={'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+                    if uid in missed_tasks_db:
+                        missed_tasks_db[uid]=[t for t in missed_tasks_db[uid] if int(t.get('id',-1))!=int(tid)]
+                    break
         ref_id=referral_map.get(uid)
         if ref_id and is_first:
             referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
             add_referral_commission(ref_id, REFERRAL_BONUS_PER_TASK, "bonus", 1, uid, "First approved task referral bonus")
         record_task_referral_commissions(uid, reward)
         save_data()
-        await q.message.reply_text(f"✅ Approved {uid} +Rs{reward}")
-        # Update channel message to show approved status
+        await q.message.reply_text(f"✅ Approved {uid} +Rs{reward} - Task {task_id or ''}")
         try:
-            await q.message.edit_caption(caption=q.message.caption + f"\n\n✅ APPROVED by admin - Rs{reward} credited!\nApproved: {get_ist_now().strftime('%H:%M:%S')}")
+            await q.message.edit_caption(caption=(q.message.caption or "") + f"\n\n✅ APPROVED by admin - Rs{reward} credited!\nApproved: {get_ist_now().strftime('%H:%M:%S')} IST\nUser: {uid}")
         except:
             try:
                 await q.message.edit_text(f"✅ APPROVED - User {uid} +Rs{reward}\nOriginal: {q.message.caption or q.message.text or ''}")
             except:
                 pass
         try:
-            _, daily_limit, _ = check_daily_limits(uid)
-            daily_count = get_tasks(uid)
-            await context.bot.send_message(
-                chat_id=uid,
-                text=(f"✅ Task Approved! +Rs{reward}\n"
-                      f"Balance: Rs{get_balance(uid)}\n"
-                      f"Tasks today: {daily_count}/{daily_limit}\n"
-                      f"Total completed tasks: {tasks_db.get(uid, 0)}"),
-                reply_markup=main_menu()
-            )
-        except: pass
+            remaining_tasks=get_tasks_for_today()
+            remaining_count=len([t for t in remaining_tasks if user_task_status.get(uid, {}).get(t.get('id'), {}).get('status') != 'completed'])
+            if remaining_count>0:
+                msg_user=f"✅ Task Approved! +₹{reward} credited!\nBalance: ₹{get_balance(uid)}\n\n⏳ Remaining tasks: {remaining_count}\nCheck /menu -> Daily Task for next task!"
+            else:
+                msg_user=f"✅ Task Approved! +₹{reward} credited!\nBalance: ₹{get_balance(uid)}\n\n🎉 All tasks completed! No more tasks today! Excellent!"
+            await context.bot.send_message(chat_id=uid, text=msg_user, reply_markup=main_menu())
+        except Exception as _e:
+            print(f"Notify user approve fail {_e}")
+    else:
+        await q.message.reply_text("❌ No pending task for this user - already approved/rejected")
+
 
 async def admin_reject_daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -4164,8 +4175,22 @@ async def missed_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not MISSED_ENABLED:
         await q.message.reply_text("⏰ Missed Tasks are currently OFF by Admin.", reply_markup=main_menu()); return
     missed=track_missed_tasks_for_user(uid)
+    # V34 FIX: Filter out completed and pending_verification tasks
+    filtered=[]
+    for t in missed:
+        tid=t.get('id')
+        st=user_task_status.get(uid,{}).get(tid,{})
+        st_status=st.get('status') if isinstance(st,dict) else st
+        if st_status in ('completed','pending_verification'):
+            continue
+        filtered.append(t)
+    missed=filtered
     if not missed:
-        await q.message.reply_text("✅ No missed tasks today!", reply_markup=main_menu()); return
+        # Check if there are pending verifications
+        pending_count=len([1 for tid,s in user_task_status.get(uid,{}).items() if isinstance(s,dict) and s.get('status')=='pending_verification'])
+        if pending_count>0:
+            await q.message.reply_text(f"⏳ {pending_count} task(s) waiting for admin approval!\nAdmin will approve soon. Please wait.\n\nNo more missed tasks to submit right now.", reply_markup=main_menu()); return
+        await q.message.reply_text("🎉 No missed tasks today! All tasks completed! ✅\nNo more tasks!", reply_markup=main_menu()); return
     # Dedup missed by task_number for display
     seen_nums=set()
     unique_missed=[]
@@ -4637,10 +4662,7 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Approve ALL for Daily Task screenshots only.
-    Product Promotion submissions live in product_promo_pending and are never
-    touched by this callback.
-    """
+    """Approve ALL for Daily Task screenshots only - V34 FIX: marks completed, clears missed, shows status"""
     q = update.callback_query
     try:
         await q.answer("Processing Daily Task bulk approval…")
@@ -4657,25 +4679,46 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if not isinstance(sub, dict):
                 continue
             task = sub.get('task', {}) if isinstance(sub.get('task', {}), dict) else {}
+            task_id = task.get('id')
             reward = float(task.get('reward', 5) or 5)
             tasks_db[uid] = tasks_db.get(uid, 0) + 1
             daily_task_count.setdefault(uid, {})
             daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
             daily_task_earnings.setdefault(uid, {})
             daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
-            # get_balance already gives ₹5 per approved task. Only the amount
-            # above ₹5 belongs in bonus_balance.
             if reward > 5:
                 bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
+            # V34: Mark task status as completed
+            if task_id is not None:
+                if uid not in user_task_status:
+                    user_task_status[uid] = {}
+                user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+                # Remove from missed_tasks_db
+                if uid in missed_tasks_db:
+                    missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
+            else:
+                # Fallback: mark any pending_verification as completed
+                for tid, sdata in list(user_task_status.get(uid, {}).items()):
+                    if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
+                        user_task_status[uid][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+                        break
+            record_task_referral_commissions(uid, reward)
             pending_daily.pop(key, None)
             approved_count += 1
             details.append(f"{uid} (₹{reward:g})")
             try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Daily Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
+                remaining = get_tasks_for_today()
+                remaining_count = len([t for t in remaining if user_task_status.get(uid, {}).get(t.get('id'), {}).get('status') != 'completed'])
+                if remaining_count > 0:
+                    msg_user = f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}\n\n⏳ Remaining tasks today: {remaining_count}\nGo to /menu -> Daily Task for next!"
+                else:
+                    msg_user = f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}\n\n🎉 All tasks completed today! No more tasks! Great job!"
+                await context.bot.send_message(chat_id=uid, text=msg_user, reply_markup=main_menu())
             except Exception:
                 pass
         except Exception as e:
             print(f"daily bulk approval error {key}: {e}")
+            import traceback; traceback.print_exc()
     save_data()
     detail_text = "\n".join(details[:15])
     if len(details) > 15:
@@ -4684,6 +4727,11 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
         f"✅ DAILY TASK BULK APPROVAL DONE\n\nApproved: {approved_count}\n{detail_text or 'No pending Daily Task submissions.'}\n\nRemaining pending: {len(pending_daily)}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]])
     )
+    # Update original channel message caption
+    try:
+        await q.message.edit_caption(caption=(q.message.caption or "") + f"\n\n✅ BULK APPROVED {approved_count} tasks at {get_ist_now().strftime('%H:%M:%S')} IST")
+    except:
+        pass
 
 # === CHANNEL METHOD + BULK APPROVE V28 ===
 # Admin channels - set via command or env
