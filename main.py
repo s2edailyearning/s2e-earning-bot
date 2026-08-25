@@ -131,6 +131,39 @@ def get_ist_today():
     return get_ist_now().date()
 def get_ist_time():
     return get_ist_now().time()
+
+
+def _safe_time(t):
+    """V28 - convert str to time object safely"""
+    import datetime as _dt
+    if t is None:
+        return None
+    if isinstance(t, _dt.time):
+        return t
+    if isinstance(t, _dt.datetime):
+        return t.time()
+    if isinstance(t, str):
+        try:
+            t = t.strip()
+            if ":" in t:
+                # try HH:MM or HH:MM:SS
+                for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p"):
+                    try:
+                        return _dt.datetime.strptime(t, fmt).time()
+                    except:
+                        continue
+                # fallback fromisoformat
+                try:
+                    return _dt.time.fromisoformat(t)
+                except:
+                    pass
+            else:
+                return _dt.time.fromisoformat(t)
+        except:
+            pass
+    return None
+
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
@@ -1395,7 +1428,14 @@ def check_missed_tasks_with_interval(uid):
     newly_missed = []
     for task in today_tasks:
         task_id = task['id']
-        close_dt = datetime.combine(get_ist_today(), task['close_time_obj'], tzinfo=IST)
+        _ct = task.get('close_time_obj') or task.get('close_time')
+        _ct = _safe_time(_ct) or task.get('close_time_obj')
+        if _ct is None:
+            continue
+        try:
+            close_dt = datetime.combine(get_ist_today(), _ct, tzinfo=IST)
+        except:
+            continue
         status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
         if status in ['completed', 'skipped']:
             continue
@@ -4009,12 +4049,24 @@ def track_missed_tasks_for_user(uid):
     skip_status=skip_db.get(uid,{})
     missed_tasks_db.setdefault(uid,[])
     existing={int(t.get('id')):t for t in missed_tasks_db[uid] if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
+    now = _safe_time(now) or now
     for task in today_tasks:
         close_obj=task.get('close_time_obj')
         if not close_obj:
             close_obj=parse_time_str(str(task.get('close_time','23:59')))
-        if not close_obj or now <= close_obj:
+        close_obj = _safe_time(close_obj) or close_obj
+        if not close_obj:
             continue
+        try:
+            if now <= close_obj:
+                continue
+        except Exception as _e:
+            # fallback string compare
+            try:
+                if str(now) <= str(close_obj):
+                    continue
+            except:
+                continue
         tid=task.get('id')
         status=user_status.get(tid,{})
         status=status.get('status') if isinstance(status,dict) else status
