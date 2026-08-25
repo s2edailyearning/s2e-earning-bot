@@ -1,3 +1,9 @@
+# S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
+# - Supports sb_publishable_ and sb_secret_ new keys (supabase 2.15.3)
+# - Supports both SUPABASE and SUPABASE env spelling
+# - Python 3.11.11 compatible (PTB 21.7)
+# - Render sleep fix + Flask health server
+
 import warnings
 warnings.filterwarnings('ignore')
 import os, re, threading, json, asyncio
