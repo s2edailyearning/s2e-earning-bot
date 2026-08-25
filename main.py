@@ -862,7 +862,7 @@ def init_supabase():
         return False
 
 _render_disk = "/var/data"
-_default_data_file = os.path.join(_render_disk, "bot_data.json") if os.path.isdir(_render_disk) else "bot_data.json"
+_default_data_file = os.path.join(_render_disk, "Supabase") if os.path.isdir(_render_disk) else "Supabase"
 DATA_FILE = os.getenv("DATA_FILE", _default_data_file)
 DATA_DIR = os.path.dirname(DATA_FILE) or "."
 try:
@@ -4747,7 +4747,7 @@ async def backup_cmd(update, context):
         import os, json, glob
         files_to_backup = []
         # Original DB files
-        for jf in ["bot_data.json", "channel_config.json"]:
+        for jf in ["Supabase", "channel_config.json"]:
             if os.path.exists(jf):
                 files_to_backup.append(jf)
         # Also backup all _db jsons if exists
@@ -4755,9 +4755,9 @@ async def backup_cmd(update, context):
             if jf not in files_to_backup and os.path.exists(jf):
                 files_to_backup.append(jf)
         # Ensure config exists
-        if not os.path.exists("bot_data.json"):
-            with open("bot_data.json","w") as f: json.dump({}, f)
-            files_to_backup.append("bot_data.json")
+        if not os.path.exists("Supabase"):
+            with open("Supabase","w") as f: json.dump({}, f)
+            files_to_backup.append("Supabase")
         if not os.path.exists("channel_config.json"):
             with open("channel_config.json","w") as f: json.dump({}, f)
             files_to_backup.append("channel_config.json")
@@ -4881,7 +4881,7 @@ async def admin_backup_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         import os, json, glob
         files=[]
-        for jf in ["bot_data.json","channel_config.json","bot_config.json","users_progress.json","referrals.json"]:
+        for jf in ["Supabase","channel_config.json","bot_config.json","users_progress.json","referrals.json"]:
             if os.path.exists(jf): files.append(jf)
         for jf in glob.glob("*_db*.json"):
             if os.path.exists(jf) and jf not in files: files.append(jf)
