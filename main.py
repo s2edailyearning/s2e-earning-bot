@@ -7,15 +7,15 @@ warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
 from datetime import date, datetime, timedelta, time, timezone
 from flask import Flask
 
-# === V4.6 FINAL FIX: Flask + Keep Alive (Stops Render 2-min sleep) ===
+# === V4.8 ULTRA CLEAN - SINGLE FLASK + KEEP ALIVE - FINAL ===
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
     try:
-        return f"S2E Bot Alive V4.6 - {get_ist_now()} - OK", 200
+        return f"S2E Bot V4.8 Alive - {get_ist_now()} - OK", 200
     except:
-        return "S2E Bot Alive - OK", 200
+        return "S2E Bot V4.8 Alive - OK", 200
 
 @flask_app.route('/health')
 def health_check():
@@ -24,36 +24,37 @@ def health_check():
 def run_flask_server():
     try:
         port = int(os.getenv("PORT", 10000))
-        print(f"🌐 Starting Flask on port {port} env PORT={port}")
-        flask_app.run(host="0.0.0.0", port=port, threaded=True)
+        print(f"🌐 V4.8 Starting Flask on port {port}")
+        flask_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
     except Exception as e:
-        print(f"run_flask error {e}")
+        print(f"V4.8 Flask run error (may be duplicate, ignoring): {e}")
 
 def start_flask_in_thread():
     try:
         t = threading.Thread(target=run_flask_server, daemon=True)
         t.start()
-        print("✅ Flask health server started - Render will NOT sleep")
+        print("✅ V4.8 Flask health server started - Render will NOT sleep")
     except Exception as e:
-        print(f"Flask thread error: {e}")
+        print(f"V4.8 Flask thread error: {e}")
 
 def start_self_ping_loop():
     def loop():
         import time as tm
         import urllib.request
         url = os.getenv("RENDER_EXTERNAL_URL", "https://s2e-earning-bot-1.onrender.com")
+        print(f"🔁 V4.8 Self-ping targeting {url} every 90s")
         while True:
             tm.sleep(90)
             try:
                 urllib.request.urlopen(url, timeout=10)
-                print(f"[KEEP-ALIVE] Pinged {url}")
+                print(f"[KEEP-ALIVE V4.8] Pinged {url}")
             except Exception as ex:
-                print(f"[KEEP-ALIVE FAIL] {ex}")
+                print(f"[KEEP-ALIVE V4.8 FAIL] {ex}")
     threading.Thread(target=loop, daemon=True).start()
-    print("✅ Self-ping loop started (urllib - no requests needed)")
+    print("✅ V4.8 Self-ping loop started (urllib)")
 
 
-# VERSION: V4.7 - RENDER 2 MIN FIX - FINAL PERFECT - 2026-08-25 09:12 IST
+# VERSION: V4.8 - ULTRA CLEAN - SINGLE FLASK - FINAL - 2026-08-25 09:32 IST - GITHUB FORCE UPDATE - 2026-08-24 01:56:58 IST
 # FIX: _db_init dummy + Daily Task no response + Bulk tasks + Missed duplicate fix
 # TIMESTAMP: 2026-08-24 01:56:58 IST - This line ensures GitHub sees change!
 
@@ -78,8 +79,8 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.7 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
-print("FIXED: V4.6 Flask + KeepAlive + DropPending - FINAL NO EXIT")
+print("FINAL V4.8 - ULTRA CLEAN SINGLE FLASK + SELF-PING + DROP_PENDING - 2026-08-25 09:32 IST - DATA PERSISTENCE + PRODUCT BULK + DUPLICATE FIX - 2026-08-24 08:30:00 IST")
+print("FIXED: _db_init + Daily Task + Duplicate + Bulk")
 print("="*60)
 
 SCREENSHOT_LINK = "https://t.me/S2E_Daily_Earning"
@@ -2081,25 +2082,6 @@ async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     # is per-session and can be lost on a restart; DB state must remain sufficient
     # to attach the next admin video to this exact campaign.
     context.user_data['awaiting_product_video']=task['id']
-    try:
-        async def _auto_cancel_job(ctx):
-            try:
-                tid = ctx.job.data['tid']
-                still = [x for x in product_promo_db if int(x.get('id',-1))==int(tid) and x.get('status')=='waiting_video']
-                if still:
-                    for x in still:
-                        try: product_promo_db.remove(x)
-                        except: pass
-                    try: save_data()
-                    except: pass
-                    try:
-                        await ctx.bot.send_message(chat_id=ctx.job.data['admin_id'], text=f"⏰ Promo {tid} auto-cancelled - video not sent in 5min")
-                    except: pass
-            except Exception as e:
-                print(f"auto cancel err {e}")
-        context.job_queue.run_once(_auto_cancel_job, 300, data={'tid': task['id'], 'admin_id': uid}, name=f"cancel_promo_{task['id']}")
-    except Exception as e:
-        print(f"cancel job fail {e}")
     save_data()
     await update.message.reply_text(f"✅ Product Promotion ID {task['id']} created.\n\n🎥 Now send the promotion VIDEO to this bot.\n\nDownload deadline: {task['download_deadline']}\nScreenshot: {task['screenshot_open']} → {task['screenshot_close']}\n{_product_reward_text(task,uid)}")
 
@@ -5611,13 +5593,14 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
-    # V4.6 FIX: Start Flask FIRST, before anything else
     try:
         start_flask_in_thread()
         start_self_ping_loop()
-        print("✅ V4.7 Flask + Self-ping started in main()")
+        print('✅ V4.8 Flask + Self-ping started in main()')
     except Exception as e:
-        print(f'Flask start fail in main: {e}')
+        print(f'V4.8 Flask start fail in main: {e}')
+
+def main_old_backup():
 
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
