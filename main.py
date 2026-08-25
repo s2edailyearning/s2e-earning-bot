@@ -3669,7 +3669,7 @@ async def update_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     context.user_data['awaiting_details'] = True
     await q.message.reply_text(
-        "📝 UPDATE DETAILS\n\nSend your details in ONE message like this:\n\nName: Venkataswamy K\nGender: Male\nDOB: 01-01-1990\nMobile: 9876543210\nUPI: 9876543210@paytm",
+        "📝 UPDATE DETAILS\n\nSend your details in ONE message like this:\n\nName: Your Full Name\nGender: Male\nDOB: 01-01-1990\nMobile: 9876543210\nUPI: 9876543210@paytm (Replace with YOUR details)",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="back_menu")]])
     )
 
