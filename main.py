@@ -2035,6 +2035,24 @@ async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     # is per-session and can be lost on a restart; DB state must remain sufficient
     # to attach the next admin video to this exact campaign.
     context.user_data['awaiting_product_video']=task['id']
+    # FIX: schedule auto-cancel in 5 min to avoid stuck state after 2 min idle
+    try:
+        async def _auto_cancel_promo_job(ctx):
+            tid = ctx.job.data['tid']
+            admin_chat = ctx.job.data['admin_id']
+            still = [x for x in product_promo_db if int(x.get('id',-1))==int(tid) and x.get('status')=='waiting_video']
+            if still:
+                for x in still:
+                    try: product_promo_db.remove(x)
+                    except: pass
+                try: save_data()
+                except: pass
+                try:
+                    await ctx.bot.send_message(chat_id=admin_chat, text=f"⏰ Auto-Cancelled: Promo {tid} - video not sent in 5 min. Run /add_product_promo again.")
+                except: pass
+        context.job_queue.run_once(_auto_cancel_promo_job, 300, data={'tid': task['id'], 'admin_id': uid}, name=f"cancel_promo_{task['id']}")
+    except Exception as e:
+        print(f"cancel job schedule fail {e}")
     save_data()
     await update.message.reply_text(f"✅ Product Promotion ID {task['id']} created.\n\n🎥 Now send the promotion VIDEO to this bot.\n\nDownload deadline: {task['download_deadline']}\nScreenshot: {task['screenshot_open']} → {task['screenshot_close']}\n{_product_reward_text(task,uid)}")
 
@@ -5546,6 +5564,12 @@ async def bulk_task_image_handler(update, context):
 
 
 def main():
+    try:
+        start_flask_in_thread()
+        start_self_ping_loop()
+    except Exception as e:
+        print(f'Flask start fail {e}')
+
     global bot_application, bot_event_loop, notification_thread_started
     import os, time, threading
     print("============================================================")
@@ -6114,9 +6138,9 @@ def main():
                 print("1-minute task notification thread started.")
             try:
                 app.run_polling(
-                    drop_pending_updates=True,
+                    drop_pending_updates=False,
                     allowed_updates=Update.ALL_TYPES,
-                    poll_interval=0.0,
+                    poll_interval=1.0,
                     timeout=30,
                     close_loop=False,
                 )
