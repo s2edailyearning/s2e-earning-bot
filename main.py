@@ -999,8 +999,20 @@ supabase_client = None
 SUPABASE_ENABLED = False
 
 def init_supabase():
-    global supabase_client, SUPABASE_ENABLED
+    global supabase_client, SUPABASE_ENABLED, SUPABASE_URL, SUPABASE_KEY
     try:
+        # V50 FIX: Reuse V18 client if already created (supports sb_secret_ new keys)
+        if 'supa_client' in globals() and globals().get('supa_client'):
+            try:
+                supabase_client = globals()['supa_client']
+                SUPABASE_ENABLED = True
+                print(f"✅ V50: Reusing V18 Supabase client - data will persist")
+                return True
+            except Exception as e:
+                print(f"V50 reuse failed {e}")
+        if 'supabase_client' in globals() and globals().get('supabase_client') and globals().get('SUPABASE_ENABLED'):
+            print(f"✅ V50: Supabase already enabled - keeping")
+            return True
         if SUPABASE_URL and SUPABASE_KEY:
             from supabase import create_client
             supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -1008,6 +1020,15 @@ def init_supabase():
             print(f"✅ Supabase enabled URL {SUPABASE_URL[:40]}...")
             return True
         else:
+            # Try to get from V18 globals
+            _url = os.getenv("SUPABASE_URL","")
+            _key = os.getenv("SUPABASE_KEY","") or os.getenv("SUPABASE_ANON_KEY","")
+            if _url and _key:
+                from supabase import create_client
+                supabase_client = create_client(_url, _key)
+                SUPABASE_ENABLED = True
+                print(f"✅ V50: Supabase enabled from env fallback")
+                return True
             print("ℹ️ SUPABASE_URL/KEY not set - using local JSON (data will LOST on deploy)")
             return False
     except ImportError as e:
@@ -1015,6 +1036,7 @@ def init_supabase():
         return False
     except Exception as e:
         print(f"⚠️ Supabase init failed: {e}")
+        import traceback; traceback.print_exc()
         return False
 
 _render_disk = "/var/data"
@@ -1604,7 +1626,12 @@ def mark_task_completed_with_interval(uid, task_id):
         try:
             if uid in missed_tasks_db:
                 try:
-                    missed_tasks_db[uid] = {}
+                    # V50 FIX: Don't wipe to dict, clear list correctly
+                    if isinstance(missed_tasks_db[uid], list):
+                        # remove only completed task ids from missed list if needed
+                        pass
+                    else:
+                        missed_tasks_db[uid] = []
                     save_data()
                 except: pass
         except: pass
@@ -4444,7 +4471,12 @@ def track_missed_tasks_for_user(uid):
     user_status=user_task_status.get(uid,{})
     skip_status=skip_db.get(uid,{})
     missed_tasks_db.setdefault(uid,[])
-    existing={int(t.get('id')):t for t in missed_tasks_db[uid] if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
+    # V50 FIX: Handle both list and dict cases safely
+    _missed_list = missed_tasks_db.get(uid, [])
+    if isinstance(_missed_list, dict):
+        _missed_list = []
+        missed_tasks_db[uid] = []
+    existing={int(t.get('id')):t for t in _missed_list if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
     now = _safe_time(now) or now
     for task in today_tasks:
         close_obj=task.get('close_time_obj')
@@ -6392,10 +6424,34 @@ def main():
 
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
-    load_data()
-    normalize_support_plans()
-    force_update_plans_to_new()
-    save_data()
+    # V50 FIX: Load only once and don't save empty over real data
+    loaded = load_data()
+    print(f"V50: load_data returned {loaded} - users {len(users_db) if 'users_db' in globals() else 0}")
+    if not loaded:
+        print("V50: No data loaded from Supabase, checking if Supabase has data...")
+        # Don't overwrite Supabase with empty local data
+        if SUPABASE_ENABLED and supabase_client:
+            try:
+                res = supabase_client.table("bot_data").select("id").eq("id", 1).execute()
+                if res and res.data:
+                    print("V50: Supabase has data, not saving empty")
+                else:
+                    print("V50: Supabase empty, initial save allowed")
+                    normalize_support_plans()
+                    force_update_plans_to_new()
+                    save_data()
+            except Exception as e:
+                print(f"V50 check error {e}")
+                normalize_support_plans()
+                force_update_plans_to_new()
+        else:
+            normalize_support_plans()
+            force_update_plans_to_new()
+            save_data()
+    else:
+        normalize_support_plans()
+        force_update_plans_to_new()
+        save_data()
     try:
         threading.Thread(target=keep_alive_pinger, daemon=True).start()
         print('Keep-alive started Final (backup only; Render Free needs inbound external traffic)')
