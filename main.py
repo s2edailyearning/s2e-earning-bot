@@ -1,3 +1,4 @@
+print("V46 FINAL - DAILY COUNT SAVE FIX + MISSED STATUS FIX - 2026-08-25 16:25 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -4935,7 +4936,14 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 if uid not in user_task_status:
                     user_task_status[uid] = {}
                 user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
-                save_data()
+                try:
+                    # V46: Force clear missed and save
+                    if uid in missed_tasks_db:
+                        missed_tasks_db[uid] = {}
+                    save_data()
+                    print(f"V46 SAVED after approval uid={uid} reward={reward}")
+                except Exception as se:
+                    print(f"V46 save fail {se}")
                 # Remove from missed_tasks_db
                 if uid in missed_tasks_db:
                     missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
