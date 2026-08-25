@@ -6,6 +6,28 @@
 
 import warnings
 warnings.filterwarnings('ignore')
+
+# ===== V17 SUPABASE NEW KEYS FIX - FORCE ENABLE =====
+import os
+print("🔍 V17 DEBUG: Checking Supabase env...")
+SUPA_URL = os.getenv("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")
+SUPA_KEY = os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_ANON_KEY", "")
+SUPA_SECRET = os.getenv("SUPABASE_SECRET_KEY", "") or os.getenv("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "")
+print(f"🔍 V17 DEBUG: URL present={bool(SUPA_URL)} len={len(SUPA_URL)}")
+print(f"🔍 V17 DEBUG: KEY present={bool(SUPA_KEY)} len={len(SUPA_KEY)} start={SUPA_KEY[:15] if SUPA_KEY else 'NO'}")
+print(f"🔍 V17 DEBUG: SECRET present={bool(SUPA_SECRET)}")
+
+# Use secret key if available (new sb_secret_ keys)
+FINAL_SUPABASE_KEY = SUPA_SECRET if SUPA_SECRET and len(SUPA_SECRET)>20 else SUPA_KEY
+FINAL_SUPABASE_URL = SUPA_URL
+
+# Force set for later code
+os.environ["SUPABASE_URL"] = FINAL_SUPABASE_URL
+os.environ["SUPABASE_KEY"] = FINAL_SUPABASE_KEY
+os.environ["SUPABASE_URL"] = FINAL_SUPABASE_URL
+os.environ["SUPABASE_KEY"] = FINAL_SUPABASE_KEY
+# ===== END V17 FIX =====
+
 import os, re, threading, json, asyncio
 from urllib.parse import quote
 import warnings
@@ -84,7 +106,7 @@ JOIN_CHANNEL = -1004352241439
 print(f"Channels configured: VERIFY={CHANNEL_ID} SCREENSHOT={SCREENSHOT_CHANNEL} WITHDRAW={WITHDRAW_CHANNEL} JOIN={JOIN_CHANNEL}")
 
 print("="*60)
-print("FINAL V4.12 - RENDER 2 MIN SLEEP FIX + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
+print("FINAL V17 - SUPABASE NEW KEYS sb_secret_ SUPPORT - 2026-08-25 11:25 IST + FLASK FIX + DROP_PENDING FIX - 2026-08-25 09:12 IST")
 print("FIXED: V4.6 Flask + KeepAlive + DropPending - FINAL NO EXIT")
 print("="*60)
 
