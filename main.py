@@ -1,4 +1,4 @@
-print("V46 FINAL - DAILY COUNT SAVE FIX + MISSED STATUS FIX - 2026-08-25 16:25 IST")
+print("V48 FINAL - DELETION-SAFE REFERRAL CHAIN + USERLIST + REFERRAL CODE FIX - 2026-08-26 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -738,20 +738,18 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Plan activation commission is immediate. Eligibility is checked at the
         # exact moment of activation; there is NO retroactive commission later.
-        source_ref = referral_map.get(uid) or referral_map.get(str(uid))
-        if source_ref:
-            l1_ref = int(source_ref)
-            if is_paid_plan_active(l1_ref):
-                already = any(str(e.get("type")) == "plan" and int(e.get("source_uid", -1) or -1) == uid and int(e.get("level", 0) or 0) == 1 for e in referral_commission_ledger.get(l1_ref, []))
-                if not already:
-                    add_referral_commission(l1_ref, price * float(REFERRAL_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 1, uid, f"L1 plan activation - {name}", source_amount=price)
-            l2_ref = referral_map.get(l1_ref) or referral_map.get(str(l1_ref))
-            if l2_ref:
-                l2_ref = int(l2_ref)
-                if is_paid_plan_active(l2_ref):
-                    already2 = any(str(e.get("type")) == "plan" and int(e.get("source_uid", -1) or -1) == uid and int(e.get("level", 0) or 0) == 2 for e in referral_commission_ledger.get(l2_ref, []))
-                    if not already2:
-                        add_referral_commission(l2_ref, price * float(L2_PLAN_COMMISSION_PERCENT) / 100.0, "plan", 2, uid, f"L2 plan activation - {name}", source_amount=price)
+        for ref_id, level in get_effective_referral_levels(uid):
+            if not is_paid_plan_active(ref_id):
+                continue
+            pct = float(REFERRAL_PLAN_COMMISSION_PERCENT) if level == 1 else float(L2_PLAN_COMMISSION_PERCENT)
+            already = any(
+                str(e.get("type")) == "plan"
+                and int(e.get("source_uid", -1) or -1) == uid
+                and int(e.get("level", 0) or 0) == level
+                for e in referral_commission_ledger.get(ref_id, [])
+            )
+            if not already:
+                add_referral_commission(ref_id, price * pct / 100.0, "plan", level, uid, f"L{level} plan activation - {name}", source_amount=price)
 
         user_plans[str(uid)] = plan_snapshot
         pending_plans.pop(uid, None)
@@ -856,6 +854,10 @@ pending_daily = {}
 user_plans = {}
 pending_plans = {}
 referral_map = {}
+# When a referrer is removed, direct children can be re-parented while preserving
+# their original commission level (e.g. B removed from A->B->C makes A the
+# preserved L2 referrer for C). {child_uid: preserved_level}
+referral_level_overrides = {}
 # Public referral codes: never expose raw Telegram numeric IDs in referral links.
 # {telegram_uid: "S2EXXXXXXX"} and reverse lookup for /start.
 referral_codes_db = {}
@@ -1013,7 +1015,7 @@ def _restore_all_int_keys_after_load():
     dict_names = [
         "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
         "warnings_db", "pending_daily", "user_plans", "pending_plans",
-        "referral_map", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
+        "referral_map", "referral_level_overrides", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
         "withdraw_requests", "withdraw_history", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
@@ -1049,7 +1051,7 @@ def save_data():
         state_names = [
             "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
-            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
+            "pending_plans", "referral_map", "referral_level_overrides", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
@@ -1613,14 +1615,13 @@ def mark_task_completed_with_interval(uid, task_id):
         add_today_task_earning(uid, reward, day=today)
         # referral commission
         try:
-            ref_id = referral_map.get(uid)
-            if ref_id:
-                l1_reward = reward * float(L1_TASK_COMMISSION_PERCENT) / 100.0 if 'L1_TASK_COMMISSION_PERCENT' in globals() else reward * 0.10
-                add_referral_commission(ref_id, l1_reward, "task", 1, uid, f"L1 task commission from {uid}", source_amount=reward)
-                l2 = referral_map.get(ref_id)
-                if l2:
-                    l2_reward = reward * float(L2_TASK_COMMISSION_PERCENT) / 100.0 if 'L2_TASK_COMMISSION_PERCENT' in globals() else reward * 0.05
-                    add_referral_commission(l2, l2_reward, "task", 2, uid, f"L2 task commission from {uid}", source_amount=reward)
+            for ref_id, level in get_effective_referral_levels(uid):
+                if level == 1:
+                    pct = float(L1_TASK_COMMISSION_PERCENT) if 'L1_TASK_COMMISSION_PERCENT' in globals() else 0.10
+                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 1, uid, f"L1 task commission from {uid}", source_amount=reward)
+                elif level == 2:
+                    pct = float(L2_TASK_COMMISSION_PERCENT) if 'L2_TASK_COMMISSION_PERCENT' in globals() else 0.05
+                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 2, uid, f"L2 task commission from {uid}", source_amount=reward)
         except Exception as _ref_e:
             print(f"Referral commission fail {_ref_e}")
         print(f"V31 Task {task_id} completed for {uid} - count {daily_task_count[uid][today]} - earning {reward}")
@@ -1728,15 +1729,57 @@ async def settle_previous_day_referrals(context):
     except Exception as e:
         print(f"daily referral settlement error: {e}")
 
+def get_effective_referral_levels(source_uid):
+    """Return active referral referrers as [(uid, level)].
+
+    Normally this is L1=direct parent and L2=grandparent. If an admin
+    removes a referrer, the removed member's direct child is re-parented to
+    the next ancestor and a level override preserves the original level.
+    Example: A -> B -> C, remove B => C -> A with C's override=2, so C work
+    still pays A at L2 (0.5%), while C's own referrals continue normally.
+    """
+    try:
+        src = int(source_uid)
+    except Exception:
+        return []
+    parent = referral_map.get(src) or referral_map.get(str(src))
+    if not parent:
+        return []
+    try:
+        parent = int(parent)
+    except Exception:
+        return []
+
+    override = referral_level_overrides.get(src) or referral_level_overrides.get(str(src))
+    if override:
+        try:
+            level = int(override)
+        except Exception:
+            level = 1
+        return [(parent, level)] if parent else []
+
+    result = [(parent, 1)]
+    grand = referral_map.get(parent) or referral_map.get(str(parent))
+    if grand:
+        try:
+            grand = int(grand)
+            if grand and grand != parent:
+                result.append((grand, 2))
+        except Exception:
+            pass
+    return result
+
 def record_product_promo_referral_commissions(source_uid, reward):
     try:
         reward = float(reward or 0)
-        l1 = referral_map.get(source_uid) or referral_map.get(str(source_uid))
-        if l1:
-            add_referral_commission(int(l1), reward * float(L1_TASK_COMMISSION_PERCENT) / 100.0, "product_promo", 1, source_uid, f"L1 product promotion commission from {source_uid}", source_amount=reward)
-            l2 = referral_map.get(l1) or referral_map.get(str(l1))
-            if l2:
-                add_referral_commission(int(l2), reward * float(L2_TASK_COMMISSION_PERCENT) / 100.0, "product_promo", 2, source_uid, f"L2 product promotion commission from {source_uid}", source_amount=reward)
+        if reward <= 0:
+            return
+        for ref_id, level in get_effective_referral_levels(source_uid):
+            if level == 1:
+                pct = float(L1_TASK_COMMISSION_PERCENT)
+            else:
+                pct = float(L2_TASK_COMMISSION_PERCENT)
+            add_referral_commission(int(ref_id), reward * pct / 100.0, "product_promo", level, source_uid, f"L{level} product promotion commission from {source_uid}", source_amount=reward)
     except Exception as e:
         print(f"product promo referral commission fail: {e}")
 
@@ -1783,29 +1826,40 @@ def get_withdrawn_for_cap(uid):
     return round(total, 2)
 
 def get_referral_chain(uid):
-    l1 = []
-    l2 = []
-    for member, parent in referral_map.items():
-        if parent == uid:
-            l1.append(member)
-            for member2, parent2 in referral_map.items():
-                if parent2 == member:
-                    l2.append(member2)
-    return l1, l2
-
+    """Return active L1/L2 members for the referral display, respecting deleted-user re-parenting."""
+    try:
+        uid = int(uid)
+    except Exception:
+        return [], []
+    l1, l2 = [], []
+    for member in list(referral_map.keys()):
+        try:
+            member_id = int(member)
+        except Exception:
+            continue
+        for ref_id, level in get_effective_referral_levels(member_id):
+            if ref_id != uid:
+                continue
+            if level == 1:
+                l1.append(member_id)
+            elif level == 2:
+                l2.append(member_id)
+    return list(dict.fromkeys(l1)), list(dict.fromkeys(l2))
 def record_task_referral_commissions(source_uid, task_reward):
-    """Pay configurable L1/L2 percentages from the completed task reward."""
-    try: reward = float(task_reward or 0)
-    except Exception: reward = 0.0
-    if reward <= 0: return
-    l1 = referral_map.get(source_uid)
-    if l1:
-        amount = reward * float(L1_TASK_COMMISSION_PERCENT) / 100.0
-        add_referral_commission(l1, amount, "task", 1, source_uid, f"L1 task commission from {source_uid}", source_amount=reward)
-        l2 = referral_map.get(l1)
-        if l2:
-            amount2 = reward * float(L2_TASK_COMMISSION_PERCENT) / 100.0
-            add_referral_commission(l2, amount2, "task", 2, source_uid, f"L2 task commission from {source_uid}", source_amount=reward)
+    """Pay configurable L1/L2 percentages from the completed task reward.
+
+    Uses the deletion-safe referral resolver so removing an intermediate
+    referrer never sends future commission to a deleted user.
+    """
+    try:
+        reward = float(task_reward or 0)
+    except Exception:
+        reward = 0.0
+    if reward <= 0:
+        return
+    for ref_id, level in get_effective_referral_levels(source_uid):
+        pct = float(L1_TASK_COMMISSION_PERCENT) if level == 1 else float(L2_TASK_COMMISSION_PERCENT)
+        add_referral_commission(ref_id, reward * pct / 100.0, "task", level, source_uid, f"L{level} task commission from {source_uid}", source_amount=reward)
 
 def get_tasks(uid):
     today = str(get_ist_today())
@@ -3982,34 +4036,91 @@ async def edit_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """V36: Admin command to totally remove a user for referral testing"""
+    """Admin-only permanent user removal with deletion-safe referral re-parenting.
+
+    If A -> B -> C and B is removed, C is re-parented to A but marked as
+    preserved L2. Therefore C's future task/product commission goes to A at
+    L2 (0.5%), and C's own referrals continue normally.
+    """
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /remove_user <user_id> - Totally removes user data for referral testing")
+        await update.message.reply_text("Usage: /remove_user <user_id> - Totally removes user data and safely preserves referral chain")
         return
     try:
         target = int(context.args[0])
-    except:
+    except Exception:
         await update.message.reply_text("Invalid user_id")
         return
-    # Remove from all DBs
+
+    # Find target's parent before deleting the target.
+    target_parent = referral_map.get(target) or referral_map.get(str(target))
+    try:
+        target_parent = int(target_parent) if target_parent else None
+    except Exception:
+        target_parent = None
+
+    # Re-parent direct children to target's parent while preserving their
+    # original L2 position. This is the key deletion-safe behavior.
+    reparented = []
+    for child, parent in list(referral_map.items()):
+        try:
+            child_id = int(child)
+            parent_id = int(parent)
+        except Exception:
+            continue
+        if parent_id != target:
+            continue
+        if target_parent and target_parent != child_id:
+            referral_map[child_id] = target_parent
+            referral_level_overrides[child_id] = 2
+            reparented.append(child_id)
+        else:
+            referral_map.pop(child, None)
+            referral_map.pop(str(child), None)
+            referral_level_overrides.pop(child_id, None)
+            referral_level_overrides.pop(str(child_id), None)
+
+    # Remove target's own relationship/override.
+    referral_map.pop(target, None)
+    referral_map.pop(str(target), None)
+    referral_level_overrides.pop(target, None)
+    referral_level_overrides.pop(str(target), None)
+
+    # Remove all user-owned data. Historical commission records are removed
+    # with the user as requested; other members' ledgers are untouched.
     removed = []
-    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans']:
+    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','pending_daily','user_profiles','referrals_db','referral_commission_ledger','referral_pending_earnings','user_plans','pending_plans','referral_codes_db']:
         db = globals().get(db_name)
         if isinstance(db, dict) and (target in db or str(target) in db):
             db.pop(target, None)
             db.pop(str(target), None)
             removed.append(db_name)
-    # Also remove from banned, warnings
+
+    # Rebuild reverse referral-code index after deleting the user's code.
+    try:
+        referral_code_to_uid.clear()
+        for _uid, _code in referral_codes_db.items():
+            if _code:
+                referral_code_to_uid[str(_code).upper()] = int(_uid)
+    except Exception:
+        pass
+
     try:
         banned_users.discard(target)
         warnings_db.pop(target, None)
         warnings_db.pop(str(target), None)
-    except:
+    except Exception:
         pass
+
     save_data()
-    await update.message.reply_text(f"✅ User {target} totally removed from: {', '.join(removed)}\nNow they can join again via referral link to test referral!")
+    msg = f"✅ User {target} permanently removed."
+    if reparented:
+        msg += f"\n\n🔗 Referral chain preserved: {len(reparented)} direct referral(s) re-linked to the deleted user's parent at preserved L2 level."
+        msg += "\nFuture task/product commission will not be sent to the deleted user."
+    else:
+        msg += "\nNo direct referrals needed re-linking."
+    await update.message.reply_text(msg)
 
 
 async def my_details_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
