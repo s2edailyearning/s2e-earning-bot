@@ -1,4 +1,4 @@
-print("V70 FINAL - 2% L1 0.5% L2 TASK/PROMO/PRODUCT + 10% 3% PLAN + FIXED AMOUNT - 2026-08-26 16:10 IST")
+print("V72 FINAL - TESTING + REFERRAL 2% 0.5% + 10% 3% - 2026-08-26 17:30 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -8639,6 +8639,9 @@ def main():
             app.add_handler(CommandHandler("get_balance", get_balance_cmd))
             app.add_handler(CommandHandler("ledger", ledger_cmd))
             app.add_handler(CommandHandler("add_plan_commission", add_missing_commission_cmd))
+            app.add_handler(CommandHandler("test_referral", test_referral_cmd))
+            app.add_handler(CommandHandler("test_plan", test_plan_cmd))
+            app.add_handler(CommandHandler("chain", referral_chain_cmd))
             app.add_handler(CommandHandler("check_wallet", check_wallet_cmd))
             app.add_handler(CommandHandler("wallet_info", get_balance_cmd))
             app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
@@ -8868,6 +8871,120 @@ async def permanent_removed_callback_guard(update: Update, context: ContextTypes
         pass
     raise ApplicationHandlerStop
 # === END PERMANENT REMOVED USER GLOBAL GUARD V2 ===
+
+
+
+async def test_referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "🧪 TEST REFERRAL COMMISSION\n\n"
+            "Usage: /test_referral <user_id> <reward_amount>\n"
+            "Example: /test_referral 8709635130 100\n\n"
+            "This will simulate user 870 earning Rs100 from task/promo/product\n"
+            "-> L1 (1101323233) should get 2% = Rs2\n"
+            "-> L2 (8863696853) should get 0.5% = Rs0.50"
+        )
+        return
+    try:
+        src_uid = int(context.args[0])
+        reward = float(context.args[1])
+        l1_l2_before = {}
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            bal_before = referral_earnings.get(ref_id, 0) or referral_earnings.get(str(ref_id), 0) or 0
+            l1_l2_before[ref_id] = bal_before
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            pct = float(L1_TASK_COMMISSION_PERCENT) if level == 1 else float(L2_TASK_COMMISSION_PERCENT)
+            comm = round(reward * pct / 100.0, 2)
+            if comm > 0:
+                add_referral_commission(ref_id, comm, "task", level, src_uid, f"TEST - L{level} {pct}% of Rs{reward} from {src_uid}", source_amount=reward)
+        save_data()
+        msg = f"🧪 TEST DONE - Source {src_uid} earned Rs{reward}\n\n"
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            pct = float(L1_TASK_COMMISSION_PERCENT) if level == 1 else float(L2_TASK_COMMISSION_PERCENT)
+            comm = round(reward * pct / 100.0, 2)
+            bal_after = referral_earnings.get(ref_id, 0) or referral_earnings.get(str(ref_id), 0) or 0
+            bal_before = l1_l2_before.get(ref_id, 0)
+            rec = users_db.get(ref_id) or users_db.get(str(ref_id)) or {}
+            name = rec.get('name', f'ID {ref_id}')
+            msg += f"L{level} {name} ({ref_id}):\n  Before: Rs{bal_before:.2f}\n  +{pct}% of {reward} = Rs{comm:.2f}\n  After: Rs{bal_after:.2f}\n\n"
+        if not get_effective_referral_levels(src_uid):
+            msg += "No L1/L2 found!"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def test_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "🧪 TEST PLAN COMMISSION\n\n"
+            "Usage: /test_plan <user_id> <plan_price>\n"
+            "Example: /test_plan 8709635130 9999"
+        )
+        return
+    try:
+        src_uid = int(context.args[0])
+        price = float(context.args[1])
+        l1_l2_before = {}
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            bal_before = referral_earnings.get(ref_id, 0) or referral_earnings.get(str(ref_id), 0) or 0
+            l1_l2_before[ref_id] = bal_before
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            pct = float(L1_PLAN_COMMISSION_PERCENT) if level == 1 else float(L2_PLAN_COMMISSION_PERCENT)
+            comm = round(price * pct / 100.0, 2)
+            if comm > 0:
+                add_referral_commission(ref_id, comm, "plan", level, src_uid, f"TEST - L{level} plan {pct}% of Rs{price} from {src_uid}", source_amount=price)
+        save_data()
+        msg = f"🧪 TEST PLAN DONE - Source {src_uid} plan Rs{price}\n\n"
+        for ref_id, level in get_effective_referral_levels(src_uid):
+            pct = float(L1_PLAN_COMMISSION_PERCENT) if level == 1 else float(L2_PLAN_COMMISSION_PERCENT)
+            comm = round(price * pct / 100.0, 2)
+            bal_after = referral_earnings.get(ref_id, 0) or referral_earnings.get(str(ref_id), 0) or 0
+            bal_before = l1_l2_before.get(ref_id, 0)
+            rec = users_db.get(ref_id) or users_db.get(str(ref_id)) or {}
+            name = rec.get('name', f'ID {ref_id}')
+            msg += f"L{level} {name} ({ref_id}): +{pct}% = Rs{comm:.2f} (Before Rs{bal_before:.2f} -> After Rs{bal_after:.2f})\n"
+        if not get_effective_referral_levels(src_uid):
+            msg += "No L1/L2 found!"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def referral_chain_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 1:
+        await update.message.reply_text("Usage: /chain <user_id> - Show full chain up to 5 levels")
+        return
+    try:
+        uid = int(context.args[0])
+        chain = []
+        current = uid
+        for i in range(5):
+            parent = referral_map.get(current) or referral_map.get(str(current))
+            if not parent:
+                break
+            parent = int(parent)
+            rec = users_db.get(parent) or users_db.get(str(parent)) or {}
+            name = rec.get('name', f'ID {parent}')
+            chain.append(f"Level {i+1}: {name} ({parent})")
+            current = parent
+        rec_src = users_db.get(uid) or users_db.get(str(uid)) or {}
+        name_src = rec_src.get('name', f'ID {uid}')
+        msg = f"REFERRAL CHAIN FOR {name_src} ({uid})\n\n"
+        if not chain:
+            msg += "No parent - Direct join (no referral)"
+        else:
+            for c in chain:
+                msg += c + "\n"
+            l1, l2 = get_referral_chain(uid)
+            msg += f"\nDownlines:\nL1 ({len(l1)}): {l1[:3]}\nL2 ({len(l2)}): {l2[:3]}"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 
 # === CONTROLLED BROADCAST SYSTEM ===
