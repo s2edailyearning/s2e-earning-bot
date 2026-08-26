@@ -874,11 +874,9 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
             "expiry": str(expiry),
         }
 
-        # Plan activation commission is immediate. Eligibility is checked at the
-        # exact moment of activation; there is NO retroactive commission later.
+        # Plan activation commission is immediate for both Free and paid referrers.
+        # L1/L2 relationship alone determines eligibility; there is no paid-plan gate.
         for ref_id, level in get_effective_referral_levels(uid):
-            if not is_paid_plan_active(ref_id):
-                continue
             pct = float(REFERRAL_PLAN_COMMISSION_PERCENT) if level == 1 else float(L2_PLAN_COMMISSION_PERCENT)
             already = any(
                 str(e.get("type")) == "plan"
@@ -959,7 +957,7 @@ WITHDRAW_MIN = 200
 PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 1
 DEFAULT_DAILY_TASK_ID = -1
-REFERRAL_BONUS_PER_TASK = 10
+REFERRAL_BONUS_PER_TASK = 0  # Legacy disabled: no automatic referral join/first-task bonus
 REFERRAL_PLAN_COMMISSION_PERCENT = 10.0
 L2_PLAN_COMMISSION_PERCENT = 3.0
 L1_TASK_COMMISSION_PERCENT = 2.0
@@ -1577,7 +1575,7 @@ def parse_interval_str(interval_str):
     except:
         return TASK_COMPLETION_WINDOW_MINUTES
 
-def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=5, image_file_id=None):
+def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=0, image_file_id=None):
     # ===== DUPLICATE PROTECTION - 2 times bug fix =====
     import time as _time
     _now = _time.time()
@@ -1833,7 +1831,10 @@ def is_paid_plan_active(uid):
     except Exception:
         return False
 
-def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
+def get_balance(uid):
+    # Wallet must use the actual rewards configured by Admin, never a fixed ₹5 per task.
+    task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
+    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + float(promo_earnings_db.get(uid,0) or 0), 2)
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
     """Credit referral commission INSTANTLY - No pending, direct to wallet."""
@@ -2671,16 +2672,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if is_team_uid(ref_id) and team_direct_referral_count(ref_id) >= MAX_DIRECT_REFERRALS:
                 await update.message.reply_text("⚠️ This Team referral has reached its 30 direct-member limit. You can still register, but this referral link will not be assigned.")
             else:
-                # V64 FIX: Force referral reassignment for re-registration after delete
-                # Clear old override and force new parent
-                try:
-                    referral_level_overrides.pop(uid, None)
-                    referral_level_overrides.pop(str(uid), None)
-                except:
-                    pass
-                referral_map[uid] = ref_id
-                referral_map[str(uid)] = ref_id
-                print(f"V64 Referral mapped (forced): {uid} -> {ref_id}, map size now {len(referral_map)}")
+                # Referral attribution is locked to the first valid referral link.
+                # Opening another referral link later must never overwrite L1/L2 history.
+                existing_ref = referral_map.get(uid) or referral_map.get(str(uid))
+                if existing_ref:
+                    print(f"Referral already locked: {uid} -> {existing_ref}; ignoring new ref {ref_id}")
+                else:
+                    referral_map[uid] = ref_id
+                    referral_map[str(uid)] = ref_id
+                    print(f"Referral locked: {uid} -> {ref_id}, map size now {len(referral_map)}")
         else:
             print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
     else:
@@ -2951,7 +2951,7 @@ async def admin_view_pending_cb(update: Update, context: ContextTypes.DEFAULT_TY
     for uid, data in list(pending_daily.items())[:20]:
         task = data.get('task',{})
         name = users_db.get(uid,{}).get('name','Unknown')
-        msg += f"👤 {uid} {name} - Task {task.get('task_number','?')} {task.get('title','?')} Rs{task.get('reward',5)} /approve {uid}\n"
+        msg += f"👤 {uid} {name} - Task {task.get('task_number','?')} {task.get('title','?')} Rs{task.get('reward',0)} /approve {uid}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 async def admin_view_withdraw_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3974,7 +3974,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             f"👤 Name: {user_name}\n"
                             f"🆔 User ID: {uid}\n"
                             f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
-                            f"💰 Reward: ₹{task_to_use.get('reward',5)}\n"
+                            f"💰 Reward: ₹{task_to_use.get('reward',0)}\n"
                             f"📅 {get_ist_today()}"
                         ),
                         reply_markup=kb_chan
@@ -4300,7 +4300,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id in pending_daily:
         is_first=tasks_db.get(target_id,0)==0
         task=pending_daily[target_id].get('task',{})
-        base_reward=int(task.get('reward',5) or 5)
+        base_reward=int(task.get('reward',0) or 0)
         reward=get_task_reward_for_user(task, target_id)
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
@@ -4314,10 +4314,6 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
                 mark_task_completed_with_interval(target_id, tid)
                 break
-        ref_id=referral_map.get(target_id)
-        if ref_id and is_first:
-            referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
-            add_referral_commission(ref_id, REFERRAL_BONUS_PER_TASK, "bonus", 1, target_id, "First approved task referral bonus")
         record_task_referral_commissions(target_id, reward)
         await update.message.reply_text(f"✅ Approved {target_id} +Rs{reward}")
         try:
@@ -5203,13 +5199,12 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         is_first=tasks_db.get(uid,0)==0
         task_obj=pending_daily[uid].get('task',{})
         task_id=task_obj.get('id')
-        reward=task_obj.get('reward',5)
+        reward=task_obj.get('reward',0)
         today=pending_daily[uid].get('date')
         tasks_db[uid]=tasks_db.get(uid,0)+1
         if uid not in daily_task_count: daily_task_count[uid]={}
         daily_task_count[uid][today]=daily_task_count[uid].get(today,0)+1
         add_today_task_earning(uid, reward, today)
-        if reward!=5: bonus_balance[uid]=bonus_balance.get(uid,0)+(reward-5)
         del pending_daily[uid]
         task_open_time.pop(uid, None)
         # V34 FIX: Mark completed and clear missed
@@ -5225,10 +5220,6 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
                     if uid in missed_tasks_db:
                         missed_tasks_db[uid]=[t for t in missed_tasks_db[uid] if int(t.get('id',-1))!=int(tid)]
                     break
-        ref_id=referral_map.get(uid)
-        if ref_id and is_first:
-            referrals_db[ref_id]=referrals_db.get(ref_id,0)+1
-            add_referral_commission(ref_id, REFERRAL_BONUS_PER_TASK, "bonus", 1, uid, "First approved task referral bonus")
         record_task_referral_commissions(uid, reward)
         save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward} - Task {task_id or ''}")
@@ -5607,7 +5598,7 @@ async def missed_reopen_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['missed_reopened_task_id']=tid
     task_id=tid
     text=(f"🔄 MISSED TASK {task.get('task_number','?')} REOPENED\n\n"
-          f"Title: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
+          f"Title: {task.get('title','')}\nReward: ₹{task.get('reward',0)}\nLink: {task.get('link','')}\n\n"
           f"{('📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10)) if task.get('description') else ''}"
           "Complete the task using the link above, then tap Upload Screenshot.")
     kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data=f"missed_upload_{task_id}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
@@ -6528,14 +6519,12 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 continue
             task = sub.get('task', {}) if isinstance(sub.get('task', {}), dict) else {}
             task_id = task.get('id')
-            reward = float(task.get('reward', 5) or 5)
+            reward = float(task.get('reward', 0) or 0)
             tasks_db[uid] = tasks_db.get(uid, 0) + 1
             daily_task_count.setdefault(uid, {})
             daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
             daily_task_earnings.setdefault(uid, {})
             daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
-            if reward > 5:
-                bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
             if task_id is not None:
                 if uid not in user_task_status:
                     user_task_status[uid] = {}
@@ -6585,14 +6574,12 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     if not task:
                         # Try find in all scheduled tasks
                         task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == int(tid)), None)
-                    reward = float(task.get('reward', 5) or 5) if task else 5.0
+                    reward = float(task.get('reward', 0) or 0) if task else 5.0
                     tasks_db[uid] = tasks_db.get(uid, 0) + 1
                     daily_task_count.setdefault(uid, {})
                     daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
                     daily_task_earnings.setdefault(uid, {})
                     daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
-                    if reward > 5:
-                        bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
                     user_task_status[uid][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
                     if uid in missed_tasks_db:
                         try:
@@ -6807,10 +6794,9 @@ async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
             try:
                 if uid in pending_daily:
                     task = pending_daily[uid].get('task',{})
-                    base_reward = int(task.get('reward',5) or 5)
+                    base_reward = int(task.get('reward',0) or 0)
                     reward = get_task_reward_for_user(task, uid)
                     tasks_db[uid] = tasks_db.get(uid,0) + 1
-                    bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward != 5 else bonus_balance.get(uid,0)
                     del pending_daily[uid]
                     approved += 1
                     try:
@@ -6821,7 +6807,7 @@ async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
                 print(f"Bulk approve error for {uid}: {e}")
         
         save_data()
-        await update.message.reply_text(f"✅ BULK APPROVED Task {task_num}!\n\nApproved: {approved} members\nEach got Rs{get_reward_for_user(0,5)}-Rs15 based on plan!\n\nNext: /approve_task 2 for Task 2")
+        await update.message.reply_text(f"✅ BULK APPROVED Task {task_num}!\n\nApproved: {approved} members\nEach got Rs{get_reward_for_user(0,0)}-Rs15 based on plan!\n\nNext: /approve_task 2 for Task 2")
         
         # Also post to screenshot channel if set
         ch = get_screenshot_channel()
@@ -6844,9 +6830,8 @@ async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_
     for uid in list(pending_daily.keys()):
         try:
             task = pending_daily[uid].get('task',{})
-            reward = float(task.get('reward',5) or 5)
+            reward = float(task.get('reward',0) or 5)
             tasks_db[uid] = tasks_db.get(uid,0) + 1
-            bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward !=5 else bonus_balance.get(uid,0)
             daily_task_count.setdefault(uid, {})
             daily_task_count[uid][today] = daily_task_count[uid].get(today,0)+1
             task_id = task.get('id')
@@ -6869,7 +6854,7 @@ async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_
             if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
                 try:
                     task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == int(tid)), None)
-                    reward = float(task.get('reward',5) or 5) if task else 5.0
+                    reward = float(task.get('reward',0) or 5) if task else 5.0
                     tasks_db[uid] = tasks_db.get(uid,0) + 1
                     daily_task_count.setdefault(uid, {})[today] = daily_task_count[uid].get(today,0)+1
                     user_task_status[uid][tid] = {'status':'completed','completed_at':get_ist_now(),'reward':reward}
@@ -8426,7 +8411,7 @@ def main():
                                 f"👤 Name: {user_name}\n"
                                 f"🆔 User ID: {uid}\n"
                                 f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
-                                f"💰 Reward: ₹{task_to_use.get('reward',5)}\n"
+                                f"💰 Reward: ₹{task_to_use.get('reward',0)}\n"
                                 f"📅 {get_ist_today()}"
                             ),
                             reply_markup=kb_chan
@@ -8568,7 +8553,7 @@ def main():
                 context.user_data['awaiting_daily_screenshot']=False
                 context.user_data['daily_screenshot_task_id']=tid
                 context.user_data.pop('missed_reopened_task_id',None)
-                text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',5)}\nLink: {task.get('link','')}\n\n"
+                text=(f"🔴 TASK {task.get('task_number','?')}\n\nTitle: {task.get('title','')}\nReward: ₹{task.get('reward',0)}\nLink: {task.get('link','')}\n\n"
                       f"{('📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10)) if task.get('description') else ''}"
                       "After completing, tap Upload Screenshot.")
                 kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
