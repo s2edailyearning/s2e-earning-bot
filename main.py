@@ -496,14 +496,10 @@ def notification_thread_func():
                     if close_dt <= open_dt:
                         close_dt += timedelta(days=1)
                     diff = (open_dt - now).total_seconds()
-                    # FIX V49: Only notify BEFORE download deadline, not after. Late notification after 11:00 caused false LIVE msg.
-                    # After download window closes, video should NOT be advertised as available.
-                    if now > close_dt:
+                    # FIX V50 STRICT: No notifications after download deadline. 11AM daka matrame.
+                    if now > close_dt or now > open_dt:
                         continue
                     due_now = (0 <= diff <= lead)
-                    # If video uploaded late, allow one immediate notification ONLY if download still open
-                    if not due_now and diff < 0 and now <= open_dt + timedelta(minutes=5):
-                        due_now = True
                     if not due_now:
                         continue
                     notify_key = f"product:{get_ist_today()}:{product.get('id')}:{lead}"
@@ -519,16 +515,9 @@ def notification_thread_func():
                                 if uid_int <= 0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec):
                                     continue
                                 reward = _product_reward_for_user(_p, uid_int)
+                                # V50: Only before deadline notification, always accurate
                                 if _late:
-                                    # V49 FIX: If download closed, don't say video available
-                                    if now > open_dt:
-                                        msg = (f"📢 PRODUCT PROMOTION UPDATE\n\n🎥 {_p.get('title','Product Promotion')}\n"
-                                               f"💰 Reward: ₹{reward}\n"
-                                               f"🎥 Video download ended at: {_p.get('download_deadline','')}\n"
-                                               f"📸 Screenshot: {_p.get('screenshot_open','')} → {_p.get('screenshot_close','')}\n\nTap to check task.")
-                                    else:
-                                        msg = (f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {_p.get('title','Product Promotion')}\n"
-                                               f"💰 Reward: ₹{reward}\n\nThe video is available now. Tap below to open the task.")
+                                    continue  # Don't send any notification after deadline
                                 else:
                                     msg = (f"⏰ PRODUCT PROMOTION STARTING IN {_lead} SECONDS!\n\n🎥 {_p.get('title','Product Promotion')}\n"
                                            f"💰 Reward: ₹{reward}\n"
@@ -3429,9 +3418,16 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
                                 muid = int(member_uid); rec = users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
                                 if muid <= 0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
                                     continue
+                                # V50: Only send LIVE if download still open
+                                now_check = get_ist_now()
+                                dl = parse_time_str(str(t.get('download_deadline','')))
+                                if dl:
+                                    dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
+                                    if now_check > dl_dt:
+                                        continue  # Don't send LIVE after deadline
                                 reward = _product_reward_for_user(t, muid)
                                 kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
-                                await context.bot.send_message(chat_id=muid, text=(f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n\nTap below to open the task."), reply_markup=kb)
+                                await context.bot.send_message(chat_id=muid, text=(f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n💰 Download until: {t.get('download_deadline','')}\n\nTap below to open the task."), reply_markup=kb)
                             except Exception as _ne:
                                 print(f"product immediate notification failed for {member_uid}: {_ne}")
         except Exception as _e:
