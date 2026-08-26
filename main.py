@@ -429,6 +429,24 @@ async def set_task_notify_cmd(update, context):
     await update.message.reply_text(f"✅ Task notification timing set to {seconds} seconds before task opens.")
 
 
+async def _send_generic_task_notification(context, uid, title, body, callback_data, lead_label="TASK"):
+    """Send a common task/promo notification with a direct Complete button."""
+    try:
+        uid = int(uid)
+        if uid <= 0 or is_team_uid(uid) or is_removed_user(uid) or uid in banned_users:
+            return False
+        rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+        if not _user_is_registered(rec):
+            return False
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data=callback_data)]])
+        text = f"⏰ {lead_label} STARTING SOON!\n\n{title}\n\n{body}\n\nTap the button below to open it."
+        await context.bot.send_message(chat_id=uid, text=text[:4000], reply_markup=kb)
+        return True
+    except Exception as e:
+        print(f"generic task notification failed for {uid}: {e}")
+        return False
+
+
 def _task_can_be_sent_to_user(task, uid):
     """Notification eligibility must match the same active/plan audience rules as Daily Task."""
     try:
@@ -458,6 +476,60 @@ def notification_thread_func():
                 continue
             now = get_ist_now()
             lead = get_task_notification_seconds()
+
+            # PRODUCT PROMOTION: notify shortly before the video download window opens.
+            # If the video was uploaded after the deadline but the campaign is still live,
+            # notify members immediately so the new task is not missed.
+            for product in list(product_promo_db):
+                try:
+                    if not isinstance(product, dict) or product.get('status') != 'active' or not product.get('video_file_id'):
+                        continue
+                    if product.get('date') != str(get_ist_today()):
+                        continue
+                    deadline = parse_time_str(str(product.get('download_deadline','')))
+                    close_t = parse_time_str(str(product.get('screenshot_close','')))
+                    if not deadline or not close_t:
+                        continue
+                    now = get_ist_now()
+                    open_dt = datetime.combine(get_ist_today(), deadline, tzinfo=IST)
+                    close_dt = datetime.combine(get_ist_today(), close_t, tzinfo=IST)
+                    if close_dt <= open_dt:
+                        close_dt += timedelta(days=1)
+                    diff = (open_dt - now).total_seconds()
+                    due_now = (0 <= diff <= lead) or (diff < 0 and now <= close_dt)
+                    if not due_now:
+                        continue
+                    notify_key = f"product:{get_ist_today()}:{product.get('id')}:{lead}"
+                    if notify_key in notified_tasks_30sec:
+                        continue
+                    notified_tasks_30sec.add(notify_key)
+                    async def send_product_notifications(_p=product, _lead=lead, _late=(diff < 0)):
+                        sent = 0
+                        for uid in list(users_db.keys()):
+                            try:
+                                uid_int = int(uid)
+                                rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+                                if uid_int <= 0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec):
+                                    continue
+                                reward = _product_reward_for_user(_p, uid_int)
+                                if _late:
+                                    msg = (f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {_p.get('title','Product Promotion')}\n"
+                                           f"💰 Reward: ₹{reward}\n\nThe video is available now. Tap below to open the task.")
+                                else:
+                                    msg = (f"⏰ PRODUCT PROMOTION STARTING IN {_lead} SECONDS!\n\n🎥 {_p.get('title','Product Promotion')}\n"
+                                           f"💰 Reward: ₹{reward}\n"
+                                           f"🕐 Download opens: {_p.get('download_deadline','')}\n\nTap the button below when it opens.")
+                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
+                                await bot_application.bot.send_message(chat_id=uid_int, text=msg[:4000], reply_markup=kb)
+                                sent += 1
+                            except Exception as e:
+                                print(f"product notification failed for {uid}: {e}")
+                        print(f"Product notification sent for {sent} users (campaign {_p.get('id')})")
+                    asyncio.run_coroutine_threadsafe(send_product_notifications(), bot_event_loop)
+                except Exception as e:
+                    print(f"Product notification scan error: {e}")
+
+            # DAILY TASKS
             for task in get_tasks_for_today():
                 try:
                     open_time = _safe_time(task.get('open_time_obj') or task.get('open_time'))
@@ -2165,6 +2237,7 @@ async def removed_user_guard(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    # Hard block even if this command is reached through another handler.
     if not is_admin(uid) and is_removed_user(uid):
         await update.message.reply_text(
             "🚫 You have been removed from S2E.\n\n"
@@ -3324,6 +3397,31 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
         t['video_file_id']=file_id; t['status']='active'
         context.user_data.pop('awaiting_product_video',None)
         save_data()
+        # If the upload happens after the download window already opened, send the notification immediately.
+        try:
+            now = get_ist_now()
+            dl = parse_time_str(str(t.get('download_deadline','')))
+            sc = parse_time_str(str(t.get('screenshot_close','')))
+            if dl and sc:
+                dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
+                sc_dt = datetime.combine(get_ist_today(), sc, tzinfo=IST)
+                if sc_dt <= dl_dt: sc_dt += timedelta(days=1)
+                if now > dl_dt and now <= sc_dt:
+                    key = f"product:{get_ist_today()}:{t.get('id')}:immediate"
+                    if key not in notified_tasks_30sec:
+                        notified_tasks_30sec.add(key)
+                        for member_uid in list(users_db.keys()):
+                            try:
+                                muid = int(member_uid); rec = users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
+                                if muid <= 0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
+                                    continue
+                                reward = _product_reward_for_user(t, muid)
+                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
+                                await context.bot.send_message(chat_id=muid, text=(f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n\nTap below to open the task."), reply_markup=kb)
+                            except Exception as _ne:
+                                print(f"product immediate notification failed for {member_uid}: {_ne}")
+        except Exception as _e:
+            print(f"product immediate notification check failed: {_e}")
         await update.message.reply_text(f"✅ Product Promotion {tid} video saved and activated.\nMembers will see it in 📢 Product Promotion, NOT in Daily Task.")
     except Exception as e:
         print(f'product_video_handler error: {e}')
@@ -4275,6 +4373,27 @@ async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT
         msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n"
     await update.message.reply_text(msg[:4000])
 
+async def _notify_new_promo_campaign(context, campaign):
+    """Notify active members immediately when a new Promo Task is created."""
+    sent = 0
+    for uid in list(users_db.keys()):
+        try:
+            uid_int = int(uid)
+            rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+            if uid_int <= 0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec):
+                continue
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="promo_tasks")]])
+            text = (f"📢 NEW PROMOTION TASK!\n\n🏪 {campaign.get('shop_name','Shop')}\n"
+                    f"📌 {campaign.get('title','Promotion')}\n"
+                    f"💰 Earn ₹{campaign.get('per_view_member_earning',10)}/100 views\n\n"
+                    "A new promotion task is available. Tap below to open it.")
+            await context.bot.send_message(chat_id=uid_int, text=text[:4000], reply_markup=kb)
+            sent += 1
+        except Exception as e:
+            print(f"promo notification failed for {uid}: {e}")
+    print(f"Promo notification sent for {sent} users (campaign {campaign.get('id')})")
+
+
 async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     print(f"📥 /add_promo_campaign_cmd from {uid}: {update.message.text[:100]}")
@@ -4296,6 +4415,8 @@ async def add_promo_campaign_cmd(update: Update, context: ContextTypes.DEFAULT_T
         per_1000_price = int(parts[10].strip()) if len(parts) > 10 else 200
         per_100_price = per_1000_price // 10
         campaign = add_promo_campaign(shop_name, owner_name, phone, place, category, title, description, poster_link, offer, target_views, per_100_price, 10)
+        # Promo campaigns have no scheduled clock time in the current command, so notify members immediately.
+        await _notify_new_promo_campaign(context, campaign)
         await update.message.reply_text(f"✅ Added Promo Campaign ID {campaign['id']}:\n{shop_name} - {title}\nTarget {target_views} views\nShop pays Rs{per_100_price}/100 views\nMember earns Rs10/100 views\nYour profit Rs{per_100_price-10}/100 views\nTotal profit if target met: Rs{(per_100_price-10)*target_views//100}")
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -5840,14 +5961,31 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: show ACTIVE/REGISTERED users only.
-
-    Users who only opened /start and have not completed registration are not
-    included here. Deleted users are tracked separately by /deletelist.
-    """
+    """Admin: active/registered users with optional join-date filtering."""
     if not is_admin(update.effective_user.id):
         return
     try:
+        date_filter = None
+        if context.args:
+            raw_filter = str(context.args[0]).strip().lower()
+            if raw_filter == "today":
+                date_filter = get_ist_today()
+            elif raw_filter == "yesterday":
+                date_filter = get_ist_today() - timedelta(days=1)
+            else:
+                for _fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+                    try:
+                        date_filter = datetime.strptime(raw_filter, _fmt).date()
+                        break
+                    except ValueError:
+                        pass
+                if date_filter is None:
+                    await update.message.reply_text(
+                        "❌ Invalid date. Use /userlist today, /userlist yesterday, "
+                        "or /userlist YYYY-MM-DD"
+                    )
+                    return
+
         active_items = []
         for raw_uid, data in users_db.items():
             data = data if isinstance(data, dict) else {}
@@ -5859,15 +5997,23 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 uid = int(raw_uid)
             except Exception:
                 uid = raw_uid
-            active_items.append((uid, data))
+            join_raw = data.get("joined") or data.get("reg_date") or data.get("created_at") or ""
+            join_date = str(join_raw)[:10] if join_raw else "Unknown"
+            if date_filter is not None and join_date != str(date_filter):
+                continue
+            active_items.append((uid, data, join_date))
 
+        active_items.sort(key=lambda x: str(x[2]), reverse=True)
         if not active_items:
-            await update.message.reply_text("👥 ACTIVE USER LIST\n\nNo active/registered users found.")
+            label = str(date_filter) if date_filter else "all dates"
+            await update.message.reply_text(
+                f"👥 ACTIVE USER LIST — {label}\n\nNo active/registered users found."
+            )
             return
 
-        active_items.reverse()
-        lines = [f"👥 ACTIVE USER LIST — {len(active_items)} users\n"]
-        for uid, data in active_items[:50]:
+        label = f" — {date_filter}" if date_filter else ""
+        lines = [f"👥 ACTIVE USER LIST{label} — {len(active_items)} users\n"]
+        for uid, data, join_date in active_items[:50]:
             name = str(data.get("name") or "Unknown").strip()
             username = str(data.get("username") or "").strip()
             if username and not username.startswith("@"): username = "@" + username
@@ -5878,11 +6024,11 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🆔 ID: {uid}\n"
                 f"🔹 Username: {username or 'Not set'}\n"
                 f"💎 Plan: {plan_name}\n"
+                f"📅 Joined: {join_date}\n"
                 f"📌 Status: Active / Registered\n"
             )
-
         if len(active_items) > 50:
-            lines.append(f"Showing latest 50 of {len(active_items)} active users.")
+            lines.append(f"Showing latest 50 of {len(active_items)} matching active users.")
         await update.message.reply_text("\n".join(lines)[:4000])
     except Exception as e:
         print(f"userlist_cmd error: {e}")
@@ -8169,6 +8315,64 @@ async def user_referrals_level_cb(update, context):
         lines.append(f"{i}. {_safe_ref_username(member_id)} — {_safe_ref_plan(member_id)}")
     await q.message.reply_text("\n".join(lines)[:4000])
 # === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
+
+# === PERMANENT REMOVED USER GLOBAL GUARD V2 ===
+async def permanent_removed_message_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Highest-priority guard: deleted users cannot use /menu or any normal
+    message handler. /start is the only allowed entry so they can intentionally
+    complete a fresh registration/rejoin flow. Admins are never blocked."""
+    try:
+        uid = int(update.effective_user.id)
+    except Exception:
+        return
+    if is_admin(uid) or not is_removed_user(uid):
+        return
+    msg = getattr(update, 'message', None)
+    if msg is not None:
+        txt = (msg.text or '').strip().lower() if getattr(msg, 'text', None) else ''
+        # Allow only /start (including /start@BotName) for fresh re-registration.
+        if txt.startswith('/start') and (txt == '/start' or txt.startswith('/start@')):
+            return
+        try:
+            await msg.reply_text(
+                "🚫 You have been removed from S2E.\n\n"
+                "You cannot access the menu, tasks, wallet, referrals or other options.\n"
+                "Please contact admin if you want to rejoin."
+            )
+        except Exception:
+            pass
+        raise ApplicationHandlerStop
+
+async def permanent_removed_callback_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Highest-priority guard for every inline button used by a removed user."""
+    try:
+        uid = int(update.effective_user.id)
+    except Exception:
+        return
+    if is_admin(uid) or not is_removed_user(uid):
+        return
+    q = getattr(update, 'callback_query', None)
+    if not q:
+        return
+    data = str(q.data or '')
+    # Registration/join callbacks are intentionally allowed so /start can
+    # begin a fresh registration flow. Everything else is blocked.
+    if data == 'check_joined' or data.startswith('reg_'):
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    try:
+        await q.message.reply_text(
+            "🚫 You have been removed from S2E.\n\n"
+            "You cannot access the menu, tasks, wallet, referrals or other options.\n"
+            "Please contact admin if you want to rejoin."
+        )
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+# === END PERMANENT REMOVED USER GLOBAL GUARD V2 ===
 
 if __name__ == "__main__":
     main()
