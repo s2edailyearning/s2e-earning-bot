@@ -844,6 +844,9 @@ def run_flask():
 NAME, GENDER, DOB, MOBILE, UPI, PINCODE, PROFESSION, UPLOAD_SCREENSHOT, SKIP_REASON, PROMO_DETAILS, SET_IMAGE = range(11)
 
 users_db = {}
+# Historical deletion log: keeps a lightweight record for /deletelist without
+# restoring the deleted user into the active users database.
+deleted_users_db = {}
 referrals_db = {}
 tasks_db = {}
 daily_done = {}
@@ -1013,7 +1016,7 @@ def _restore_all_int_keys_after_load():
     state dictionaries that may use Telegram/task IDs as numeric keys.
     """
     dict_names = [
-        "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+        "users_db", "deleted_users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
         "warnings_db", "pending_daily", "user_plans", "pending_plans",
         "referral_map", "referral_level_overrides", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
@@ -1049,7 +1052,7 @@ def save_data():
     try:
         from datetime import datetime, timezone
         state_names = [
-            "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
+            "users_db", "deleted_users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
             "pending_plans", "referral_map", "referral_level_overrides", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
@@ -1219,8 +1222,20 @@ def load_data():
                                         _candidate_ids.add(int(_k))
                                     except:
                                         pass
+                        # Never resurrect a user that was explicitly deleted.
+                        # Old task/referral/earning records can remain in other
+                        # persisted structures, but /userlist must not recreate
+                        # the deleted account from those records.
+                        _deleted_ids = set()
+                        try:
+                            for _duid in deleted_users_db.keys():
+                                _deleted_ids.add(int(_duid))
+                        except Exception:
+                            pass
                         for _candidate_uid in _candidate_ids:
-                            if _candidate_uid > 0 and _candidate_uid not in users_db:
+                            if (_candidate_uid > 0
+                                    and _candidate_uid not in users_db
+                                    and _candidate_uid not in _deleted_ids):
                                 users_db[_candidate_uid] = {
                                     "name": "Not registered",
                                     "username": "",
@@ -4087,10 +4102,25 @@ async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     referral_level_overrides.pop(target, None)
     referral_level_overrides.pop(str(target), None)
 
+    # Keep a lightweight historical tombstone before removing user-owned data.
+    # This does NOT restore the user into users_db; /userlist remains active-only.
+    try:
+        old_user = users_db.get(target) or users_db.get(str(target)) or {}
+        old_plan = _get_user_plan_record(target)
+        deleted_users_db[target] = {
+            "name": old_user.get("name", "Unknown") if isinstance(old_user, dict) else "Unknown",
+            "username": old_user.get("username", "") if isinstance(old_user, dict) else "",
+            "telegram_id": target,
+            "plan": (old_plan.get("name") or old_plan.get("plan_name") or old_plan.get("plan") or "Free / No Plan") if isinstance(old_plan, dict) else "Free / No Plan",
+            "deleted_at": get_ist_now(),
+        }
+    except Exception as _del_log_e:
+        print(f"Deleted user log warning: {_del_log_e}")
+
     # Remove all user-owned data. Historical commission records are removed
     # with the user as requested; other members' ledgers are untouched.
     removed = []
-    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','pending_daily','user_profiles','referrals_db','referral_commission_ledger','referral_pending_earnings','user_plans','pending_plans','referral_codes_db']:
+    for db_name in ['users_db','tasks_db','daily_done','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','promo_views_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','pending_daily','user_profiles','referrals_db','referral_commission_ledger','referral_pending_earnings','user_plans','pending_plans','pending_referrals','referral_codes_db']:
         db = globals().get(db_name)
         if isinstance(db, dict) and (target in db or str(target) in db):
             db.pop(target, None)
@@ -5368,50 +5398,84 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: show every user who has opened /start, including incomplete registrations."""
+    """Admin: show ACTIVE/REGISTERED users only.
+
+    Users who only opened /start and have not completed registration are not
+    included here. Deleted users are tracked separately by /deletelist.
+    """
     if not is_admin(update.effective_user.id):
         return
     try:
-        if not users_db:
-            await update.message.reply_text("👥 USER LIST\n\nNo registered users found.")
-            return
-
-        lines = [f"👥 USER LIST — {len(users_db)} users\n"]
-        # Newest users first, limited to Telegram's practical message size.
-        items = list(users_db.items())[::-1]
-        for raw_uid, data in items[:50]:
+        active_items = []
+        for raw_uid, data in users_db.items():
+            data = data if isinstance(data, dict) else {}
+            if not _user_is_registered(data):
+                continue
             try:
                 uid = int(raw_uid)
             except Exception:
                 uid = raw_uid
-            data = data if isinstance(data, dict) else {}
+            active_items.append((uid, data))
+
+        if not active_items:
+            await update.message.reply_text("👥 ACTIVE USER LIST\n\nNo active/registered users found.")
+            return
+
+        active_items.reverse()
+        lines = [f"👥 ACTIVE USER LIST — {len(active_items)} users\n"]
+        for uid, data in active_items[:50]:
             name = str(data.get("name") or "Unknown").strip()
             username = str(data.get("username") or "").strip()
-            if username and not username.startswith("@"):
-                username = "@" + username
+            if username and not username.startswith("@"): username = "@" + username
             plan = _get_user_plan_record(uid)
-            if plan:
-                plan_name = str(plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Plan")
-            else:
-                plan_name = "Free / No Plan"
-            status = "Registered" if _user_is_registered(data) else "Not registered / Pending"
+            plan_name = str(plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Plan") if plan else "Free / No Plan"
             lines.append(
                 f"👤 {name}\n"
                 f"🆔 ID: {uid}\n"
                 f"🔹 Username: {username or 'Not set'}\n"
                 f"💎 Plan: {plan_name}\n"
-                f"📌 Status: {status}\n"
+                f"📌 Status: Active / Registered\n"
             )
 
-        if len(items) > 50:
-            lines.append(f"Showing latest 50 of {len(items)} users.")
-
-        # Keep comfortably below Telegram's message limit.
-        msg = "\n".join(lines)
-        await update.message.reply_text(msg[:4000])
+        if len(active_items) > 50:
+            lines.append(f"Showing latest 50 of {len(active_items)} active users.")
+        await update.message.reply_text("\n".join(lines)[:4000])
     except Exception as e:
         print(f"userlist_cmd error: {e}")
         await update.message.reply_text(f"❌ User list error: {e}")
+
+async def deletelist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: show users that were permanently deleted via /remove_user."""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        if not deleted_users_db:
+            await update.message.reply_text("🗑️ DELETED USER LIST\n\nNo deleted users found.")
+            return
+
+        items = list(deleted_users_db.items())[::-1]
+        lines = [f"🗑️ DELETED USER LIST — {len(items)} users\n"]
+        for raw_uid, data in items[:50]:
+            data = data if isinstance(data, dict) else {}
+            uid = int(raw_uid) if str(raw_uid).isdigit() else raw_uid
+            name = str(data.get("name") or "Unknown").strip()
+            username = str(data.get("username") or "").strip()
+            if username and not username.startswith("@"): username = "@" + username
+            deleted_at = data.get("deleted_at") or "Unknown"
+            old_plan = data.get("plan") or "Free / No Plan"
+            lines.append(
+                f"👤 {name}\n"
+                f"🆔 ID: {uid}\n"
+                f"🔹 Username: {username or 'Not set'}\n"
+                f"💎 Previous Plan: {old_plan}\n"
+                f"🗑️ Deleted: {deleted_at}\n"
+            )
+        if len(items) > 50:
+            lines.append(f"Showing latest 50 of {len(items)} deleted users.")
+        await update.message.reply_text("\n".join(lines)[:4000])
+    except Exception as e:
+        print(f"deletelist_cmd error: {e}")
+        await update.message.reply_text(f"❌ Deleted list error: {e}")
 
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -7302,6 +7366,8 @@ def main():
                 print(f"expiry job schedule fail {_e}")
             app.add_handler(CommandHandler("remove_user", remove_user_cmd))
             app.add_handler(CommandHandler("edit_user", edit_user_cmd))
+            app.add_handler(CommandHandler("userlist", userlist_cmd))
+            app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
@@ -7326,7 +7392,6 @@ def main():
             app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
             app.add_handler(CallbackQueryHandler(plan_proof_cb, pattern="^plan_proof_(basic|premium)$"))
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
-            app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("backup", backup_cmd))
             app.add_handler(CommandHandler("add_task_manual", add_task_manual_cmd))
             app.add_handler(CommandHandler("remove_task", remove_task_cmd))
