@@ -1,4 +1,4 @@
-print("V58 FINAL - REFERRAL 0 FIX + PENDING LOGIC + ADMIN DETAILED - 2026-08-26 13:30 IST")
+print("V59 FINAL - REFERRAL MAP RECOVERY + MANUAL ADD_REFERRAL - 2026-08-26 14:00 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -6220,6 +6220,39 @@ async def debug_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+async def add_referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /add_referral <user_id> <referrer_id> - Manually link user to referrer")
+        return
+    try:
+        user_id = int(context.args[0])
+        ref_id = int(context.args[1])
+        referral_map[user_id] = ref_id
+        referral_map[str(user_id)] = ref_id
+        save_data()
+        l1, l2 = get_referral_chain(ref_id)
+        await update.message.reply_text(f"Added referral: {user_id} -> {ref_id}" + chr(10) + f"Now {ref_id} has L1={len(l1)} L2={len(l2)}" + chr(10) + f"referral_map size: {len(referral_map)}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def rebuild_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    # Try to rebuild from referrals_db and users_db if possible
+    # referrals_db is count, not mapping, so we can't fully rebuild, but we can show what we have
+    msg = f"Current referral_map size: {len(referral_map)}" + chr(10)
+    msg += f"referrals_db size: {len(referrals_db)}" + chr(10)
+    if referrals_db:
+        msg += f"Sample referrals_db: {list(referrals_db.items())[:10]}" + chr(10)
+    msg += f"users_db total: {len(users_db)}" + chr(10)
+    # Count users who have joined via referral (have referral_map entry)
+    msg += "To manually restore, use /add_referral <user_id> <referrer_id>"
+    await update.message.reply_text(msg[:4000])
+
+
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -8352,6 +8385,8 @@ def main():
             app.add_handler(CommandHandler("user_refs", user_refs_cmd))
             app.add_handler(CommandHandler("ref_date", ref_date_cmd))
             app.add_handler(CommandHandler("debug_refs", debug_refs_cmd))
+            app.add_handler(CommandHandler("add_referral", add_referral_cmd))
+            app.add_handler(CommandHandler("rebuild_refs", rebuild_refs_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
