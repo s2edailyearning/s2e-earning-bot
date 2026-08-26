@@ -554,16 +554,24 @@ def notification_thread_func():
                                 if not _task_can_be_sent_to_user(_task, uid):
                                     continue
                                 reward = get_task_reward_for_user(_task, int(uid))
-                                link = str(_task.get("link") or "").strip()
-                                if link:
-                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", url=link)]])
-                                else:
-                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Open Task", callback_data=f"daily_open_{int(_task.get('id'))}")]])
+                                # V52 FIX: Button must open Daily Task upload flow, not just external link
+                                # So user can upload screenshot after completing link task
+                                task_id = int(_task.get('id', 0) or 0)
+                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data=f"daily_open_{task_id}")]])
+                                # V53: Show time limit clearly to user
+                                wm = _task.get('window_minutes', 20)
+                                try:
+                                    wm_int = int(wm)
+                                except:
+                                    wm_int = 20
+                                close_t = _task.get('close_time','')
                                 msg = (
                                     f"⏰ TASK STARTING IN {_lead} SECONDS!\n\n"
                                     f"Task {_task.get('task_number', '?')}: {_task.get('title', '')}\n"
-                                    f"🕐 Opens: {_task.get('open_time', '')}\n"
+                                    f"🕐 Start: {_task.get('open_time', '')} | End: {close_t}\n"
+                                    f"⏳ Time to complete: {wm_int} minutes\n"
                                     f"💰 Reward: ₹{reward}\n\n"
+                                    f"⚠️ Complete within {wm_int} mins (by {close_t})!\n"
                                     "Tap the button below when the task opens."
                                 )
                                 await bot_application.bot.send_message(chat_id=int(uid), text=msg, reply_markup=kb)
@@ -3644,7 +3652,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not current:
             next_t = next_task
             if next_t:
-                msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t['window_minutes']} mins)\n\nCheck Scheduled Tasks for list!"
+                msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t.get('window_minutes', 20)} mins)\n\nCheck Scheduled Tasks for list!"
                 await q.message.reply_text(msg, reply_markup=main_menu())
                 return
             else:
@@ -3726,7 +3734,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(f"⏭️ Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
             return
         task_open_time[uid] = get_ist_now()
-        msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
+        msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current.get('close_time','')} ({current.get('window_minutes', 20)} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current.get('window_minutes', 20)} mins! By {current.get('close_time','')}!"
         if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
             msg += "\n\n⚠️ Already have account? Click Skip Task!"
         # If task has image, send photo with caption - THIS IS YOUR IMAGE FEATURE
@@ -3789,7 +3797,7 @@ async def daily_skip_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data['skip_task_id'] = current['id']
     context.user_data['skip_task'] = current
-    msg = f"⏭️ Skip Task {current['task_number']}\n{current['open_time']}→{current['close_time']} - {current['title']}\n\nWhy skip? Select reason:"
+    msg = f"⏭️ Skip Task {current['task_number']}\n{current['open_time']}→{current.get('close_time','')} - {current['title']}\n\nWhy skip? Select reason:"
     kb = []
     for i, reason in enumerate(skip_reasons_list):
         kb.append([InlineKeyboardButton(f"{reason}", callback_data=f"skip_reason_{i}")])
@@ -7092,6 +7100,12 @@ async def add_task_5plans_cmd(update, context):
         global scheduled_task_counter
         ot = dt.strptime(open_time, "%H:%M").time()
         ct = dt.strptime(close_time, "%H:%M").time()
+        # V51 FIX: window_minutes needed for display
+        try:
+            wm = int((datetime.combine(get_ist_today(), ct, tzinfo=IST) - datetime.combine(get_ist_today(), ot, tzinfo=IST)).total_seconds() / 60)
+            if wm <=0: wm += 1440
+        except:
+            wm = 20
         task = {
             'id': scheduled_task_counter,
             'date': today,
@@ -7105,7 +7119,9 @@ async def add_task_5plans_cmd(update, context):
             'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
             'audience': audience,
             'description': description,
-            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
+            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1,
+            'window_minutes': wm,
+            'next_time': close_time
         }
         scheduled_tasks_db.append(task)
         scheduled_task_counter+=1
@@ -7353,7 +7369,12 @@ async def add_task_manual_cmd(update, context):
         global scheduled_task_counter
         ot = dt2.strptime(open_time, "%H:%M").time()
         ct = dt2.strptime(close_time, "%H:%M").time()
-        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'audience': audience, 'rewards': {}, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1}
+        try:
+            wm = int((datetime.combine(get_ist_today(), ct, tzinfo=IST) - datetime.combine(get_ist_today(), ot, tzinfo=IST)).total_seconds() / 60)
+            if wm <=0: wm += 1440
+        except:
+            wm = 20
+        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'audience': audience, 'rewards': {}, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1, 'window_minutes': wm, 'next_time': close_time}
         scheduled_tasks_db.append(task)
         scheduled_task_counter+=1
         save_data()
