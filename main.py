@@ -496,7 +496,14 @@ def notification_thread_func():
                     if close_dt <= open_dt:
                         close_dt += timedelta(days=1)
                     diff = (open_dt - now).total_seconds()
-                    due_now = (0 <= diff <= lead) or (diff < 0 and now <= close_dt)
+                    # FIX V49: Only notify BEFORE download deadline, not after. Late notification after 11:00 caused false LIVE msg.
+                    # After download window closes, video should NOT be advertised as available.
+                    if now > close_dt:
+                        continue
+                    due_now = (0 <= diff <= lead)
+                    # If video uploaded late, allow one immediate notification ONLY if download still open
+                    if not due_now and diff < 0 and now <= open_dt + timedelta(minutes=5):
+                        due_now = True
                     if not due_now:
                         continue
                     notify_key = f"product:{get_ist_today()}:{product.get('id')}:{lead}"
@@ -513,12 +520,19 @@ def notification_thread_func():
                                     continue
                                 reward = _product_reward_for_user(_p, uid_int)
                                 if _late:
-                                    msg = (f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {_p.get('title','Product Promotion')}\n"
-                                           f"💰 Reward: ₹{reward}\n\nThe video is available now. Tap below to open the task.")
+                                    # V49 FIX: If download closed, don't say video available
+                                    if now > open_dt:
+                                        msg = (f"📢 PRODUCT PROMOTION UPDATE\n\n🎥 {_p.get('title','Product Promotion')}\n"
+                                               f"💰 Reward: ₹{reward}\n"
+                                               f"🎥 Video download ended at: {_p.get('download_deadline','')}\n"
+                                               f"📸 Screenshot: {_p.get('screenshot_open','')} → {_p.get('screenshot_close','')}\n\nTap to check task.")
+                                    else:
+                                        msg = (f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {_p.get('title','Product Promotion')}\n"
+                                               f"💰 Reward: ₹{reward}\n\nThe video is available now. Tap below to open the task.")
                                 else:
                                     msg = (f"⏰ PRODUCT PROMOTION STARTING IN {_lead} SECONDS!\n\n🎥 {_p.get('title','Product Promotion')}\n"
                                            f"💰 Reward: ₹{reward}\n"
-                                           f"🕐 Download opens: {_p.get('download_deadline','')}\n\nTap the button below when it opens.")
+                                           f"🕐 Download until: {_p.get('download_deadline','')}\n\nTap the button below when it opens.")
                                 kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
                                 await bot_application.bot.send_message(chat_id=uid_int, text=msg[:4000], reply_markup=kb)
                                 sent += 1
