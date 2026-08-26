@@ -8218,7 +8218,6 @@ def main():
             app.add_handler(CommandHandler("bulk_tasks_add", add_bulk_tasks_cmd))
 
             try:
-                from telegram.ext import TypeHandler
                 app.add_handler(TypeHandler(Update, global_activity_tracker), group=-100)
                 print("Global activity tracker added")
             except Exception as e:
