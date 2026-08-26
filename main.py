@@ -8,6 +8,8 @@ print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHO
 # - Render sleep fix + Flask health server
 
 import warnings
+import secrets
+import string
 warnings.filterwarnings('ignore')
 
 # ===== V17 SUPABASE NEW KEYS FIX - FORCE ENABLE =====
@@ -858,6 +860,10 @@ pending_plans = {}
 referral_map = {}
 pending_referrals = {}
 referral_earnings = {}
+# Public referral codes hide Telegram numeric IDs from shared referral links.
+# referral_codes: {user_id: code}; referral_code_map: {code: user_id}.
+referral_codes = {}
+referral_code_map = {}
 # Task/product referral commissions accrue during the day and settle the next day.
 referral_pending_earnings = {}
 # Detailed referral commission ledger: {referrer_uid: [{date, type, level, source_uid, amount, description}]}
@@ -1009,7 +1015,7 @@ def _restore_all_int_keys_after_load():
     dict_names = [
         "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
         "warnings_db", "pending_daily", "user_plans", "pending_plans",
-        "referral_map", "pending_referrals", "referral_earnings",
+        "referral_map", "pending_referrals", "referral_earnings", "referral_codes",
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
         "withdraw_requests", "withdraw_history", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
@@ -1045,7 +1051,7 @@ def save_data():
         state_names = [
             "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
-            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
+            "pending_plans", "referral_map", "pending_referrals", "referral_earnings", "referral_codes", "referral_code_map",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
@@ -1939,6 +1945,60 @@ def main_menu():
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
+def get_referral_code(uid):
+    """Return a stable public referral code for a user without exposing Telegram ID."""
+    try:
+        uid_int = int(uid)
+    except Exception:
+        uid_int = uid
+
+    existing = referral_codes.get(uid_int) or referral_codes.get(str(uid_int))
+    if existing:
+        code = str(existing).strip().upper()
+        # Keep reverse lookup healthy after old data migrations.
+        owner = referral_code_map.get(code) or referral_code_map.get(code.lower())
+        if owner is None:
+            referral_code_map[code] = uid_int
+            try:
+                save_data()
+            except Exception:
+                pass
+        return code
+
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = "S2E" + "".join(secrets.choice(alphabet) for _ in range(6))
+        if code not in referral_code_map and code.lower() not in referral_code_map:
+            break
+    referral_codes[uid_int] = code
+    referral_code_map[code] = uid_int
+    try:
+        save_data()
+    except Exception as e:
+        print(f"Referral code save warning: {e}")
+    return code
+
+def get_referrer_from_start_token(token):
+    """Resolve both new public referral codes and old numeric Telegram-ID links."""
+    token = str(token or "").strip()
+    if not token:
+        return None
+    # New public code: never expose/require numeric IDs.
+    code = token.upper()
+    owner = referral_code_map.get(code) or referral_code_map.get(token)
+    if owner is not None:
+        try:
+            return int(owner)
+        except Exception:
+            return owner
+    # Backward compatibility for old referral links already shared.
+    if token.isdigit():
+        try:
+            return int(token)
+        except Exception:
+            return None
+    return None
+
 async def check_user_in_channel(user_id, context):
     # Final FIX: ALWAYS True - Fix join in channel error alane undi - Yenduvalla ala vastundi!
     # Reason: CHANNEL_ID = -1004352241439 but CHANNEL_LINK = https://t.me/S2E_Daily_Earning - ID mismatch!
@@ -1967,10 +2027,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
     args = context.args
     ref_id = None
-    if args and args[0].isdigit():
-        ref_id = int(args[0])
-        if ref_id != uid and ref_id not in banned_users:
+    if args:
+        ref_id = get_referrer_from_start_token(args[0])
+        if ref_id is not None and ref_id != uid and ref_id not in banned_users:
             referral_map[uid] = ref_id
+            save_data()
     if uid in users_db:
         await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
         return ConversationHandler.END
@@ -2106,6 +2167,8 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
     users_db[uid]['reg_date']=get_ist_today()
+    get_referral_code(uid)
+    save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -2121,6 +2184,7 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db.setdefault(uid, {})['profession'] = value
     users_db[uid]['joined'] = str(get_ist_today())
     users_db[uid]['reg_date'] = get_ist_today()
+    get_referral_code(uid)
     save_data()
     await q.message.reply_text(
         f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n"
@@ -2351,7 +2415,8 @@ async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def refer_earn_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    ref_link=f"https://t.me/{context.bot.username}?start={uid}"
+    ref_code = get_referral_code(uid)
+    ref_link=f"https://t.me/{context.bot.username}?start={ref_code}"
     msg=(
         "🔗 REFER & EARN\n\n"
         "Share your referral link.\n"
@@ -2360,6 +2425,7 @@ async def refer_earn_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"L2 Task/Product Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
         f"Plan Activation: L1 {REFERRAL_PLAN_COMMISSION_PERCENT:g}% | L2 {L2_PLAN_COMMISSION_PERCENT:g}%\n\n"
         f"Your Referral Link:\n{ref_link}\n\n"
+        f"🔑 Referral Code: {ref_code}\n"
         "Join → Complete tasks → Earn."
     )
     await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
@@ -3810,12 +3876,27 @@ async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # Remove from all DBs
     removed = []
-    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans']:
+    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans','referral_codes','referral_code_map']:
         db = globals().get(db_name)
         if isinstance(db, dict) and (target in db or str(target) in db):
             db.pop(target, None)
             db.pop(str(target), None)
             removed.append(db_name)
+    # Remove the user's public referral code and any reverse mapping to it.
+    try:
+        old_code = referral_codes.pop(target, None) or referral_codes.pop(str(target), None)
+        if old_code:
+            referral_code_map.pop(str(old_code).upper(), None)
+            referral_code_map.pop(str(old_code), None)
+        # Also remove stale reverse-code entries pointing to this user.
+        for code, owner in list(referral_code_map.items()):
+            try:
+                if int(owner) == target:
+                    referral_code_map.pop(code, None)
+            except Exception:
+                pass
+    except Exception as _ref_cleanup_error:
+        print(f"Referral code cleanup warning: {_ref_cleanup_error}")
     # Also remove from banned, warnings
     try:
         banned_users.discard(target)
@@ -5098,10 +5179,12 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 plan_name = str(plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Plan")
             else:
                 plan_name = "Free / No Plan"
+            code = get_referral_code(uid)
             lines.append(
                 f"👤 {name}\n"
-                f"🆔 ID: {uid}\n"
+                f"🆔 Internal ID: {uid}\n"
                 f"🔹 Username: {username or 'Not set'}\n"
+                f"🔑 Referral Code: {code}\n"
                 f"💎 Plan: {plan_name}\n"
             )
 
