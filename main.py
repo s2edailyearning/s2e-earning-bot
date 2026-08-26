@@ -8,8 +8,6 @@ print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHO
 # - Render sleep fix + Flask health server
 
 import warnings
-import secrets
-import string
 warnings.filterwarnings('ignore')
 
 # ===== V17 SUPABASE NEW KEYS FIX - FORCE ENABLE =====
@@ -71,7 +69,7 @@ except Exception as e:
 # ===== END V18 INIT =====
 
 
-import os, re, threading, json, asyncio
+import os, re, threading, json, asyncio, secrets, string
 from urllib.parse import quote
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="telegram")
@@ -858,12 +856,12 @@ pending_daily = {}
 user_plans = {}
 pending_plans = {}
 referral_map = {}
+# Public referral codes: never expose raw Telegram numeric IDs in referral links.
+# {telegram_uid: "S2EXXXXXXX"} and reverse lookup for /start.
+referral_codes_db = {}
+referral_code_to_uid = {}
 pending_referrals = {}
 referral_earnings = {}
-# Public referral codes hide Telegram numeric IDs from shared referral links.
-# referral_codes: {user_id: code}; referral_code_map: {code: user_id}.
-referral_codes = {}
-referral_code_map = {}
 # Task/product referral commissions accrue during the day and settle the next day.
 referral_pending_earnings = {}
 # Detailed referral commission ledger: {referrer_uid: [{date, type, level, source_uid, amount, description}]}
@@ -1015,7 +1013,7 @@ def _restore_all_int_keys_after_load():
     dict_names = [
         "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
         "warnings_db", "pending_daily", "user_plans", "pending_plans",
-        "referral_map", "pending_referrals", "referral_earnings", "referral_codes",
+        "referral_map", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
         "withdraw_requests", "withdraw_history", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
@@ -1051,7 +1049,7 @@ def save_data():
         state_names = [
             "users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
-            "pending_plans", "referral_map", "pending_referrals", "referral_earnings", "referral_codes", "referral_code_map",
+            "pending_plans", "referral_map", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
@@ -1198,6 +1196,38 @@ def load_data():
                     # zero/empty after every Render redeploy.
                     _restore_all_int_keys_after_load()
                     _restore_loaded_sets_and_times()
+                    try:
+                        referral_code_to_uid.clear()
+                        for _uid, _code in referral_codes_db.items():
+                            if _code:
+                                referral_code_to_uid[str(_code).upper()] = int(_uid)
+                    except Exception as _rc_e:
+                        print(f"Referral code index rebuild warning: {_rc_e}")
+                    # Recover users referenced by other persisted structures so
+                    # /userlist does not hide an existing member just because
+                    # their registration record is incomplete.
+                    try:
+                        _candidate_ids = set()
+                        for _src_name in ("referral_map", "user_plans", "tasks_db", "bonus_balance",
+                                           "referral_earnings", "promo_earnings_db", "daily_done"):
+                            _src = globals().get(_src_name, {})
+                            if isinstance(_src, dict):
+                                for _k in _src.keys():
+                                    try:
+                                        _candidate_ids.add(int(_k))
+                                    except:
+                                        pass
+                        for _candidate_uid in _candidate_ids:
+                            if _candidate_uid > 0 and _candidate_uid not in users_db:
+                                users_db[_candidate_uid] = {
+                                    "name": "Not registered",
+                                    "username": "",
+                                    "telegram_id": _candidate_uid,
+                                    "registration_complete": False,
+                                    "created_at": str(get_ist_today()),
+                                }
+                    except Exception as _mig_user_e:
+                        print(f"Userlist migration warning: {_mig_user_e}")
 
                     print("✅ Supabase data restored to memory (integer user IDs restored)")
                     return True
@@ -1945,60 +1975,6 @@ def main_menu():
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
-def get_referral_code(uid):
-    """Return a stable public referral code for a user without exposing Telegram ID."""
-    try:
-        uid_int = int(uid)
-    except Exception:
-        uid_int = uid
-
-    existing = referral_codes.get(uid_int) or referral_codes.get(str(uid_int))
-    if existing:
-        code = str(existing).strip().upper()
-        # Keep reverse lookup healthy after old data migrations.
-        owner = referral_code_map.get(code) or referral_code_map.get(code.lower())
-        if owner is None:
-            referral_code_map[code] = uid_int
-            try:
-                save_data()
-            except Exception:
-                pass
-        return code
-
-    alphabet = string.ascii_uppercase + string.digits
-    while True:
-        code = "S2E" + "".join(secrets.choice(alphabet) for _ in range(6))
-        if code not in referral_code_map and code.lower() not in referral_code_map:
-            break
-    referral_codes[uid_int] = code
-    referral_code_map[code] = uid_int
-    try:
-        save_data()
-    except Exception as e:
-        print(f"Referral code save warning: {e}")
-    return code
-
-def get_referrer_from_start_token(token):
-    """Resolve both new public referral codes and old numeric Telegram-ID links."""
-    token = str(token or "").strip()
-    if not token:
-        return None
-    # New public code: never expose/require numeric IDs.
-    code = token.upper()
-    owner = referral_code_map.get(code) or referral_code_map.get(token)
-    if owner is not None:
-        try:
-            return int(owner)
-        except Exception:
-            return owner
-    # Backward compatibility for old referral links already shared.
-    if token.isdigit():
-        try:
-            return int(token)
-        except Exception:
-            return None
-    return None
-
 async def check_user_in_channel(user_id, context):
     # Final FIX: ALWAYS True - Fix join in channel error alane undi - Yenduvalla ala vastundi!
     # Reason: CHANNEL_ID = -1004352241439 but CHANNEL_LINK = https://t.me/S2E_Daily_Earning - ID mismatch!
@@ -2011,11 +1987,115 @@ async def check_user_in_channel(user_id, context):
         print(f"check err {e} - Return True!")
         return True
 
+def _get_or_create_referral_code(uid):
+    """Return a short public referral code; never expose the Telegram numeric ID."""
+    try:
+        uid = int(uid)
+    except Exception:
+        return ""
+    try:
+        existing = referral_codes_db.get(uid) or referral_codes_db.get(str(uid))
+        if existing:
+            code = str(existing).upper()
+            referral_codes_db[uid] = code
+            referral_code_to_uid[code] = uid
+            return code
+
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        for _ in range(30):
+            code = "S2E" + "".join(secrets.choice(alphabet) for _ in range(7))
+            owner = referral_code_to_uid.get(code)
+            if owner is None or int(owner) == uid:
+                referral_codes_db[uid] = code
+                referral_code_to_uid[code] = uid
+                try:
+                    save_data()
+                except Exception:
+                    pass
+                return code
+    except Exception as e:
+        print(f"referral code error: {e}")
+    return ""
+
+def _resolve_referral_arg(arg):
+    """Resolve new opaque referral codes and keep old numeric links working."""
+    try:
+        raw = str(arg or "").strip()
+        if not raw:
+            return None
+        if raw.isdigit():
+            return int(raw)  # backward compatibility for old referral links
+        code = raw.upper()
+        owner = referral_code_to_uid.get(code)
+        if owner is None:
+            # JSON/Supabase may have loaded reverse-map keys/values as strings.
+            for k, v in referral_codes_db.items():
+                if str(v).upper() == code:
+                    try:
+                        owner = int(k)
+                    except Exception:
+                        owner = k
+                    referral_code_to_uid[code] = owner
+                    break
+        try:
+            return int(owner) if owner is not None else None
+        except Exception:
+            return owner
+    except Exception:
+        return None
+
+def _touch_telegram_user(update):
+    """Keep the admin copy of the Telegram username current without showing IDs publicly."""
+    try:
+        u = update.effective_user
+        uid = int(u.id)
+        rec = users_db.setdefault(uid, {})
+        tg_username = getattr(u, "username", None)
+        rec["username"] = str(tg_username).lstrip("@") if tg_username else ""
+        rec.setdefault("telegram_id", uid)
+        rec.setdefault("created_at", str(get_ist_today()))
+        return rec
+    except Exception:
+        return {}
+
+def _user_is_registered(rec):
+    """Registered users from old data or the new registration_complete flag."""
+    if not isinstance(rec, dict):
+        return False
+    if rec.get("registration_complete") is True:
+        return True
+    name = str(rec.get("name") or "").strip().lower()
+    if name in ("", "not registered", "pending"):
+        return False
+    # Existing production users may not have the new flag.
+    return bool(rec.get("mobile") or rec.get("upi") or rec.get("profession") or rec.get("gender"))
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+
+    # Create a lightweight record immediately on /start so every bot join is
+    # visible to /userlist, even if registration is not completed yet.
+    rec = _touch_telegram_user(update)
+    rec.setdefault("name", "Not registered")
+    rec.setdefault("registration_complete", False)
+
     if uid in banned_users:
         await update.message.reply_text("You are BANNED! Contact admin!")
         return ConversationHandler.END
+
+    # Capture referral before any registration screen.
+    args = context.args
+    ref_id = None
+    if args:
+        ref_id = _resolve_referral_arg(args[0])
+        if ref_id is not None and ref_id != uid and ref_id not in banned_users:
+            referral_map[uid] = ref_id
+
+    try:
+        save_data()
+    except Exception:
+        pass
+
     if not is_admin(uid):
         is_joined = await check_user_in_channel(uid, context)
         if not is_joined:
@@ -2023,35 +2103,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📢 Join Channel", url=get_join_channel_link())],
                 [InlineKeyboardButton("✅ Check Joined", callback_data="check_joined")]
             ])
-            await update.message.reply_text(f"👋 Welcome! Please join our channel {get_join_channel()} to use bot!\n\nJoin and click Check Joined!", reply_markup=kb)
+            await update.message.reply_text(
+                f"👋 Welcome! Please join our channel {get_join_channel()} to use bot!\n\nJoin and click Check Joined!",
+                reply_markup=kb
+            )
             return ConversationHandler.END
-    args = context.args
-    ref_id = None
-    if args:
-        ref_id = get_referrer_from_start_token(args[0])
-        if ref_id is not None and ref_id != uid and ref_id not in banned_users:
-            referral_map[uid] = ref_id
-            save_data()
-    if uid in users_db:
-        await update.message.reply_text(f"Welcome back {users_db[uid].get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15", reply_markup=main_menu())
+
+    if _user_is_registered(rec):
+        await update.message.reply_text(
+            f"Welcome back {rec.get('name','User')}! Balance Rs{get_balance(uid)}\nTasks {get_tasks(uid)}/15",
+            reply_markup=main_menu()
+        )
         return ConversationHandler.END
-    await update.message.reply_text("Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?")
+
+    await update.message.reply_text(
+        "Welcome to S2E Daily Earning + Promo Network!\n\nWhat is your Name?"
+    )
     return NAME
 
 async def check_joined_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Final FIX: Join channel error fix - Always show Joined!
-    q=update.callback_query
+    q = update.callback_query
     try:
         await q.answer()
     except:
         pass
     uid = q.from_user.id
+
+    rec = _touch_telegram_user(update)
+    rec.setdefault("name", "Not registered")
+    rec.setdefault("registration_complete", False)
+
+    # Keep the existing production behaviour: do not block the user on a
+    # Telegram channel-membership API hiccup.
     is_joined = await check_user_in_channel(uid, context)
-    print(f"check_joined_cb: User {uid} is_joined {is_joined} - ALWAYS True - Fix Not joined yet! FINAL!")
-    #  FIX: Always allow - Show Joined! Welcome!
-    if uid in users_db:
-        await q.message.reply_text(f"✅ Thanks for joining! Welcome back {users_db[uid].get('name','User')}! Join bypass - No Not joined error! FINAL!", reply_markup=main_menu())
+    print(f"check_joined_cb: User {uid} is_joined {is_joined}")
+
+    try:
+        save_data()
+    except Exception:
+        pass
+
+    if _user_is_registered(rec):
+        await q.message.reply_text(
+            f"✅ Thanks for joining! Welcome back {rec.get('name','User')}!",
+            reply_markup=main_menu()
+        )
         return ConversationHandler.END
+
     await q.message.reply_text("✅ Thanks for joining! What is your Name?")
     return NAME
 
@@ -2061,7 +2159,11 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(name) < 2:
         await update.message.reply_text("Name too short! Enter valid name:")
         return NAME
-    users_db[uid] = {'name': name}
+    rec = users_db.setdefault(uid, {})
+    rec['name'] = name
+    rec['registration_complete'] = False
+    rec['username'] = str(getattr(update.effective_user, 'username', '') or '').lstrip('@')
+    rec.setdefault('telegram_id', uid)
     await update.message.reply_text(
         "Select your gender:",
         reply_markup=InlineKeyboardMarkup([
@@ -2167,7 +2269,9 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['profession'] = profession
     users_db[uid]['joined']=str(get_ist_today())
     users_db[uid]['reg_date']=get_ist_today()
-    get_referral_code(uid)
+    users_db[uid]['registration_complete'] = True
+    users_db[uid]['username'] = str(getattr(update.effective_user, 'username', '') or '').lstrip('@')
+    users_db[uid]['telegram_id'] = uid
     save_data()
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
@@ -2184,7 +2288,9 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db.setdefault(uid, {})['profession'] = value
     users_db[uid]['joined'] = str(get_ist_today())
     users_db[uid]['reg_date'] = get_ist_today()
-    get_referral_code(uid)
+    users_db[uid]['registration_complete'] = True
+    users_db[uid]['username'] = str(getattr(q.from_user, 'username', '') or '').lstrip('@')
+    users_db[uid]['telegram_id'] = uid
     save_data()
     await q.message.reply_text(
         f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n"
@@ -2413,22 +2519,35 @@ async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.reply_text(msg, reply_markup=kb)
 
 async def refer_earn_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid=q.from_user.id
-    ref_code = get_referral_code(uid)
-    ref_link=f"https://t.me/{context.bot.username}?start={ref_code}"
-    msg=(
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+
+    uid = q.from_user.id
+    _touch_telegram_user(update)
+    code = _get_or_create_referral_code(uid)
+    ref_link = f"https://t.me/{context.bot.username}?start={code}"
+
+    # Keep commission percentages private. The public referral screen only
+    # shows the link and a simple share/join message.
+    msg = (
         "🔗 REFER & EARN\n\n"
-        "Share your referral link.\n"
-        "When your friend joins and completes tasks, you earn commission from their work.\n\n"
-        f"L1 Task/Product Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
-        f"L2 Task/Product Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
-        f"Plan Activation: L1 {REFERRAL_PLAN_COMMISSION_PERCENT:g}% | L2 {L2_PLAN_COMMISSION_PERCENT:g}%\n\n"
-        f"Your Referral Link:\n{ref_link}\n\n"
-        f"🔑 Referral Code: {ref_code}\n"
-        "Join → Complete tasks → Earn."
+        "Invite your friends to join S2E and earn by completing simple tasks.\n\n"
+        f"🔗 Your Referral Link:\n{ref_link}"
     )
-    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+    share_url = (
+        "https://t.me/share/url?url="
+        + quote(ref_link, safe="")
+        + "&text="
+        + quote("Join S2E Earning Bot → Complete tasks → Earn 💰", safe="")
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 REFER", url=share_url)],
+        [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+    ])
+    await q.message.reply_text(msg, reply_markup=kb)
 
 async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -3876,27 +3995,12 @@ async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # Remove from all DBs
     removed = []
-    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans','referral_codes','referral_code_map']:
+    for db_name in ['users_db','tasks_db','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','referral_map','pending_daily','user_profiles','referrals_db','referral_commission_ledger','user_plans','pending_plans']:
         db = globals().get(db_name)
         if isinstance(db, dict) and (target in db or str(target) in db):
             db.pop(target, None)
             db.pop(str(target), None)
             removed.append(db_name)
-    # Remove the user's public referral code and any reverse mapping to it.
-    try:
-        old_code = referral_codes.pop(target, None) or referral_codes.pop(str(target), None)
-        if old_code:
-            referral_code_map.pop(str(old_code).upper(), None)
-            referral_code_map.pop(str(old_code), None)
-        # Also remove stale reverse-code entries pointing to this user.
-        for code, owner in list(referral_code_map.items()):
-            try:
-                if int(owner) == target:
-                    referral_code_map.pop(code, None)
-            except Exception:
-                pass
-    except Exception as _ref_cleanup_error:
-        print(f"Referral code cleanup warning: {_ref_cleanup_error}")
     # Also remove from banned, warnings
     try:
         banned_users.discard(target)
@@ -5153,7 +5257,7 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin: show registered users with ID, name, username and plan."""
+    """Admin: show every user who has opened /start, including incomplete registrations."""
     if not is_admin(update.effective_user.id):
         return
     try:
@@ -5179,13 +5283,13 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 plan_name = str(plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Plan")
             else:
                 plan_name = "Free / No Plan"
-            code = get_referral_code(uid)
+            status = "Registered" if _user_is_registered(data) else "Not registered / Pending"
             lines.append(
                 f"👤 {name}\n"
-                f"🆔 Internal ID: {uid}\n"
+                f"🆔 ID: {uid}\n"
                 f"🔹 Username: {username or 'Not set'}\n"
-                f"🔑 Referral Code: {code}\n"
                 f"💎 Plan: {plan_name}\n"
+                f"📌 Status: {status}\n"
             )
 
         if len(items) > 50:
