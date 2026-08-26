@@ -1,4 +1,4 @@
-print("V59 FINAL - REFERRAL MAP RECOVERY + MANUAL ADD_REFERRAL - 2026-08-26 14:00 IST")
+print("V61 FINAL - BULK APPROVAL FIX + SAME USER MULTI TASKS + PENDING_VERIFICATION - 2026-08-26 14:30 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -2445,6 +2445,11 @@ async def set_member_details_channel_cmd(update, context):
     save_channel_config(member_details=ch)
     globals()["TEAM_MEMBER_DETAILS_CHANNEL"] = ch
     try:
+        save_data()
+        print(f"Member details channel saved to Supabase: {ch}")
+    except Exception as _se:
+        print(f"Supabase channel save fail: {_se}")
+    try:
         await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! New registered member details will come here.")
         await update.message.reply_text(f"✅ Member Details Channel Set: {ch}")
     except Exception as e:
@@ -2656,15 +2661,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     ref_id = None
     if args:
+        print(f"Referral arg received: {args[0]} for user {uid}")
         ref_id = _resolve_referral_arg(args[0])
+        print(f"Resolved ref_id: {ref_id} for user {uid}")
         if ref_id is not None and ref_id != uid and ref_id not in banned_users:
             if is_team_uid(ref_id) and team_direct_referral_count(ref_id) >= MAX_DIRECT_REFERRALS:
                 await update.message.reply_text("⚠️ This Team referral has reached its 30 direct-member limit. You can still register, but this referral link will not be assigned.")
             else:
                 referral_map[uid] = ref_id
+                referral_map[str(uid)] = ref_id
+                print(f"Referral mapped: {uid} -> {ref_id}, map size now {len(referral_map)}")
+        else:
+            print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
+    else:
+        print(f"No referral args for user {uid} - direct join")
 
     try:
         save_data()
+        print(f"Saved referral_map size {len(referral_map)} after start for {uid}")
+    except Exception as e:
+        print(f"save_data fail in start: {e}")
     except Exception:
         pass
 
@@ -6340,7 +6356,7 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Approve ALL for Daily Task screenshots only - V34 FIX: marks completed, clears missed, shows status"""
+    """Approve ALL for Daily Task screenshots - V61 FIX: handles pending_daily + user_task_status pending_verification + same user multiple tasks"""
     q = update.callback_query
     try:
         await q.answer("Processing Daily Task bulk approval…")
@@ -6351,6 +6367,8 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
     approved_count = 0
     details = []
     today = str(get_ist_today())
+    
+    # FIRST: Approve all pending_daily (old system)
     for key, sub in list(pending_daily.items()):
         try:
             uid = int(key)
@@ -6366,32 +6384,28 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
             if reward > 5:
                 bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
-            # V34: Mark task status as completed
             if task_id is not None:
                 if uid not in user_task_status:
                     user_task_status[uid] = {}
                 user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
-                try:
-                    # V46: Force clear missed and save
-                    if uid in missed_tasks_db:
-                        missed_tasks_db[uid] = {}
-                    save_data()
-                    print(f"V46 SAVED after approval uid={uid} reward={reward}")
-                except Exception as se:
-                    print(f"V46 save fail {se}")
-                # Remove from missed_tasks_db
                 if uid in missed_tasks_db:
-                    missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
+                    try:
+                        if isinstance(missed_tasks_db[uid], dict):
+                            missed_tasks_db[uid] = {}
+                        else:
+                            missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
+                    except:
+                        pass
             else:
-                # Fallback: mark any pending_verification as completed
                 for tid, sdata in list(user_task_status.get(uid, {}).items()):
                     if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
                         user_task_status[uid][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
                         break
             record_task_referral_commissions(uid, reward)
             pending_daily.pop(key, None)
+            pending_daily.pop(str(key), None)
             approved_count += 1
-            details.append(f"{uid} (₹{reward:g})")
+            details.append(f"{uid} (T{task.get('task_number','?')} ₹{reward:g})")
             try:
                 remaining = get_tasks_for_today()
                 remaining_count = len([t for t in remaining if user_task_status.get(uid, {}).get(t.get('id'), {}).get('status') != 'completed'])
@@ -6405,15 +6419,62 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as e:
             print(f"daily bulk approval error {key}: {e}")
             import traceback; traceback.print_exc()
+    
+    # SECOND: Also approve any remaining pending_verification in user_task_status that were not in pending_daily (scheduled tasks system)
+    for uid, status_dict in list(user_task_status.items()):
+        if not isinstance(status_dict, dict):
+            continue
+        for tid, sdata in list(status_dict.items()):
+            if not isinstance(sdata, dict):
+                continue
+            if sdata.get('status') == 'pending_verification':
+                try:
+                    task = next((t for t in get_tasks_for_today() if int(t.get('id',-1)) == int(tid)), None)
+                    if not task:
+                        # Try find in all scheduled tasks
+                        task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == int(tid)), None)
+                    reward = float(task.get('reward', 5) or 5) if task else 5.0
+                    tasks_db[uid] = tasks_db.get(uid, 0) + 1
+                    daily_task_count.setdefault(uid, {})
+                    daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+                    daily_task_earnings.setdefault(uid, {})
+                    daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
+                    if reward > 5:
+                        bonus_balance[uid] = round(float(bonus_balance.get(uid, 0) or 0) + (reward - 5), 2)
+                    user_task_status[uid][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
+                    if uid in missed_tasks_db:
+                        try:
+                            if isinstance(missed_tasks_db[uid], dict):
+                                missed_tasks_db[uid] = {}
+                            else:
+                                missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(tid)]
+                        except:
+                            pass
+                    record_task_referral_commissions(uid, reward)
+                    approved_count += 1
+                    details.append(f"{uid} (T{tid} ₹{reward:g})")
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
+                    except:
+                        pass
+                except Exception as e:
+                    print(f"pending_verification bulk approval error {uid} {tid}: {e}")
+    
     save_data()
     detail_text = "\n".join(details[:15])
     if len(details) > 15:
         detail_text += f"\n...and {len(details)-15} more"
+    # Count remaining pending_verification
+    remaining_pending = 0
+    for uid, status_dict in user_task_status.items():
+        if isinstance(status_dict, dict):
+            for sdata in status_dict.values():
+                if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
+                    remaining_pending += 1
     await q.message.reply_text(
-        f"✅ DAILY TASK BULK APPROVAL DONE\n\nApproved: {approved_count}\n{detail_text or 'No pending Daily Task submissions.'}\n\nRemaining pending: {len(pending_daily)}",
+        f"✅ DAILY TASK BULK APPROVAL DONE\n\nApproved: {approved_count}\n{detail_text or 'No pending Daily Task submissions.'}\n\nRemaining pending_daily: {len(pending_daily)}\nRemaining pending_verification: {remaining_pending}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]])
     )
-    # Update original channel message caption
     try:
         await q.message.edit_caption(caption=(q.message.caption or "") + f"\n\n✅ BULK APPROVED {approved_count} tasks at {get_ist_now().strftime('%H:%M:%S')} IST")
     except:
