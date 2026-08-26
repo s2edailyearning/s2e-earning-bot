@@ -1,4 +1,4 @@
-print("V63 FINAL - BROADCAST + TASK IMAGE SEPARATE FIX + V62 BULK + V60 FEATURES - 2026-08-26 15:20 IST")
+print("V64 FINAL - RE-REGISTRATION RE-REFERRAL FIX + BROADCAST FIX + BULK APPROVAL - 2026-08-26 15:40 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -2668,9 +2668,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if is_team_uid(ref_id) and team_direct_referral_count(ref_id) >= MAX_DIRECT_REFERRALS:
                 await update.message.reply_text("⚠️ This Team referral has reached its 30 direct-member limit. You can still register, but this referral link will not be assigned.")
             else:
+                # V64 FIX: Force referral reassignment for re-registration after delete
+                # Clear old override and force new parent
+                try:
+                    referral_level_overrides.pop(uid, None)
+                    referral_level_overrides.pop(str(uid), None)
+                except:
+                    pass
                 referral_map[uid] = ref_id
                 referral_map[str(uid)] = ref_id
-                print(f"Referral mapped: {uid} -> {ref_id}, map size now {len(referral_map)}")
+                print(f"V64 Referral mapped (forced): {uid} -> {ref_id}, map size now {len(referral_map)}")
         else:
             print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
     else:
