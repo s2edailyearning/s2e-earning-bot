@@ -1,4 +1,4 @@
-print("V48 FINAL - DELETION-SAFE REFERRAL CHAIN + USERLIST + REFERRAL CODE FIX - 2026-08-26 IST")
+print("V57 FINAL - REFERRAL 0 FIX + L1 L2 DETAILED + ADMIN USER_INFO + DATE WISE - 2026-08-26 13:30 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -6116,10 +6116,9 @@ async def user_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i, mid in enumerate(l1[:20],1):
                 u = users_db.get(mid, {}) or users_db.get(str(mid), {})
                 joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
-                direct_parent = referral_map.get(mid) or referral_map.get(str(mid))
                 plan = _get_user_plan_record(mid)
                 pname = plan.get('name','Free') if plan else 'Free'
-                msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined} | Parent:{direct_parent}" + chr(10)
+                msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined}" + chr(10)
             if len(l1)>20:
                 msg += f"  ... +{len(l1)-20} more" + chr(10)
         msg += chr(10) + f"L2 - Level2 ({len(l2)}):" + chr(10)
@@ -6195,6 +6194,29 @@ async def ref_date_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg[:4000])
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
+
+async def debug_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    uid = update.effective_user.id
+    if context.args:
+        try:
+            uid = int(context.args[0])
+        except:
+            pass
+    l1, l2 = get_referral_chain(uid)
+    ref_map_entry = referral_map.get(uid) or referral_map.get(str(uid)) or "None"
+    total_refs = len([k for k,v in referral_map.items() if str(v)==str(uid) or v==uid])
+    msg = f"DEBUG REFERRALS FOR {uid}" + chr(10)
+    msg += f"Referral_map[uid] (who referred this user): {ref_map_entry}" + chr(10)
+    msg += f"Total direct in referral_map: {total_refs}" + chr(10)
+    msg += f"get_referral_chain L1={len(l1)} L2={len(l2)}" + chr(10)
+    msg += f"L1 list: {l1[:10]}" + chr(10)
+    msg += f"L2 list: {l2[:10]}" + chr(10)
+    msg += f"referral_map size total: {len(referral_map)}" + chr(10)
+    sample = list(referral_map.items())[:10]
+    msg += f"Sample (user->referrer): {sample}"
+    await update.message.reply_text(msg[:4000])
 
 
 
@@ -8329,6 +8351,7 @@ def main():
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             app.add_handler(CommandHandler("user_refs", user_refs_cmd))
             app.add_handler(CommandHandler("ref_date", ref_date_cmd))
+            app.add_handler(CommandHandler("debug_refs", debug_refs_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
