@@ -1,4 +1,4 @@
-print("V66 FINAL - PLAN DISPLAY FIX + WALLET CHECK + RE-REFERRAL - 2026-08-26 15:30 IST")
+print("V67 FINAL - VIP DISPLAY FIX + MISSING COMMISSION FIX - 2026-08-26 15:35 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -6141,10 +6141,21 @@ async def user_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
                 plan = _get_user_plan_record(mid)
                 if plan:
-                    pname = plan.get('name','Free')
-                    # Show price if available
-                    if 'price' in plan:
-                        pname = f"{pname} ₹{plan.get('price')}"[:25]
+                    raw_name = str(plan.get('name') or plan.get('plan_name') or 'Free')
+                    # Fix: if name is Free but price exists, it's actually VIP
+                    price_val = plan.get('price') or plan.get('plan_price') or 0
+                    if raw_name.lower()=='free' and float(price_val or 0)>=9999:
+                        raw_name = f"VIP ₹{int(price_val)}"
+                        pname = raw_name
+                    else:
+                        pname = raw_name
+                        if 'price' in plan and '₹' not in raw_name and float(price_val or 0)>0 and raw_name.lower()!='free':
+                            pname = f"{pname} ₹{int(float(price_val))}"[:25]
+                    # If still Free, check user_plans directly for actual name
+                    if pname.lower()=='free':
+                        p2 = user_plans.get(str(mid)) or user_plans.get(mid) or {}
+                        if isinstance(p2, dict) and p2.get('name','Free').lower()!='free':
+                            pname = p2.get('name','Free')
                 else:
                     # Fallback check user_plans directly with str key
                     p2 = user_plans.get(str(mid)) or user_plans.get(mid) or {}
@@ -6307,6 +6318,56 @@ async def get_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg[:4000])
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
+
+
+async def add_missing_commission_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /add_plan_commission <source_user_id> <referrer_id>\nExample: /add_plan_commission 8709635130 1101323233\nThis will credit 10% L1 and 5% L2 for VIP plan")
+        return
+    try:
+        src = int(context.args[0])
+        ref = int(context.args[1])
+        plan = _get_user_plan_record(src)
+        if not plan:
+            await update.message.reply_text(f"No plan found for {src}. Activate plan first!")
+            return
+        price = float(plan.get('price',0) or plan.get('plan_price',0) or 0)
+        if price==0:
+            # try to get from support_plans_db
+            name = str(plan.get('name','') or plan.get('plan_name',''))
+            # default VIP 9999
+            if '9999' in name or 'vip' in name.lower():
+                price=9999
+            else:
+                price=1000
+        # L1 commission 10%
+        l1_pct = 10.0
+        l2_pct = 5.0
+        # Check if already credited
+        ledger = referral_commission_ledger.get(ref) or referral_commission_ledger.get(str(ref)) or []
+        already = any(int(e.get('source_uid',-1) or -1)==src and str(e.get('type'))=='plan' for e in ledger)
+        if already:
+            await update.message.reply_text(f"Plan commission already exists for {src} -> {ref}. Use /ledger {ref} to check.")
+            return
+        amt_l1 = price * l1_pct / 100.0
+        add_referral_commission(ref, amt_l1, "plan", 1, src, f"L1 plan activation - {plan.get('name','VIP')} - MANUAL FIX", source_amount=price)
+        # L2
+        parent_of_ref = referral_map.get(ref) or referral_map.get(str(ref))
+        if parent_of_ref:
+            try:
+                parent_of_ref = int(parent_of_ref)
+                amt_l2 = price * l2_pct / 100.0
+                add_referral_commission(parent_of_ref, amt_l2, "plan", 2, src, f"L2 plan activation - {plan.get('name','VIP')} - MANUAL FIX", source_amount=price)
+            except:
+                pass
+        save_data()
+        await update.message.reply_text(f"✅ Added missing commission!\nSrc: {src} Price: Rs{price}\nL1 {ref}: +Rs{amt_l1} (10%)\nL2 {parent_of_ref}: +Rs{price*l2_pct/100.0} (5%) if exists\nCheck /get_balance {ref}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
 
 async def ledger_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -8591,6 +8652,7 @@ def main():
             app.add_handler(CommandHandler("add_balance", add_balance_cmd))
             app.add_handler(CommandHandler("get_balance", get_balance_cmd))
             app.add_handler(CommandHandler("ledger", ledger_cmd))
+            app.add_handler(CommandHandler("add_plan_commission", add_missing_commission_cmd))
             app.add_handler(CommandHandler("check_wallet", check_wallet_cmd))
             app.add_handler(CommandHandler("wallet_info", get_balance_cmd))
             app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
