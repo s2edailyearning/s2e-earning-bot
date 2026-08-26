@@ -1780,17 +1780,7 @@ def mark_task_completed_with_interval(uid, task_id):
         # earning ₹5 per task
         reward = 5
         add_today_task_earning(uid, reward, day=today)
-        # referral commission
-        try:
-            for ref_id, level in get_effective_referral_levels(uid):
-                if level == 1:
-                    pct = float(L1_TASK_COMMISSION_PERCENT) if 'L1_TASK_COMMISSION_PERCENT' in globals() else 0.10
-                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 1, uid, f"L1 task commission from {uid}", source_amount=reward)
-                elif level == 2:
-                    pct = float(L2_TASK_COMMISSION_PERCENT) if 'L2_TASK_COMMISSION_PERCENT' in globals() else 0.05
-                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 2, uid, f"L2 task commission from {uid}", source_amount=reward)
-        except Exception as _ref_e:
-            print(f"Referral commission fail {_ref_e}")
+        # Referral commission is paid by the approval flow below, exactly once per task.
         print(f"V31 Task {task_id} completed for {uid} - count {daily_task_count[uid][today]} - earning {reward}")
     except Exception as _e:
         print(f"V31 increment fail {_e}")
@@ -1836,7 +1826,7 @@ def get_balance(uid):
     task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
     return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + float(promo_earnings_db.get(uid,0) or 0), 2)
 
-def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
+def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None, source_task_id=None):
     """Credit referral commission INSTANTLY - No pending, direct to wallet."""
     try:
         amount = float(amount)
@@ -1854,6 +1844,7 @@ def add_referral_commission(referrer_uid, amount, commission_type, level=None, s
         "amount": round(amount, 2),
         "description": description,
         "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
+        "source_task_id": source_task_id,
         "status": "settled",  # INSTANT - was pending for task before
     }
     referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
@@ -2016,11 +2007,12 @@ def get_referral_chain(uid):
             elif level == 2:
                 l2.append(member_id)
     return list(dict.fromkeys(l1)), list(dict.fromkeys(l2))
-def record_task_referral_commissions(source_uid, task_reward):
-    """Pay configurable L1/L2 percentages from the completed task reward.
+def record_task_referral_commissions(source_uid, task_reward, task_id=None):
+    """Pay L1/L2 task commission exactly once per source task.
 
-    Uses the deletion-safe referral resolver so removing an intermediate
-    referrer never sends future commission to a deleted user.
+    Uses the deletion-safe referral resolver.  ``task_id`` is stored in the
+    ledger so multiple tasks with the same reward on the same day cannot
+    accidentally pay referral commission twice.
     """
     try:
         reward = float(task_reward or 0)
@@ -2029,8 +2021,24 @@ def record_task_referral_commissions(source_uid, task_reward):
     if reward <= 0:
         return
     for ref_id, level in get_effective_referral_levels(source_uid):
+        if task_id is not None:
+            existing = referral_commission_ledger.get(ref_id) or referral_commission_ledger.get(str(ref_id)) or []
+            duplicate = any(
+                str(e.get("type")) == "task"
+                and str(e.get("source_uid")) == str(source_uid)
+                and str(e.get("source_task_id")) == str(task_id)
+                and int(e.get("level", 0) or 0) == int(level)
+                for e in existing
+            )
+            if duplicate:
+                print(f"Referral task commission already credited: {source_uid} task {task_id} L{level}")
+                continue
         pct = float(L1_TASK_COMMISSION_PERCENT) if level == 1 else float(L2_TASK_COMMISSION_PERCENT)
-        add_referral_commission(ref_id, reward * pct / 100.0, "task", level, source_uid, f"L{level} task commission from {source_uid}", source_amount=reward)
+        add_referral_commission(
+            ref_id, reward * pct / 100.0, "task", level, source_uid,
+            f"L{level} task commission from {source_uid}",
+            source_amount=reward, source_task_id=task_id
+        )
 
 def get_tasks(uid):
     today = str(get_ist_today())
@@ -2391,6 +2399,24 @@ def team_referral_link(code, bot_username=None):
         return f"https://t.me/YOUR_BOT?start={code}"
     return f"https://t.me/{str(bot_username).lstrip('@')}?start={code}"
 
+def sync_referral_count(referrer_uid):
+    """Keep the legacy referrals_db count synchronized with referral_map."""
+    try:
+        referrer_uid = int(referrer_uid)
+    except Exception:
+        return
+    children = set()
+    for child, parent in referral_map.items():
+        try:
+            child_i = int(child)
+            parent_i = int(parent)
+        except Exception:
+            continue
+        if parent_i == referrer_uid:
+            children.add(child_i)
+    referrals_db[referrer_uid] = len(children)
+
+
 async def send_member_details_to_channel(context, uid, event="REGISTERED"):
     """Send a newly completed member's details to the configured admin channel."""
     try:
@@ -2680,6 +2706,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     referral_map[uid] = ref_id
                     referral_map[str(uid)] = ref_id
+                    sync_referral_count(ref_id)
                     print(f"Referral locked: {uid} -> {ref_id}, map size now {len(referral_map)}")
         else:
             print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
@@ -2872,6 +2899,9 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
+    parent_uid = referral_map.get(uid) or referral_map.get(str(uid))
+    if parent_uid:
+        sync_referral_count(parent_uid)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
@@ -2897,6 +2927,9 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
+    parent_uid = referral_map.get(uid) or referral_map.get(str(uid))
+    if parent_uid:
+        sync_referral_count(parent_uid)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
@@ -4314,7 +4347,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if isinstance(status_data, dict) and status_data.get('status') == 'pending_verification':
                 mark_task_completed_with_interval(target_id, tid)
                 break
-        record_task_referral_commissions(target_id, reward)
+        record_task_referral_commissions(target_id, reward, task_id=locals().get("tid"))
         await update.message.reply_text(f"✅ Approved {target_id} +Rs{reward}")
         try:
             _, daily_limit, _ = check_daily_limits(target_id)
@@ -5220,7 +5253,7 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
                     if uid in missed_tasks_db:
                         missed_tasks_db[uid]=[t for t in missed_tasks_db[uid] if int(t.get('id',-1))!=int(tid)]
                     break
-        record_task_referral_commissions(uid, reward)
+        record_task_referral_commissions(uid, reward, task_id=task_id)
         save_data()
         await q.message.reply_text(f"✅ Approved {uid} +Rs{reward} - Task {task_id or ''}")
         try:
@@ -6542,7 +6575,7 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
                         user_task_status[uid][tid] = {'status': 'completed', 'completed_at': get_ist_now(), 'reward': reward, 'approved_at': get_ist_now()}
                         break
-            record_task_referral_commissions(uid, reward)
+            record_task_referral_commissions(uid, reward, task_id=task_id)
             pending_daily.pop(key, None)
             pending_daily.pop(str(key), None)
             approved_count += 1
@@ -6589,7 +6622,7 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                                 missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(tid)]
                         except:
                             pass
-                    record_task_referral_commissions(uid, reward)
+                    record_task_referral_commissions(uid, reward, task_id=tid)
                     approved_count += 1
                     details.append(f"{uid} (T{tid} ₹{reward:g})")
                     try:
