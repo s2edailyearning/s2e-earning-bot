@@ -168,7 +168,7 @@ def _safe_time(t):
 
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+from telegram.ext import Application, ApplicationHandlerStop, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Final HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
@@ -398,48 +398,112 @@ def keep_alive_pinger():
             print(f"Keep-alive {e}")
             time.sleep(60)
 
+def get_task_notification_seconds():
+    """Return the configured pre-task notification time in seconds."""
+    try:
+        value = int((task_notification_settings_db or {}).get("seconds", 5))
+    except Exception:
+        value = 5
+    return max(1, min(value, 3600))
+
+async def set_task_notify_cmd(update, context):
+    """Admin command: /set_task_notify 5 (seconds before task opens)."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            f"⏰ Current task notification: {get_task_notification_seconds()} seconds before open.\n\n"
+            "Usage: /set_task_notify <seconds>\nExample: /set_task_notify 5\n"
+            "You can use 5, 10, 30, 60, etc."
+        )
+        return
+    try:
+        seconds = int(context.args[0])
+        if seconds < 1 or seconds > 3600:
+            raise ValueError
+    except Exception:
+        await update.message.reply_text("❌ Enter seconds between 1 and 3600. Example: /set_task_notify 5")
+        return
+    task_notification_settings_db["seconds"] = seconds
+    save_data()
+    await update.message.reply_text(f"✅ Task notification timing set to {seconds} seconds before task opens.")
+
+
+def _task_can_be_sent_to_user(task, uid):
+    """Notification eligibility must match the same active/plan audience rules as Daily Task."""
+    try:
+        uid = int(uid)
+    except Exception:
+        return False
+    if uid <= 0 or is_team_uid(uid):
+        return False
+    if is_removed_user(uid) or uid in banned_users:
+        return False
+    rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+    if not _user_is_registered(rec):
+        return False
+    try:
+        return any(int(t.get("id", -1)) == int(task.get("id", -2)) for t in get_tasks_for_today_filtered(uid))
+    except Exception:
+        return False
+
+
 def notification_thread_func():
-    """Send a reliable 1-minute-before task notification from the live polling loop."""
+    """Send a task notification shortly before opening, with a direct Complete button."""
     import time as t2
     while True:
         try:
-            t2.sleep(10)
+            t2.sleep(1)
             if not bot_application or not bot_event_loop or bot_event_loop.is_closed():
                 continue
             now = get_ist_now()
+            lead = get_task_notification_seconds()
             for task in get_tasks_for_today():
                 try:
-                    open_dt = datetime.combine(get_ist_today(), _safe_time(task.get('open_time_obj') or task.get('open_time')) or task['open_time_obj'], tzinfo=IST)
+                    open_time = _safe_time(task.get('open_time_obj') or task.get('open_time'))
+                    if not open_time:
+                        continue
+                    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
                 except Exception:
                     continue
                 diff = (open_dt - now).total_seconds()
-                notify_key = f"{get_ist_today()}:{task.get('id')}"
-                if 50 <= diff <= 75 and notify_key not in notified_tasks_30sec:
+                notify_key = f"{get_ist_today()}:{task.get('id')}:{lead}"
+                # Send once during the lead-time window. The 1-second polling avoids
+                # missing a 5-second notification because of a 10-second sleep.
+                if 0 <= diff <= lead and notify_key not in notified_tasks_30sec:
                     notified_tasks_30sec.add(notify_key)
-                    msg = (
-                        f"⏰ TASK STARTING IN 1 MINUTE!\n\n"
-                        f"Task {task.get('task_number', '?')}: {task.get('title', '')}\n"
-                        f"🕐 Opens: {task.get('open_time', '')}\n"
-                        f"💰 Reward: ₹{task.get('reward', 5)}\n\n"
-                        "Get ready and complete the task within the available time."
-                    )
-                    async def send_notifications():
+                    async def send_notifications(_task=task, _lead=lead):
                         sent = 0
                         for uid in list(users_db.keys()):
                             try:
-                                await bot_application.bot.send_message(chat_id=int(uid), text=msg)
+                                if not _task_can_be_sent_to_user(_task, uid):
+                                    continue
+                                reward = get_task_reward_for_user(_task, int(uid))
+                                link = str(_task.get("link") or "").strip()
+                                if link:
+                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", url=link)]])
+                                else:
+                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Open Task", callback_data=f"daily_open_{int(_task.get('id'))}")]])
+                                msg = (
+                                    f"⏰ TASK STARTING IN {_lead} SECONDS!\n\n"
+                                    f"Task {_task.get('task_number', '?')}: {_task.get('title', '')}\n"
+                                    f"🕐 Opens: {_task.get('open_time', '')}\n"
+                                    f"💰 Reward: ₹{reward}\n\n"
+                                    "Tap the button below when the task opens."
+                                )
+                                await bot_application.bot.send_message(chat_id=int(uid), text=msg, reply_markup=kb)
                                 sent += 1
                             except Exception as e:
-                                print(f"1-min notification failed for {uid}: {e}")
-                        print(f"1-min task notification sent for task {task.get('id')} to {sent} users")
+                                print(f"task notification failed for {uid}: {e}")
+                        print(f"Task notification ({_lead}s) sent for task {_task.get('id')} to {sent} users")
                     try:
                         future = asyncio.run_coroutine_threadsafe(send_notifications(), bot_event_loop)
                         future.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
                     except Exception as e:
-                        print(f"1-min notification scheduling error: {e}")
+                        print(f"task notification scheduling error: {e}")
         except Exception as e:
             print(f"Notification thread error: {e}")
-            t2.sleep(5)
+            t2.sleep(2)
 
 
 async def _show_plan_purchase(update, context, plan_type):
@@ -866,6 +930,20 @@ referral_level_overrides = {}
 referral_codes_db = {}
 referral_code_to_uid = {}
 pending_referrals = {}
+
+# ===== PERMANENT VIRTUAL TEAM ACCOUNTS =====
+# Five internal team accounts. They are not Telegram accounts; they are
+# permanent ledger identities used for referral/team tracking.
+TEAM_UIDS = {
+    "TEAM01": -9000000001,
+    "TEAM02": -9000000002,
+    "TEAM03": -9000000003,
+    "TEAM04": -9000000004,
+    "TEAM05": -9000000005,
+}
+team_accounts_db = {}
+TEAM_MEMBER_DETAILS_CHANNEL = os.getenv("MEMBER_DETAILS_CHANNEL_ID", "")
+
 referral_earnings = {}
 # Task/product referral commissions accrue during the day and settle the next day.
 referral_pending_earnings = {}
@@ -884,6 +962,8 @@ scheduled_tasks_db = []
 scheduled_task_counter = 1
 user_task_status = {}
 task_notifications_sent = set()
+# Task notification timing: default 5 seconds before opening. Admin can change with /set_task_notify <seconds>.
+task_notification_settings_db = {"seconds": 5}
 skip_db = {}
 skip_reasons_list = ["Already have account", "Not interested", "Technical issue", "Already completed", "Don't have required documents", "Other - Type reason"]
 promo_campaigns_db = []
@@ -1022,7 +1102,7 @@ def _restore_all_int_keys_after_load():
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
         "withdraw_requests", "withdraw_history", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
-        "task_open_time", "user_task_status", "skip_db",
+        "task_open_time", "user_task_status", "task_notification_settings_db", "skip_db",
         "promo_earnings_db", "promo_views_db", "promo_pending",
         "product_promo_pending", "product_promo_approved", "admin_names_db",
         "pending_plan_purchases", "support_plans_db", "task_images_db",
@@ -1059,9 +1139,9 @@ def save_data():
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
-            "user_task_status", "task_notifications_sent", "skip_db",
+            "user_task_status", "task_notifications_sent", "task_notification_settings_db", "skip_db",
             "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
-            "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db",
+            "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "support_plan_image_file_id", "pending_plans",
             "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT",
@@ -2041,7 +2121,57 @@ def main_menu():
         [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
     ])
 
+def is_removed_user(uid):
+    """Return True when an account is in the admin deleted-user tombstone.
+
+    Deleted users must not regain access simply by using /menu or an old
+    inline-menu button. They can still use /start to complete a fresh
+    registration/rejoin flow; successful registration removes the tombstone.
+    """
+    try:
+        return (uid in deleted_users_db) or (str(uid) in deleted_users_db)
+    except Exception:
+        return False
+
+async def removed_user_guard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Block all normal menu callbacks for permanently removed users.
+
+    Registration callbacks are intentionally exempt so a removed user can
+    start a fresh registration through /start and regain access only after
+    completing registration.
+    """
+    q = update.callback_query
+    if not q:
+        return
+    uid = q.from_user.id
+    data = str(q.data or '')
+    if is_admin(uid) or not is_removed_user(uid):
+        return
+    if data == 'check_joined' or data.startswith('reg_'):
+        return
+    try:
+        await q.answer()
+    except Exception:
+        pass
+    try:
+        await q.message.reply_text(
+            "🚫 You have been removed from S2E.\n\n"
+            "You cannot access tasks, wallet, referrals or other menu options.\n"
+            "Please contact admin if you want to rejoin."
+        )
+    except Exception:
+        pass
+    raise ApplicationHandlerStop
+
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid) and is_removed_user(uid):
+        await update.message.reply_text(
+            "🚫 You have been removed from S2E.\n\n"
+            "You cannot access tasks or the menu.\n"
+            "Please contact admin if you want to rejoin."
+        )
+        return
     await update.message.reply_text("🏠 Main Menu:", reply_markup=main_menu())
 
 async def check_user_in_channel(user_id, context):
@@ -2095,6 +2225,10 @@ def _resolve_referral_arg(arg):
         if raw.isdigit():
             return int(raw)  # backward compatibility for old referral links
         code = raw.upper()
+        # Permanent team referral codes TEAM01..TEAM05 resolve directly.
+        if code in TEAM_UIDS:
+            ensure_team_accounts()
+            return TEAM_UIDS[code]
         owner = referral_code_to_uid.get(code)
         if owner is None:
             # JSON/Supabase may have loaded reverse-map keys/values as strings.
@@ -2112,6 +2246,299 @@ def _resolve_referral_arg(arg):
             return owner
     except Exception:
         return None
+
+def is_team_uid(uid):
+    try:
+        return int(uid) in set(TEAM_UIDS.values())
+    except Exception:
+        return False
+
+def team_code_for_uid(uid):
+    try:
+        uid = int(uid)
+    except Exception:
+        return None
+    for code, tid in TEAM_UIDS.items():
+        if int(tid) == uid:
+            return code
+    return None
+
+def ensure_team_accounts():
+    """Create/repair the five permanent team identities without touching members."""
+    global team_accounts_db
+    if not isinstance(team_accounts_db, dict):
+        team_accounts_db = {}
+    for code, tid in TEAM_UIDS.items():
+        rec = team_accounts_db.setdefault(code, {})
+        rec.setdefault("team_code", code)
+        rec.setdefault("uid", tid)
+        rec.setdefault("assigned_to", None)
+        rec.setdefault("assigned_name", "Unassigned")
+        rec.setdefault("created_at", str(get_ist_today()))
+        # Virtual account profile. Do not put these into /userlist.
+        users_db.setdefault(tid, {
+            "name": code,
+            "username": code,
+            "telegram_id": tid,
+            "registration_complete": True,
+            "is_team_account": True,
+            "joined": str(get_ist_today()),
+        })
+        users_db[tid]["is_team_account"] = True
+        users_db[tid]["name"] = code
+        users_db[tid]["username"] = code
+        referral_codes_db[tid] = code
+        referral_code_to_uid[code] = tid
+    return team_accounts_db
+
+def team_direct_referral_count(team_uid):
+    count = 0
+    for child, parent in list(referral_map.items()):
+        try:
+            if int(parent) == int(team_uid) and int(child) != int(team_uid):
+                count += 1
+        except Exception:
+            continue
+    return count
+
+def team_info(code):
+    code = str(code or "").upper()
+    return team_accounts_db.get(code) if isinstance(team_accounts_db, dict) else None
+
+def team_uid(code):
+    return TEAM_UIDS.get(str(code or "").upper())
+
+def team_referral_link(code, bot_username=None):
+    code = str(code or "").upper()
+    if not bot_username:
+        return f"https://t.me/YOUR_BOT?start={code}"
+    return f"https://t.me/{str(bot_username).lstrip('@')}?start={code}"
+
+async def send_member_details_to_channel(context, uid, event="REGISTERED"):
+    """Send a newly completed member's details to the configured admin channel."""
+    try:
+        ch = TEAM_MEMBER_DETAILS_CHANNEL or _load_channel_config().get("member_details_channel")
+        if not ch:
+            print("Member details channel not configured; use /set_member_details_channel")
+            return False
+        user = users_db.get(uid) or users_db.get(str(uid)) or {}
+        plan = _get_user_plan_record(uid) or {}
+        plan_name = plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Free / No Plan"
+        username = user.get("username") or "Not set"
+        if username != "Not set" and not str(username).startswith("@"):
+            username = "@" + str(username)
+        parent = referral_map.get(uid) or referral_map.get(str(uid))
+        parent_label = team_code_for_uid(parent) if parent is not None else None
+        if parent_label:
+            ref_display = parent_label
+        elif parent:
+            puser = users_db.get(parent) or users_db.get(str(parent)) or {}
+            ref_display = f"{puser.get('name','Unknown')} ({puser.get('username','Not set')})"
+        else:
+            ref_display = "Direct / None"
+        msg = (
+            f"🆕 NEW MEMBER — {event}\n\n"
+            f"👤 Name: {user.get('name') or 'N/A'}\n"
+            f"🆔 User ID: {uid}\n"
+            f"🔹 Username: {username}\n"
+            f"⚧ Gender: {user.get('gender') or 'N/A'}\n"
+            f"🎂 DOB/Age: {user.get('dob') or 'N/A'} / {user.get('age') or 'N/A'}\n"
+            f"📱 Mobile: {user.get('mobile') or 'N/A'}\n"
+            f"💳 UPI: {user.get('upi') or 'N/A'}\n"
+            f"📍 Pincode: {user.get('pincode') or 'N/A'}\n"
+            f"💼 Profession: {user.get('profession') or 'N/A'}\n"
+            f"💎 Plan: {plan_name}\n"
+            f"🔗 Referred By: {ref_display}\n"
+            f"📅 Joined: {user.get('joined') or user.get('reg_date') or get_ist_today()}"
+        )
+        await context.bot.send_message(chat_id=ch, text=msg[:4000])
+        return True
+    except Exception as e:
+        print(f"member details channel send error: {e}")
+        return False
+
+async def set_member_details_channel_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        current = TEAM_MEMBER_DETAILS_CHANNEL or _load_channel_config().get("member_details_channel")
+        await update.message.reply_text(
+            f"Current Member Details Channel: {current or 'Not set'}\n\n"
+            "Usage: /set_member_details_channel <channel_id or @username>\n"
+            "Example: /set_member_details_channel -1001234567890"
+        )
+        return
+    ch = context.args[0]
+    save_channel_config(member_details=ch)
+    globals()["TEAM_MEMBER_DETAILS_CHANNEL"] = ch
+    try:
+        await context.bot.send_message(chat_id=ch, text="✅ S2E Bot Connected! New registered member details will come here.")
+        await update.message.reply_text(f"✅ Member Details Channel Set: {ch}")
+    except Exception as e:
+        await update.message.reply_text(f"Channel saved, but test send failed: {e}\nMake bot admin with permission to post messages.")
+
+async def teamlist_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    ensure_team_accounts()
+    lines = ["👥 PERMANENT TEAM IDS", ""]
+    for code, tid in TEAM_UIDS.items():
+        rec = team_accounts_db.get(code, {})
+        assigned = rec.get("assigned_name") or "Unassigned"
+        aid = rec.get("assigned_to") or "-"
+        l1 = team_direct_referral_count(tid)
+        l2 = len(get_referral_chain(tid)[1])
+        lines.append(f"🔹 {code}\nID: {tid}\nAssigned: {assigned} ({aid})\nL1: {l1}/30 | L2: {l2}\nBalance: ₹{get_balance(tid):.2f}\n")
+    await update.message.reply_text("\n".join(lines)[:4000])
+
+async def teamdetails_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /teamdetails TEAM01")
+        return
+    code = str(context.args[0]).upper()
+    ensure_team_accounts()
+    tid = team_uid(code)
+    if tid is None:
+        await update.message.reply_text("❌ Invalid team. Use TEAM01 to TEAM05.")
+        return
+    rec = team_accounts_db.get(code, {})
+    l1, l2 = get_referral_chain(tid)
+    plan = _get_user_plan_record(tid) or {}
+    plan_name = plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Free / No Plan"
+    msg = (
+        f"👥 {code} TEAM DETAILS\n\n"
+        f"🆔 Team ID: {tid}\n"
+        f"👤 Assigned To: {rec.get('assigned_name') or 'Unassigned'}\n"
+        f"📱 Assigned User ID: {rec.get('assigned_to') or '-'}\n"
+        f"💎 Plan: {plan_name}\n"
+        f"💰 Wallet: ₹{get_balance(tid):.2f}\n"
+        f"📋 Task Earnings: ₹{sum(float(v or 0) for v in (daily_task_earnings.get(tid, {}) or {}).values()):.2f}\n"
+        f"🔗 Referral Earnings: ₹{float(referral_earnings.get(tid,0) or 0):.2f}\n"
+        f"📢 Promo Earnings: ₹{float(promo_earnings_db.get(tid,0) or 0):.2f}\n\n"
+        f"🟢 L1 Members: {len(l1)}/30\n"
+        f"🔵 L2 Members: {len(l2)}"
+    )
+    await update.message.reply_text(msg)
+
+async def assign_team_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /assign_team TEAM01 <telegram_user_id>")
+        return
+    code = str(context.args[0]).upper()
+    try:
+        assigned_uid = int(context.args[1])
+    except Exception:
+        await update.message.reply_text("❌ Invalid Telegram user ID.")
+        return
+    ensure_team_accounts()
+    if code not in TEAM_UIDS:
+        await update.message.reply_text("❌ Invalid team. Use TEAM01 to TEAM05.")
+        return
+    user = users_db.get(assigned_uid) or users_db.get(str(assigned_uid)) or {}
+    name = user.get("name") or f"User {assigned_uid}"
+    team_accounts_db[code]["assigned_to"] = assigned_uid
+    team_accounts_db[code]["assigned_name"] = name
+    team_accounts_db[code]["assigned_at"] = get_ist_now()
+    save_data()
+    await update.message.reply_text(f"✅ {code} assigned to {name} ({assigned_uid}).\nReferral tree and members are unchanged.")
+
+async def reset_team_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /reset_team TEAM01")
+        return
+    code = str(context.args[0]).upper()
+    ensure_team_accounts()
+    tid = team_uid(code)
+    if tid is None:
+        await update.message.reply_text("❌ Invalid team. Use TEAM01 to TEAM05.")
+        return
+    # Reset only the team's own financial/work counters. NEVER touch referral_map
+    # or any member's data, tasks, plans, or earnings.
+    for db_name in ("tasks_db", "daily_done", "bonus_balance", "referral_earnings", "promo_earnings_db", "promo_views_db", "daily_task_count", "daily_task_earnings", "withdraw_requests", "withdraw_history", "withdraw_done_date", "last_withdraw_date_db", "pending_daily", "referral_commission_ledger", "referral_pending_earnings", "daily_done"):
+        db = globals().get(db_name)
+        if isinstance(db, dict):
+            db.pop(tid, None); db.pop(str(tid), None)
+    save_data()
+    await update.message.reply_text(
+        f"✅ {code} RESET DONE.\n\n"
+        "💰 Team balance/income statistics reset to ₹0.\n"
+        "👥 All team members remain unchanged.\n"
+        "📋 Their tasks/work/referrals continue normally.\n"
+        "🔗 Future commissions will still go to this same team ID."
+    )
+
+async def teamlink_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /teamlink TEAM01")
+        return
+    code = str(context.args[0]).upper()
+    ensure_team_accounts()
+    if code not in TEAM_UIDS:
+        await update.message.reply_text("❌ Invalid team. Use TEAM01 to TEAM05.")
+        return
+    try:
+        me = await context.bot.get_me()
+        link = team_referral_link(code, me.username)
+    except Exception:
+        link = team_referral_link(code)
+    await update.message.reply_text(f"🔗 {code} TEAM REFERRAL LINK\n\n{link}\n\nShare this link to add direct members under {code}.\nDirect limit: 30 members.")
+
+async def my_team_cmd(update, context):
+    uid = update.effective_user.id
+    ensure_team_accounts()
+    owned = []
+    for code, rec in team_accounts_db.items():
+        try:
+            if int(rec.get("assigned_to")) == int(uid):
+                owned.append(code)
+        except Exception:
+            pass
+    if not owned:
+        await update.message.reply_text("❌ No Team ID is assigned to your Telegram account.")
+        return
+    lines = []
+    for code in owned:
+        tid = TEAM_UIDS[code]
+        l1, l2 = get_referral_chain(tid)
+        plan = _get_user_plan_record(tid) or {}
+        plan_name = plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Free / No Plan"
+        lines.append(
+            f"👥 {code} TEAM\n\n"
+            f"💎 Plan: {plan_name}\n"
+            f"💰 Wallet: ₹{get_balance(tid):.2f}\n"
+            f"🔗 Referral Earnings: ₹{float(referral_earnings.get(tid,0) or 0):.2f}\n"
+            f"📢 Promo Earnings: ₹{float(promo_earnings_db.get(tid,0) or 0):.2f}\n"
+            f"🟢 L1: {len(l1)}/30\n"
+            f"🔵 L2: {len(l2)}"
+        )
+    await update.message.reply_text("\n\n".join(lines)[:4000])
+
+async def teamplan_cmd(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /teamplan TEAM01 <plan_id>")
+        return
+    code = str(context.args[0]).upper()
+    try: pid = int(context.args[1])
+    except Exception:
+        await update.message.reply_text("❌ Invalid plan ID."); return
+    ensure_team_accounts(); tid = team_uid(code)
+    plan = next((p for p in support_plans_db if int(p.get("id",-1)) == pid), None)
+    if tid is None or not plan:
+        await update.message.reply_text("❌ Invalid team or plan."); return
+    expiry = get_ist_today() + timedelta(days=int(plan.get("duration", plan.get("validity_days",60)) or 60))
+    user_plans[tid] = {"plan_id": pid, "plan": str(plan.get("name","Plan")).lower(), "plan_name": str(plan.get("name","Plan")), "price": int(plan.get("price",0) or 0), "daily_limit": int(plan.get("daily_limit", plan.get("daily_task_limit",10)) or 10), "earnings_limit": int(plan.get("earnings_limit", plan.get("total_earning_cap",0)) or 0), "date": str(get_ist_today()), "expiry": str(expiry), "status": "active"}
+    save_data()
+    await update.message.reply_text(f"✅ {code} plan set to {plan.get('name')} (ID {pid}).")
 
 def _touch_telegram_user(update):
     """Keep the admin copy of the Telegram username current without showing IDs publicly."""
@@ -2158,7 +2585,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         ref_id = _resolve_referral_arg(args[0])
         if ref_id is not None and ref_id != uid and ref_id not in banned_users:
-            referral_map[uid] = ref_id
+            if is_team_uid(ref_id) and team_direct_referral_count(ref_id) >= MAX_DIRECT_REFERRALS:
+                await update.message.reply_text("⚠️ This Team referral has reached its 30 direct-member limit. You can still register, but this referral link will not be assigned.")
+            else:
+                referral_map[uid] = ref_id
 
     try:
         save_data()
@@ -2341,7 +2771,13 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['registration_complete'] = True
     users_db[uid]['username'] = str(getattr(update.effective_user, 'username', '') or '').lstrip('@')
     users_db[uid]['telegram_id'] = uid
+    deleted_users_db.pop(uid, None)
+    deleted_users_db.pop(str(uid), None)
     save_data()
+    try:
+        await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
+    except Exception as _md_e:
+        print(f"member details send after registration failed: {_md_e}")
     await update.message.reply_text(f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n💰 Earn: Rs10 per referral + 10% plan commission\n🏪 Promo: Earn Rs10 per 100 status views!\n📋 Tasks: 0/15 | Withdraw Min Rs200\n\nClick /menu for options!", reply_markup=main_menu())
     return ConversationHandler.END
 
@@ -2360,7 +2796,13 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['registration_complete'] = True
     users_db[uid]['username'] = str(getattr(q.from_user, 'username', '') or '').lstrip('@')
     users_db[uid]['telegram_id'] = uid
+    deleted_users_db.pop(uid, None)
+    deleted_users_db.pop(str(uid), None)
     save_data()
+    try:
+        await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
+    except Exception as _md_e:
+        print(f"member details send after registration callback failed: {_md_e}")
     await q.message.reply_text(
         f"✅ Registration Done! Welcome {users_db[uid]['name']}!\n\n"
         f"Gender: {users_db[uid].get('gender','-')}\nProfession: {value}\n\n"
@@ -2396,7 +2838,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += f"/add_task open close next title link reward\n"
     msg += f"/set_task_image <id> - Then send poster image!\n"
     msg += f"Example: /add_task 12:45PM 15min 1:03PM Task 3 Google Review https://maps.app.goo.gl/xxx 5\nThen /set_task_image 1 + send TASK 3 poster!\n\n"
-    msg += f"/list_tasks /list_promos /skipped all /warnings /banned"
+    msg += f"/list_tasks /list_promos /skipped all /warnings /banned\n/set_task_notify <seconds>  (current: {get_task_notification_seconds()}s)"
     
     await update.message.reply_text(msg[:4000], reply_markup=admin_panel_keyboard())
 
@@ -5409,6 +5851,8 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_items = []
         for raw_uid, data in users_db.items():
             data = data if isinstance(data, dict) else {}
+            if data.get("is_team_account") or is_team_uid(raw_uid):
+                continue
             if not _user_is_registered(data):
                 continue
             try:
@@ -5646,7 +6090,7 @@ def get_join_channel():
 def get_join_channel_link():
     return _load_channel_config().get('join_link') or JOIN_CHANNEL_LINK or CHANNEL_LINK
 
-def save_channel_config(screenshot=None, withdraw=None, join=None, join_link=None):
+def save_channel_config(screenshot=None, withdraw=None, join=None, join_link=None, member_details=None):
     try:
         cfg = _load_channel_config()
         if screenshot is not None:
@@ -5657,6 +6101,8 @@ def save_channel_config(screenshot=None, withdraw=None, join=None, join_link=Non
             cfg['join_channel'] = join
         if join_link is not None:
             cfg['join_link'] = join_link
+        if member_details is not None:
+            cfg['member_details_channel'] = member_details
         with open(os.path.join(DATA_DIR, "channel_config.json"), 'w') as f:
             json.dump(cfg, f, indent=2)
         print(f"Channel config saved: {cfg}")
@@ -7038,6 +7484,7 @@ def main():
         print("✅ V4.12 Flask + Self-ping started in main()")
         init_supabase()
         load_data()
+        ensure_team_accounts()
     except Exception as e:
         print(f'Flask/Supabase start fail in main: {e}')
 
@@ -7086,6 +7533,7 @@ def main():
     print(" Starting bot polling IMMEDIATELY - No 120 sec sleep - FINAL! NameError Fixed!")
     _db_init()
     load_data()
+    ensure_team_accounts()
     normalize_support_plans()
     force_update_plans_to_new()
     save_data()
@@ -7449,6 +7897,7 @@ def main():
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("set_task_notify", set_task_notify_cmd))
             # Support Plans banner command. Photo handling is integrated into the
             # existing high-priority admin photo handler so normal task posters remain safe.
             app.add_handler(CommandHandler("set_support_image", set_support_image_cmd))
@@ -7462,6 +7911,12 @@ def main():
             app.add_handler(CommandHandler("warnings", warnings_cmd))
             app.add_handler(CommandHandler("banned", banned_cmd))
             app.add_handler(CommandHandler("unban", unban_cmd))
+            # Removed-user safety guard: deleted accounts must not be able to
+            # use old inline-menu buttons to reopen tasks/wallet/referrals.
+            # Registration callbacks remain exempt so /start can be used for a
+            # fresh re-registration flow.
+            app.add_handler(CallbackQueryHandler(removed_user_guard, pattern=r"^.*$"), group=-20)
+
             # V64 FIX: Register Upload Screenshot callback with highest priority.
             # This must be registered before other callback handlers so the button
             # always receives an immediate callback acknowledgement.
@@ -7527,6 +7982,14 @@ def main():
                 print(f"expiry job schedule fail {_e}")
             app.add_handler(CommandHandler("remove_user", remove_user_cmd))
             app.add_handler(CommandHandler("edit_user", edit_user_cmd))
+            app.add_handler(CommandHandler("set_member_details_channel", set_member_details_channel_cmd))
+            app.add_handler(CommandHandler("teamlist", teamlist_cmd))
+            app.add_handler(CommandHandler("teamdetails", teamdetails_cmd))
+            app.add_handler(CommandHandler("assign_team", assign_team_cmd))
+            app.add_handler(CommandHandler("reset_team", reset_team_cmd))
+            app.add_handler(CommandHandler("teamplan", teamplan_cmd))
+            app.add_handler(CommandHandler("teamlink", teamlink_cmd))
+            app.add_handler(CommandHandler("myteam", my_team_cmd))
             app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
