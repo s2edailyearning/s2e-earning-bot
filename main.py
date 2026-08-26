@@ -554,24 +554,13 @@ def notification_thread_func():
                                 if not _task_can_be_sent_to_user(_task, uid):
                                     continue
                                 reward = get_task_reward_for_user(_task, int(uid))
-                                # V52 FIX: Button must open Daily Task upload flow, not just external link
-                                # So user can upload screenshot after completing link task
                                 task_id = int(_task.get('id', 0) or 0)
                                 kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data=f"daily_open_{task_id}")]])
-                                # V53: Show time limit clearly to user
-                                wm = _task.get('window_minutes', 20)
-                                try:
-                                    wm_int = int(wm)
-                                except:
-                                    wm_int = 20
-                                close_t = _task.get('close_time','')
                                 msg = (
                                     f"⏰ TASK STARTING IN {_lead} SECONDS!\n\n"
                                     f"Task {_task.get('task_number', '?')}: {_task.get('title', '')}\n"
-                                    f"🕐 Start: {_task.get('open_time', '')} | End: {close_t}\n"
-                                    f"⏳ Time to complete: {wm_int} minutes\n"
+                                    f"🕐 Opens: {_task.get('open_time', '')}\n"
                                     f"💰 Reward: ₹{reward}\n\n"
-                                    f"⚠️ Complete within {wm_int} mins (by {close_t})!\n"
                                     "Tap the button below when the task opens."
                                 )
                                 await bot_application.bot.send_message(chat_id=int(uid), text=msg, reply_markup=kb)
@@ -3652,7 +3641,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not current:
             next_t = next_task
             if next_t:
-                msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t.get('window_minutes', 20)} mins)\n\nCheck Scheduled Tasks for list!"
+                msg = f"⏰ No active task now! Next Task {next_t['task_number']} at {next_t['open_time']} Close {next_t['close_time']} ({next_t['window_minutes']} mins)\n\nCheck Scheduled Tasks for list!"
                 await q.message.reply_text(msg, reply_markup=main_menu())
                 return
             else:
@@ -3725,16 +3714,25 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = current['id']
         status_data = user_task_status.get(uid, {}).get(task_id, {})
         status = status_data.get('status') if isinstance(status_data, dict) else status_data
-        if status == 'completed':
-            await q.message.reply_text(f"✅ Already Completed Task {current['task_number']}! Next task at {current['next_time']}", reply_markup=main_menu())
+        if status == 'pending_verification':
+            next_t = next_task
+            next_msg = f"Next at {next_t['open_time']}" if next_t else f"Next at {current.get('next_time','')}"
+            await q.message.reply_text(f"Screenshot received! Waiting for approval. Task {current['task_number']} under verification. {next_msg}", reply_markup=main_menu())
             return
+        if status == 'completed':
+            next_t = next_task
+            next_msg = f"Next at {next_t['open_time']}" if next_t else f"Next at {current.get('next_time','')}"
+            await q.message.reply_text(f"Task {current['task_number']} Approved! {next_msg} Wait for next.", reply_markup=main_menu())
+            return
+        if status == 'rejected':
+            pass
         skip_data = skip_db.get(uid, {}).get(task_id, {})
         skip_status = skip_data.get('status') if isinstance(skip_data, dict) else skip_data
         if skip_status == 'skipped':
-            await q.message.reply_text(f"⏭️ Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
+            await q.message.reply_text(f"Already Skipped Task {current['task_number']}! Reason: {skip_data.get('reason')}", reply_markup=main_menu())
             return
         task_open_time[uid] = get_ist_now()
-        msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current.get('close_time','')} ({current.get('window_minutes', 20)} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current.get('window_minutes', 20)} mins! By {current.get('close_time','')}!"
+        msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{current['reward']}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
         if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
             msg += "\n\n⚠️ Already have account? Click Skip Task!"
         # If task has image, send photo with caption - THIS IS YOUR IMAGE FEATURE
@@ -3797,7 +3795,7 @@ async def daily_skip_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     context.user_data['skip_task_id'] = current['id']
     context.user_data['skip_task'] = current
-    msg = f"⏭️ Skip Task {current['task_number']}\n{current['open_time']}→{current.get('close_time','')} - {current['title']}\n\nWhy skip? Select reason:"
+    msg = f"⏭️ Skip Task {current['task_number']}\n{current['open_time']}→{current['close_time']} - {current['title']}\n\nWhy skip? Select reason:"
     kb = []
     for i, reason in enumerate(skip_reasons_list):
         kb.append([InlineKeyboardButton(f"{reason}", callback_data=f"skip_reason_{i}")])
@@ -4377,36 +4375,33 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = update.effective_user.id
-        print(f"📥 /list_scheduled_tasks_cmd from {uid}: {update.message.text[:100]}")
-        # V54 FIX: Always reply, even if not admin - add to admin automatically
         if not is_admin(uid):
             if uid not in ADMIN_ID_LIST:
                 ADMIN_ID_LIST.append(uid)
-            await update.message.reply_text(f"⚠️ You were not in admin list, added now! Your ID {uid}. Please send command again: /list_tasks")
+            await update.message.reply_text(f"Added to admin! ID {uid}. Send /list_tasks again")
             return
         today_tasks = get_tasks_for_today()
         if not today_tasks:
             await update.message.reply_text("No scheduled tasks for today! Add via /add_task_5plans")
             return
-        msg = f"⏰ Scheduled Tasks Today {get_ist_today()} - Total {len(today_tasks)}:\n\n"
+        today_str = str(get_ist_today())
+        total = len(today_tasks)
+        msg = "Scheduled Tasks Today " + today_str + " - Total " + str(total) + ":" + chr(10) + chr(10)
         for task in today_tasks:
-            has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster - /set_task_image"
-            reward_str = ""
-            if task.get('rewards'):
-                reward_str = f" PerPlan {task.get('rewards')}"
-            else:
-                reward_str = f" Rs{task.get('reward',5)}"
-            audience = task.get('audience','all')
+            tid = task.get('id')
+            tnum = task.get('task_number','?')
+            ot = task.get('open_time','')
+            ct = task.get('close_time','')
             wm = task.get('window_minutes',20)
-            msg += f"ID {task['id']} | No {task.get('task_number','?')} | {task.get('open_time','')}→{task.get('close_time','')} ({wm}m) | Aud:{audience} | {task.get('title','')[:30]}{reward_str} | {has_poster}\n\n"
-        msg += "\nTo delete: /del_task <ID>  e.g. /del_task 3\nTo clear all: /clear_scheduled_all"
+            aud = task.get('audience','all')
+            title = str(task.get('title',''))[:25]
+            has_poster = "YES" if task.get('image_file_id') or tid in task_images_db else "No"
+            msg += f"ID {tid} | No {tnum} | {ot}->{ct} ({wm}m) | Aud:{aud} | {title} | Poster:{has_poster}" + chr(10)
+        msg += chr(10) + "Delete: /del_task <ID>" + chr(10) + "Clear all: /clear_scheduled_all"
         await update.message.reply_text(msg[:4000])
     except Exception as e:
-        print(f"list_tasks error: {e}")
-        try:
-            await update.message.reply_text(f"Error in list_tasks: {e}")
-        except:
-            pass
+        print(f"list error {e}")
+        await update.message.reply_text(f"Error: {e}")
 
 async def _notify_new_promo_campaign(context, campaign):
     """Notify active members immediately when a new Promo Task is created."""
@@ -6102,6 +6097,107 @@ async def deletelist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"deletelist_cmd error: {e}")
         await update.message.reply_text(f"❌ Deleted list error: {e}")
 
+
+async def user_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /user_refs <user_id>" + chr(10) + "Shows detailed L1/L2")
+        return
+    try:
+        uid = int(context.args[0])
+        l1, l2 = get_referral_chain(uid)
+        user = users_db.get(uid, {}) or users_db.get(str(uid), {})
+        msg = f"REFERRALS FOR {user.get('name','Unknown')} ({uid})" + chr(10) + chr(10)
+        msg += f"L1 - Direct ({len(l1)}):" + chr(10)
+        if not l1:
+            msg += "  No L1 yet" + chr(10)
+        else:
+            for i, mid in enumerate(l1[:20],1):
+                u = users_db.get(mid, {}) or users_db.get(str(mid), {})
+                joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
+                direct_parent = referral_map.get(mid) or referral_map.get(str(mid))
+                plan = _get_user_plan_record(mid)
+                pname = plan.get('name','Free') if plan else 'Free'
+                msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined} | Parent:{direct_parent}" + chr(10)
+            if len(l1)>20:
+                msg += f"  ... +{len(l1)-20} more" + chr(10)
+        msg += chr(10) + f"L2 - Level2 ({len(l2)}):" + chr(10)
+        if not l2:
+            msg += "  No L2 yet" + chr(10)
+        else:
+            for i, mid in enumerate(l2[:20],1):
+                u = users_db.get(mid, {}) or users_db.get(str(mid), {})
+                joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
+                direct_parent = referral_map.get(mid) or referral_map.get(str(mid))
+                plan = _get_user_plan_record(mid)
+                pname = plan.get('name','Free') if plan else 'Free'
+                msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined} | Parent:{direct_parent}" + chr(10)
+            if len(l2)>20:
+                msg += f"  ... +{len(l2)-20} more" + chr(10)
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def ref_date_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /ref_date YYYY-MM-DD or /ref_date today" + chr(10) + "Shows who joined on that date")
+        return
+    try:
+        date_arg = str(context.args[0]).lower()
+        from datetime import date, timedelta
+        if date_arg == "today":
+            target_date = get_ist_today()
+        elif date_arg == "yesterday":
+            target_date = get_ist_today() - timedelta(days=1)
+        else:
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                try:
+                    from datetime import datetime
+                    target_date = datetime.strptime(date_arg, fmt).date()
+                    break
+                except:
+                    continue
+            else:
+                await update.message.reply_text("Invalid date. Use YYYY-MM-DD or today/yesterday")
+                return
+        target_str = str(target_date)
+        joined_today = []
+        for uid, data in users_db.items():
+            if not isinstance(data, dict):
+                continue
+            j = str(data.get('joined','') or data.get('reg_date',''))[:10]
+            if j == target_str:
+                ref = referral_map.get(uid) or referral_map.get(str(uid)) or "Direct"
+                ref_name = ""
+                if ref != "Direct":
+                    try:
+                        ref_user = users_db.get(int(ref), {}) or users_db.get(str(ref), {})
+                        ref_name = ref_user.get('name','')
+                    except:
+                        pass
+                joined_today.append((uid, data, ref, ref_name))
+        if not joined_today:
+            await update.message.reply_text(f"No users joined on {target_str}")
+            return
+        msg = f"JOINS ON {target_str} - {len(joined_today)} users" + chr(10) + chr(10)
+        for uid, data, ref, ref_name in joined_today[:30]:
+            name = data.get('name','Unknown')[:15]
+            username = data.get('username','')
+            plan = _get_user_plan_record(uid)
+            pname = plan.get('name','Free') if plan else 'Free'
+            msg += f"ID {uid} | {name} | @{username} | {pname}" + chr(10)
+            msg += f"  Referred By: {ref} {ref_name[:10]} | Joined: {target_str}" + chr(10) + chr(10)
+        if len(joined_today) > 30:
+            msg += f"... and {len(joined_today)-30} more"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -6133,19 +6229,55 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("Usage: /user_info <user_id>")
+        await update.message.reply_text("Usage: /user_info <user_id>" + chr(10) + "Shows wallet, tasks, plan, referrals")
         return
     try:
         uid = int(context.args[0])
-        user = users_db.get(uid, {})
+        user = users_db.get(uid, {}) or users_db.get(str(uid), {})
         plan = _get_user_plan_record(uid)
         reward = get_reward_for_user(uid)
         total = get_balance(uid)
         count, limit, cap = check_daily_limits(uid)
-        msg = (f"USER INFO {uid}\nName: {user.get('name')}\nTasks: {tasks_db.get(uid,0)}\n"
-               f"Earnings: Rs{total}\nPlan: {plan.get('name',plan.get('plan_name',plan.get('plan','No Plan'))) if plan else 'No Plan'} "
-               f"Rs{plan.get('price',0) if plan else 0}\nReward: Rs{reward}/task\nToday: {count}/{limit} tasks\nDaily cap: Rs{cap}")
-        await update.message.reply_text(msg)
+        tasks_done = tasks_db.get(uid,0) or tasks_db.get(str(uid),0)
+        ref_earn = referral_earnings.get(uid,0) or referral_earnings.get(str(uid),0)
+        bonus = bonus_balance.get(uid,0) or bonus_balance.get(str(uid),0)
+        promo_earn = promo_earnings_db.get(uid,0) or promo_earnings_db.get(str(uid),0)
+        l1, l2 = get_referral_chain(uid)
+        plan_name = plan.get('name',plan.get('plan_name',plan.get('plan','No Plan'))) if plan else 'No Plan/Free'
+        plan_price = plan.get('price',0) if plan else 0
+        expiry = plan.get('expiry','N/A') if plan else 'N/A'
+        joined = user.get('joined','') or user.get('reg_date','') or 'Unknown'
+        referrer = referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'
+        msg = f"USER INFO - ID {uid}" + chr(10) + chr(10)
+        msg += f"Name: {user.get('name','Unknown')}" + chr(10)
+        msg += f"Username: @{user.get('username','Not set')}" + chr(10)
+        msg += f"Joined: {str(joined)[:10]}" + chr(10)
+        msg += f"Referred By: {referrer}" + chr(10) + chr(10)
+        msg += f"WALLET: Rs{total:.2f}" + chr(10)
+        msg += f"  Task: Rs{tasks_done * 5} (tasks: {tasks_done})" + chr(10)
+        msg += f"  Bonus: Rs{bonus}" + chr(10)
+        msg += f"  Referral: Rs{ref_earn:.2f}" + chr(10)
+        msg += f"  Promo: Rs{promo_earn}" + chr(10) + chr(10)
+        msg += f"PLAN: {plan_name} Rs{plan_price}" + chr(10)
+        msg += f"Reward: Rs{reward}/task" + chr(10)
+        msg += f"Expiry: {expiry}" + chr(10)
+        msg += f"Today: {count}/{limit}" + chr(10)
+        msg += f"Cap: Rs{cap}" + chr(10) + chr(10)
+        msg += f"REFERRALS: L1={len(l1)} | L2={len(l2)}" + chr(10)
+        if l1:
+            msg += f"L1: {', '.join(map(str,l1[:10]))}"
+            if len(l1)>10: msg += f" +{len(l1)-10} more"
+            msg += chr(10)
+        if l2:
+            msg += f"L2: {', '.join(map(str,l2[:10]))}"
+            if len(l2)>10: msg += f" +{len(l2)-10} more"
+            msg += chr(10)
+        msg += chr(10) + "Commands:" + chr(10)
+        msg += f"/user_refs {uid} - L1/L2 detailed" + chr(10)
+        msg += f"/ref_date YYYY-MM-DD - Date joins"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
@@ -7117,12 +7249,6 @@ async def add_task_5plans_cmd(update, context):
         global scheduled_task_counter
         ot = dt.strptime(open_time, "%H:%M").time()
         ct = dt.strptime(close_time, "%H:%M").time()
-        # V51 FIX: window_minutes needed for display
-        try:
-            wm = int((datetime.combine(get_ist_today(), ct, tzinfo=IST) - datetime.combine(get_ist_today(), ot, tzinfo=IST)).total_seconds() / 60)
-            if wm <=0: wm += 1440
-        except:
-            wm = 20
         task = {
             'id': scheduled_task_counter,
             'date': today,
@@ -7136,9 +7262,7 @@ async def add_task_5plans_cmd(update, context):
             'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
             'audience': audience,
             'description': description,
-            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1,
-            'window_minutes': wm,
-            'next_time': close_time
+            'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
         }
         scheduled_tasks_db.append(task)
         scheduled_task_counter+=1
@@ -7386,12 +7510,7 @@ async def add_task_manual_cmd(update, context):
         global scheduled_task_counter
         ot = dt2.strptime(open_time, "%H:%M").time()
         ct = dt2.strptime(close_time, "%H:%M").time()
-        try:
-            wm = int((datetime.combine(get_ist_today(), ct, tzinfo=IST) - datetime.combine(get_ist_today(), ot, tzinfo=IST)).total_seconds() / 60)
-            if wm <=0: wm += 1440
-        except:
-            wm = 20
-        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'audience': audience, 'rewards': {}, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1, 'window_minutes': wm, 'next_time': close_time}
+        task = {'id': scheduled_task_counter, 'date': today, 'open_time': open_time, 'close_time': close_time, 'open_time_obj': ot, 'close_time_obj': ct, 'title': title, 'link': link, 'reward': reward, 'audience': audience, 'rewards': {}, 'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1}
         scheduled_tasks_db.append(task)
         scheduled_task_counter+=1
         save_data()
@@ -8139,6 +8258,23 @@ def main():
                 task=next((t for t in get_tasks_for_today() if int(t.get('id',-1))==tid),None)
                 if not task:
                     await q.message.reply_text("❌ Task is no longer scheduled today.", reply_markup=main_menu()); return
+                status_data = user_task_status.get(uid, {}).get(tid, {})
+                status = status_data.get('status') if isinstance(status_data, dict) else status_data
+                if status == 'pending_verification':
+                    _, next_t = get_current_scheduled_task_with_interval()
+                    next_msg = f"Next at {next_t['open_time']}" if next_t else f"Next at {task.get('next_time','')}"
+                    await q.message.reply_text(f"Screenshot received! Waiting for approval. Task {task.get('task_number','?')} under verification. {next_msg}", reply_markup=main_menu())
+                    return
+                if status == 'completed':
+                    _, next_t = get_current_scheduled_task_with_interval()
+                    next_msg = f"Next at {next_t['open_time']}" if next_t else f"Next at {task.get('next_time','')}"
+                    await q.message.reply_text(f"Task {task.get('task_number','?')} Approved! {next_msg} Wait for next.", reply_markup=main_menu())
+                    return
+                if status == 'rejected':
+                    current, _ = get_current_scheduled_task_with_interval()
+                    if not current or int(current.get('id',-1)) != tid:
+                        await q.message.reply_text(f"Task {task.get('task_number','?')} rejected and time over. Check Missed Tasks.", reply_markup=main_menu())
+                        return
                 context.user_data['awaiting_daily_screenshot']=False
                 context.user_data['daily_screenshot_task_id']=tid
                 context.user_data.pop('missed_reopened_task_id',None)
@@ -8191,6 +8327,8 @@ def main():
             app.add_handler(CommandHandler("myteam", my_team_cmd))
             app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
+            app.add_handler(CommandHandler("user_refs", user_refs_cmd))
+            app.add_handler(CommandHandler("ref_date", ref_date_cmd))
             # back_admin handled once at group -2 by back_admin_cb_fixed.
             app.add_handler(CallbackQueryHandler(admin_approve_daily_cb, pattern="^admin_approve_daily_"))
             app.add_handler(CallbackQueryHandler(admin_reject_daily_cb, pattern="^admin_reject_daily_"))
@@ -8332,6 +8470,14 @@ def _safe_ref_plan(uid):
     u = users_db.get(uid, {}) if isinstance(users_db, dict) else {}
     return str(u.get("plan") or u.get("plan_name") or "Free")
 
+def get_l1_users(uid):
+    l1, _ = get_referral_chain(uid)
+    return l1
+
+def get_l2_users(uid):
+    _, l2 = get_referral_chain(uid)
+    return l2
+
 def get_user_l1_display(uid):
     return get_l1_users(uid)[:MAX_DIRECT_REFERRALS]
 
@@ -8355,17 +8501,31 @@ async def user_referrals_level_cb(update, context):
     uid = q.from_user.id
     if q.data == "user_ref_l1":
         members = get_user_l1_display(uid)
-        title = "🟢 L1 MEMBERS"
+        title = "L1 MEMBERS - Direct Referrals"
     else:
         members = get_user_l2_display(uid)
-        title = "🔵 L2 MEMBERS"
+        title = "L2 MEMBERS - Level 2"
     if not members:
-        await q.message.reply_text(f"{title}\n\nNo members yet.")
+        await q.message.reply_text(title + chr(10) + chr(10) + "No members yet. Share your referral link!")
         return
-    lines = [title, ""]
-    for i, member_id in enumerate(members, 1):
-        lines.append(f"{i}. {_safe_ref_username(member_id)} — {_safe_ref_plan(member_id)}")
-    await q.message.reply_text("\n".join(lines)[:4000])
+    lines = [title, f"Total: {len(members)} members", ""]
+    for i, member_id in enumerate(members[:20], 1):
+        user = users_db.get(member_id, {}) or users_db.get(str(member_id), {})
+        name = user.get('name','Unknown')[:15]
+        username = user.get('username','')
+        plan_rec = _get_user_plan_record(member_id)
+        plan_name = plan_rec.get('name', plan_rec.get('plan_name','Free')) if plan_rec else 'Free'
+        joined = str(user.get('joined','') or user.get('reg_date',''))[:10] or 'Unknown'
+        bal = get_balance(member_id)
+        tasks = tasks_db.get(member_id, 0) or tasks_db.get(str(member_id),0)
+        lines.append(f"{i}. {name} ({member_id})")
+        lines.append(f"   @{username} | {plan_name} | Rs{bal:.0f} | Tasks:{tasks} | Joined:{joined}")
+        lines.append("")
+    if len(members) > 20:
+        lines.append(f"... and {len(members)-20} more members")
+    lines.append("")
+    lines.append("You earn commission when they complete tasks & buy plans!")
+    await q.message.reply_text(chr(10).join(lines)[:4000])
 # === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
 
 # === PERMANENT REMOVED USER GLOBAL GUARD V2 ===
