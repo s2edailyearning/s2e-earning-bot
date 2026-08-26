@@ -5980,6 +5980,165 @@ async def list_admins_cmd(update, context):
     lines.append("\n/add_admin USER_ID -> add\n/remove_admin USER_ID -> remove")
     await update.message.reply_text("\n".join(lines))
 
+async def referrals_cmd(update, context):
+    """Admin command: show L1/L2 referrals for a specific user."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /referrals <user_id>")
+        return
+    try:
+        target = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Invalid user ID. Example: /referrals 8709635130")
+        return
+
+    def uget(uid):
+        return users_db.get(uid) or users_db.get(str(uid)) or user_profiles.get(uid) or user_profiles.get(str(uid)) or {}
+
+    def display(uid):
+        u = uget(uid)
+        name = u.get("name") or u.get("full_name") or "Not registered"
+        username = u.get("username") or u.get("telegram_username") or ""
+        if username and not str(username).startswith("@"):
+            username = "@" + str(username)
+        plan = u.get("plan") or u.get("plan_name") or "Free / No Plan"
+        return name, username or "Not set", plan
+
+    name, username, plan = display(target)
+    l1 = []
+    for child, parent in list(referral_map.items()):
+        try:
+            if int(parent) == target and int(child) != target:
+                l1.append(int(child))
+        except Exception:
+            continue
+    l1 = list(dict.fromkeys(l1))
+
+    l2 = []
+    for child in l1:
+        for grand, parent in list(referral_map.items()):
+            try:
+                if int(parent) == child and int(grand) != target:
+                    l2.append(int(grand))
+            except Exception:
+                continue
+    l2 = list(dict.fromkeys(l2))
+
+    lines = [
+        "🔗 REFERRALS",
+        f"👤 {name}",
+        f"🆔 {target}",
+        f"🔹 Username: {username}",
+        f"💎 Plan: {plan}",
+        "",
+        f"🟢 L1 Direct Referrals: {len(l1)}"
+    ]
+    if l1:
+        for i, uid in enumerate(l1, 1):
+            n, un, pl = display(uid)
+            lines.append(f"{i}. {n} | {uid} | {un} | {pl}")
+    else:
+        lines.append("None")
+
+    lines += ["", f"🟡 L2 Referrals: {len(l2)}"]
+    if l2:
+        for i, uid in enumerate(l2, 1):
+            n, un, pl = display(uid)
+            lines.append(f"{i}. {n} | {uid} | {un} | {pl}")
+    else:
+        lines.append("None")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+
+async def userdetails_cmd(update, context):
+    """Admin: show complete financial/profile summary for one user."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /userdetails <user_id>\nExample: /userdetails 8709635130")
+        return
+    try:
+        target = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Invalid user ID. Example: /userdetails 8709635130")
+        return
+
+    def dget(dbname, default=None):
+        db = globals().get(dbname, {})
+        if not isinstance(db, dict):
+            return default
+        return db.get(target, db.get(str(target), default))
+
+    user = dget("users_db", {}) or {}
+    profile = dget("user_profiles", {}) or {}
+    if not isinstance(user, dict): user = {}
+    if not isinstance(profile, dict): profile = {}
+
+    name = user.get("name") or profile.get("name") or "Not registered"
+    username = user.get("username") or user.get("telegram_username") or profile.get("username") or profile.get("telegram_username") or "Not set"
+    if username and username != "Not set" and not str(username).startswith("@"):
+        username = "@" + str(username)
+    plan = _get_user_plan_record(target) or {}
+    plan_name = plan.get("plan_name") or plan.get("name") or plan.get("plan") or "Free / No Plan"
+    expiry = plan.get("expires_at") or plan.get("expiry") or "N/A"
+
+    today = str(get_ist_today())
+    task_count = daily_task_count.get(target, {}).get(today, 0) if isinstance(daily_task_count.get(target, {}), dict) else 0
+    task_limit, _, _ = get_plan_limits(target)
+    today_task = round(float(daily_task_earnings.get(target, {}).get(today, 0) or 0), 2) if isinstance(daily_task_earnings.get(target, {}), dict) else 0.0
+    today_ref = get_referral_commission_total(target, today)
+    today_promo = 0.0
+    promo_db = dget("promo_earnings_db", 0) or 0
+    # Promo balance is cumulative; today's promo amount is derived from ledger where available.
+    for e in referral_commission_ledger.get(target, []):
+        # referral commissions are already included in today_ref; no duplicate here
+        pass
+    # Keep wallet calculation identical to the user's existing wallet logic.
+    wallet = round(float(get_balance(target) or 0), 2)
+    total_task = round(sum(float(v or 0) for v in (daily_task_earnings.get(target, {}) or {}).values()), 2)
+    total_ref = round(float(referral_earnings.get(target, 0) or 0), 2)
+    total_promo = round(float(promo_earnings_db.get(target, 0) or 0), 2)
+    total_bonus = round(float(bonus_balance.get(target, 0) or 0), 2)
+    total_income = round(total_task + total_ref + total_promo + total_bonus, 2)
+
+    withdrawn = 0.0
+    wh = withdraw_history.get(target, []) if isinstance(withdraw_history, dict) else []
+    if isinstance(wh, list):
+        for x in wh:
+            if isinstance(x, dict) and str(x.get("status", "")).lower() == "approved":
+                try: withdrawn += float(x.get("amount", 0) or 0)
+                except Exception: pass
+
+    msg = (
+        "👤 USER COMPLETE DETAILS\n\n"
+        f"👤 Name: {name}\n"
+        f"🆔 ID: {target}\n"
+        f"🔹 Username: {username}\n"
+        f"📱 Mobile: {user.get('mobile') or profile.get('mobile') or 'N/A'}\n"
+        f"💳 UPI: {user.get('upi') or profile.get('upi') or 'N/A'}\n"
+        f"📅 Joined: {user.get('joined') or profile.get('joined') or user.get('reg_date') or 'N/A'}\n\n"
+        f"💎 Plan: {plan_name}\n"
+        f"⏳ Expiry: {expiry}\n\n"
+        f"📅 Today ({today})\n"
+        f"📋 Tasks: {task_count}/{task_limit}\n"
+        f"💰 Task earning today: ₹{today_task:.2f}\n"
+        f"🔗 Referral commission today: ₹{today_ref:.2f}\n"
+        f"💵 Total income today: ₹{today_task + today_ref:.2f}\n\n"
+        f"📊 TOTAL INCOME\n"
+        f"📋 Task earnings: ₹{total_task:.2f}\n"
+        f"🔗 Referral earnings: ₹{total_ref:.2f}\n"
+        f"📢 Promo earnings: ₹{total_promo:.2f}\n"
+        f"🎁 Bonus balance: ₹{total_bonus:.2f}\n"
+        f"💰 Total income: ₹{total_income:.2f}\n\n"
+        f"💳 WALLET BALANCE: ₹{wallet:.2f}\n"
+        f"💸 Total withdrawn: ₹{withdrawn:.2f}"
+    )
+    await update.message.reply_text(msg[:4000])
+
+
 async def referral_stats_cmd(update, context):
     uid = update.effective_user.id
     if uid not in ADMIN_ID_LIST:
@@ -7418,6 +7577,8 @@ def main():
             app.add_handler(CommandHandler("remove_admin", remove_admin_cmd))
             app.add_handler(CommandHandler("list_admins", list_admins_cmd))
             app.add_handler(CommandHandler("referral_stats", referral_stats_cmd))
+            app.add_handler(CommandHandler("referrals", referrals_cmd))
+            app.add_handler(CommandHandler("userdetails", userdetails_cmd))
             app.add_handler(CallbackQueryHandler(admin_backup_cb, pattern='^admin_backup$'))
             app.add_handler(CallbackQueryHandler(admin_add_admin_cb, pattern='^admin_add_admin$'))
             app.add_handler(CallbackQueryHandler(admin_referral_cb, pattern='^admin_referral$'))
