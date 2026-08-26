@@ -168,7 +168,7 @@ def _safe_time(t):
 
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, ApplicationHandlerStop, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, filters
+from telegram.ext import Application, ApplicationHandlerStop, CommandHandler, CallbackQueryHandler, MessageHandler, ConversationHandler, ContextTypes, TypeHandler, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Final HARDCODE - 3 Separate Channels - Ignore env - Fix Live but not responding + Separate channels!
@@ -8036,6 +8036,9 @@ def main():
 
             app.add_handler(CallbackQueryHandler(user_referrals_menu, pattern=r"^my_referrals$"))
             app.add_handler(CallbackQueryHandler(user_referrals_level_cb, pattern=r"^user_ref_l[12]$"))
+            app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+            app.add_handler(CommandHandler("broadcast_cancel", broadcast_cancel_cmd))
+            app.add_handler(TypeHandler(Update, broadcast_message_router), group=-90)
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
             app.add_handler(CommandHandler("pending", pending_cmd))
@@ -8373,6 +8376,110 @@ async def permanent_removed_callback_guard(update: Update, context: ContextTypes
         pass
     raise ApplicationHandlerStop
 # === END PERMANENT REMOVED USER GLOBAL GUARD V2 ===
+
+
+# === CONTROLLED BROADCAST SYSTEM ===
+# Admin can send text, photo/banner (with caption), video, document, or other Telegram
+# message types to all active registered users. Sending is throttled to stay well
+# below Telegram's normal broadcast rate and failed/deleted chats are skipped.
+BROADCAST_PENDING_ADMINS = set()
+BROADCAST_BATCH_SIZE = 20
+BROADCAST_BATCH_PAUSE = 1.0
+
+async def broadcast_cmd(update, context):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return
+    BROADCAST_PENDING_ADMINS.add(uid)
+    await update.message.reply_text(
+        "📢 BROADCAST MODE\n\n"
+        "Send the message/banner you want to deliver to all active registered users.\n\n"
+        "You can send:\n"
+        "• Text + emojis\n"
+        "• 🖼️ Banner/photo + caption\n"
+        "• 🎥 Video + caption\n"
+        "• 📄 Document\n\n"
+        "The content will be copied exactly as sent.\n\n"
+        "❌ Cancel: /broadcast_cancel"
+    )
+
+async def broadcast_cancel_cmd(update, context):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return
+    BROADCAST_PENDING_ADMINS.discard(uid)
+    await update.message.reply_text("✅ Broadcast cancelled.")
+
+
+def _broadcast_recipient_ids():
+    ids = []
+    seen = set()
+    for raw_uid, rec in list(users_db.items()):
+        try:
+            uid = int(raw_uid)
+        except Exception:
+            continue
+        if uid <= 0 or uid in seen or is_team_uid(uid):
+            continue
+        if is_removed_user(uid) or uid in banned_users or is_admin(uid):
+            continue
+        if not isinstance(rec, dict) or not _user_is_registered(rec):
+            continue
+        seen.add(uid)
+        ids.append(uid)
+    return ids
+
+async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Capture the next admin message after /broadcast and send it safely."""
+    msg = update.effective_message
+    if not msg:
+        return
+    uid = update.effective_user.id if update.effective_user else None
+    if uid not in BROADCAST_PENDING_ADMINS:
+        return
+    if not is_admin(uid):
+        BROADCAST_PENDING_ADMINS.discard(uid)
+        return
+
+    BROADCAST_PENDING_ADMINS.discard(uid)
+    recipients = _broadcast_recipient_ids()
+    if not recipients:
+        await msg.reply_text("⚠️ No active registered users found.")
+        return
+
+    await msg.reply_text(f"📤 Broadcast started for {len(recipients)} active users.\nPlease wait…")
+    sent = 0
+    failed = 0
+    failed_ids = []
+
+    for index, target_uid in enumerate(recipients, 1):
+        # A removed/banned user may have changed state while the broadcast runs.
+        if is_removed_user(target_uid) or target_uid in banned_users:
+            continue
+        try:
+            await msg.copy(chat_id=target_uid)
+            sent += 1
+        except Exception as exc:
+            failed += 1
+            failed_ids.append(target_uid)
+            print(f"Broadcast send failed for {target_uid}: {exc}")
+
+        # 20 messages/sec is comfortably below Telegram's typical global limit.
+        if index % BROADCAST_BATCH_SIZE == 0 and index < len(recipients):
+            await asyncio.sleep(BROADCAST_BATCH_PAUSE)
+        else:
+            await asyncio.sleep(0.05)
+
+    result = (
+        "✅ BROADCAST COMPLETED\n\n"
+        f"👥 Eligible users: {len(recipients)}\n"
+        f"📨 Sent: {sent}\n"
+        f"⚠️ Failed: {failed}"
+    )
+    if failed_ids:
+        result += "\n\nSome users may have blocked the bot or deleted their chat."
+    await msg.reply_text(result)
+# === END CONTROLLED BROADCAST SYSTEM ===
 
 if __name__ == "__main__":
     main()
