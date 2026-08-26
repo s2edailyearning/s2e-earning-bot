@@ -1,4 +1,4 @@
-print("V62 FINAL - BULK APPROVAL COMPLETE FIX + V60 FEATURES + SAME USER MULTI + ALL PENDING - 2026-08-26 15:00 IST")
+print("V63 FINAL - BROADCAST + TASK IMAGE SEPARATE FIX + V62 BULK + V60 FEATURES - 2026-08-26 15:20 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -8733,6 +8733,7 @@ async def permanent_removed_callback_guard(update: Update, context: ContextTypes
 # message types to all active registered users. Sending is throttled to stay well
 # below Telegram's normal broadcast rate and failed/deleted chats are skipped.
 BROADCAST_PENDING_ADMINS = set()
+BROADCAST_ACTIVE_SENDING = set()  # V63: track admins who just sent broadcast image to prevent task image set
 BROADCAST_BATCH_SIZE = 20
 BROADCAST_BATCH_PAUSE = 1.0
 
@@ -8792,6 +8793,7 @@ async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT
         return
 
     BROADCAST_PENDING_ADMINS.discard(uid)
+    BROADCAST_ACTIVE_SENDING.add(uid)  # V63: Mark as broadcasting to block task image set
     recipients = _broadcast_recipient_ids()
     if not recipients:
         await msg.reply_text("⚠️ No active registered users found.")
