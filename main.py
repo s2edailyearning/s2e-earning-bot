@@ -5070,6 +5070,51 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
+
+async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: show registered users with ID, name, username and plan."""
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        if not users_db:
+            await update.message.reply_text("👥 USER LIST\n\nNo registered users found.")
+            return
+
+        lines = [f"👥 USER LIST — {len(users_db)} users\n"]
+        # Newest users first, limited to Telegram's practical message size.
+        items = list(users_db.items())[::-1]
+        for raw_uid, data in items[:50]:
+            try:
+                uid = int(raw_uid)
+            except Exception:
+                uid = raw_uid
+            data = data if isinstance(data, dict) else {}
+            name = str(data.get("name") or "Unknown").strip()
+            username = str(data.get("username") or "").strip()
+            if username and not username.startswith("@"):
+                username = "@" + username
+            plan = _get_user_plan_record(uid)
+            if plan:
+                plan_name = str(plan.get("name") or plan.get("plan_name") or plan.get("plan") or "Plan")
+            else:
+                plan_name = "Free / No Plan"
+            lines.append(
+                f"👤 {name}\n"
+                f"🆔 ID: {uid}\n"
+                f"🔹 Username: {username or 'Not set'}\n"
+                f"💎 Plan: {plan_name}\n"
+            )
+
+        if len(items) > 50:
+            lines.append(f"Showing latest 50 of {len(items)} users.")
+
+        # Keep comfortably below Telegram's message limit.
+        msg = "\n".join(lines)
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        print(f"userlist_cmd error: {e}")
+        await update.message.reply_text(f"❌ User list error: {e}")
+
 async def user_plans_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -6983,6 +7028,7 @@ def main():
             app.add_handler(CallbackQueryHandler(plan_premium_proof_cb, pattern="^plan_premium_proof$"))
             app.add_handler(CallbackQueryHandler(plan_proof_cb, pattern="^plan_proof_(basic|premium)$"))
             app.add_handler(CallbackQueryHandler(admin_view_plans_cb, pattern="^admin_view_plans$"))
+            app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("backup", backup_cmd))
             app.add_handler(CommandHandler("add_task_manual", add_task_manual_cmd))
             app.add_handler(CommandHandler("remove_task", remove_task_cmd))
