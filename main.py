@@ -1,4 +1,4 @@
-print("V64 FINAL - RE-REGISTRATION RE-REFERRAL FIX + BROADCAST FIX + BULK APPROVAL - 2026-08-26 15:40 IST")
+print("V66 FINAL - PLAN DISPLAY FIX + WALLET CHECK + RE-REFERRAL - 2026-08-26 15:30 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -6140,7 +6140,17 @@ async def user_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 u = users_db.get(mid, {}) or users_db.get(str(mid), {})
                 joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
                 plan = _get_user_plan_record(mid)
-                pname = plan.get('name','Free') if plan else 'Free'
+                if plan:
+                    pname = plan.get('name','Free')
+                    # Show price if available
+                    if 'price' in plan:
+                        pname = f"{pname} ₹{plan.get('price')}"[:25]
+                else:
+                    # Fallback check user_plans directly with str key
+                    p2 = user_plans.get(str(mid)) or user_plans.get(mid) or {}
+                    pname = p2.get('name','Free') if isinstance(p2, dict) else 'Free'
+                    if isinstance(p2, dict) and 'price' in p2:
+                        pname = f"{pname} ₹{p2.get('price')}"[:25]
                 msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined}" + chr(10)
             if len(l1)>20:
                 msg += f"  ... +{len(l1)-20} more" + chr(10)
@@ -6153,7 +6163,11 @@ async def user_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 joined = str(u.get('joined','') or u.get('reg_date',''))[:10]
                 direct_parent = referral_map.get(mid) or referral_map.get(str(mid))
                 plan = _get_user_plan_record(mid)
-                pname = plan.get('name','Free') if plan else 'Free'
+                if plan:
+                    pname = plan.get('name','Free')
+                else:
+                    p2 = user_plans.get(str(mid)) or user_plans.get(mid) or {}
+                    pname = p2.get('name','Free') if isinstance(p2, dict) else 'Free'
                 msg += f"  {i}. {mid} - {u.get('name','?')[:12]} | {pname} | {joined} | Parent:{direct_parent}" + chr(10)
             if len(l2)>20:
                 msg += f"  ... +{len(l2)-20} more" + chr(10)
@@ -6260,6 +6274,75 @@ async def add_referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Added referral: {user_id} -> {ref_id}" + chr(10) + f"Now {ref_id} has L1={len(l1)} L2={len(l2)}" + chr(10) + f"referral_map size: {len(referral_map)}")
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
+
+
+async def get_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /get_balance <user_id>\nExample: /get_balance 1101323233")
+        return
+    try:
+        uid = int(context.args[0])
+        bal = get_balance(uid)
+        ref_earn = referral_earnings.get(uid, 0) or referral_earnings.get(str(uid), 0) or 0
+        pending = referral_pending_earnings.get(uid, 0) or referral_pending_earnings.get(str(uid), 0) or 0
+        bonus = bonus_balance.get(uid, 0) or bonus_balance.get(str(uid), 0) or 0
+        promo = promo_earnings_db.get(uid, 0) or promo_earnings_db.get(str(uid), 0) or 0
+        tasks = tasks_db.get(uid, 0) or tasks_db.get(str(uid), 0) or 0
+        rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+        name = rec.get('name', 'Unknown')
+        l1, l2 = get_referral_chain(uid)
+        msg = f"WALLET FOR {name} ({uid})\n\n"
+        msg += f"💰 Total Balance: Rs{bal:.2f}\n"
+        msg += f"  - Task Earnings: Rs{tasks * 5} ({tasks} tasks x Rs5)\n"
+        msg += f"  - Referral Settled: Rs{ref_earn:.2f}\n"
+        msg += f"  - Referral Pending: Rs{pending:.2f} (will settle tomorrow)\n"
+        msg += f"  - Bonus: Rs{bonus:.2f}\n"
+        msg += f"  - Promo: Rs{promo:.2f}\n\n"
+        msg += f"👥 Referrals: L1={len(l1)} L2={len(l2)}\n"
+        msg += f"📋 L1 IDs: {l1[:5]}\n"
+        msg += f"📋 L2 IDs: {l2[:5]}\n\n"
+        msg += f"Referral Parent: {referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'}"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def ledger_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /ledger <user_id>\nExample: /ledger 1101323233")
+        return
+    try:
+        uid = int(context.args[0])
+        ledger = referral_commission_ledger.get(uid) or referral_commission_ledger.get(str(uid)) or []
+        if not ledger:
+            await update.message.reply_text(f"No ledger entries for {uid}.\nIf plan just approved, check /get_balance - plan commission goes to settled directly.")
+            return
+        msg = f"LEDGER FOR {uid} - Total {len(ledger)} entries\n\n"
+        # Show last 10 entries
+        for e in ledger[-15:]:
+            dt = e.get('date','?')
+            typ = e.get('type','?')
+            lvl = e.get('level','?')
+            amt = e.get('amount',0)
+            src = e.get('source_uid','?')
+            status = e.get('status','?')
+            desc = e.get('description','')[:40]
+            msg += f"{dt} | {typ} L{lvl} | Rs{amt} | Src:{src} | {status} | {desc}\n"
+        total_settled = sum(float(x.get('amount',0) or 0) for x in ledger if x.get('status')=='settled')
+        total_pending = sum(float(x.get('amount',0) or 0) for x in ledger if x.get('status')=='pending')
+        msg += f"\nSettled: Rs{total_settled:.2f} | Pending: Rs{total_pending:.2f}"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def check_wallet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Alias for get_balance
+    await get_balance_cmd(update, context)
+
+
 
 async def rebuild_refs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -8506,6 +8589,10 @@ def main():
             app.add_handler(CommandHandler("remove_task", remove_task_cmd))
             app.add_handler(CommandHandler("del_task", remove_task_cmd))
             app.add_handler(CommandHandler("add_balance", add_balance_cmd))
+            app.add_handler(CommandHandler("get_balance", get_balance_cmd))
+            app.add_handler(CommandHandler("ledger", ledger_cmd))
+            app.add_handler(CommandHandler("check_wallet", check_wallet_cmd))
+            app.add_handler(CommandHandler("wallet_info", get_balance_cmd))
             app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
             app.add_handler(CommandHandler("deduct_balance", remove_balance_cmd))
             app.add_handler(CommandHandler("set_tasks", set_task_count_cmd))
