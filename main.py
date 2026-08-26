@@ -4375,21 +4375,38 @@ async def add_scheduled_task_with_interval_cmd(update: Update, context: ContextT
         await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
 async def list_scheduled_tasks_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    print(f"📥 /list_scheduled_tasks_cmd from {uid}: {update.message.text[:100]}")
-    if not is_admin(uid):
-        await update.message.reply_text(f"❌ Not admin! Your ID {uid}. Added to admin list, try again! ID: {uid}")
-        ADMIN_ID_LIST.append(uid)
-        return
-    today_tasks = get_tasks_for_today()
-    if not today_tasks:
-        await update.message.reply_text("No scheduled tasks for today! Add via /add_task")
-        return
-    msg = f"⏰ Scheduled Tasks Today {get_ist_today()} - Total {len(today_tasks)}:\n\n"
-    for task in today_tasks:
-        has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster - /set_task_image"
-        msg += f"ID {task['id']} Task {task['task_number']} {task['open_time']}→{task['close_time']} Next {task['next_time']} - {task['title']} Rs{task['reward']} {has_poster}\n"
-    await update.message.reply_text(msg[:4000])
+    try:
+        uid = update.effective_user.id
+        print(f"📥 /list_scheduled_tasks_cmd from {uid}: {update.message.text[:100]}")
+        # V54 FIX: Always reply, even if not admin - add to admin automatically
+        if not is_admin(uid):
+            if uid not in ADMIN_ID_LIST:
+                ADMIN_ID_LIST.append(uid)
+            await update.message.reply_text(f"⚠️ You were not in admin list, added now! Your ID {uid}. Please send command again: /list_tasks")
+            return
+        today_tasks = get_tasks_for_today()
+        if not today_tasks:
+            await update.message.reply_text("No scheduled tasks for today! Add via /add_task_5plans")
+            return
+        msg = f"⏰ Scheduled Tasks Today {get_ist_today()} - Total {len(today_tasks)}:\n\n"
+        for task in today_tasks:
+            has_poster = "🖼️ Poster YES" if task.get('image_file_id') or task['id'] in task_images_db else "❌ No Poster - /set_task_image"
+            reward_str = ""
+            if task.get('rewards'):
+                reward_str = f" PerPlan {task.get('rewards')}"
+            else:
+                reward_str = f" Rs{task.get('reward',5)}"
+            audience = task.get('audience','all')
+            wm = task.get('window_minutes',20)
+            msg += f"ID {task['id']} | No {task.get('task_number','?')} | {task.get('open_time','')}→{task.get('close_time','')} ({wm}m) | Aud:{audience} | {task.get('title','')[:30]}{reward_str} | {has_poster}\n\n"
+        msg += "\nTo delete: /del_task <ID>  e.g. /del_task 3\nTo clear all: /clear_scheduled_all"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        print(f"list_tasks error: {e}")
+        try:
+            await update.message.reply_text(f"Error in list_tasks: {e}")
+        except:
+            pass
 
 async def _notify_new_promo_campaign(context, campaign):
     """Notify active members immediately when a new Promo Task is created."""
@@ -8077,6 +8094,8 @@ def main():
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("scheduled_tasks", list_scheduled_tasks_cmd))
+            app.add_handler(CommandHandler("list_scheduled_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("set_task_notify", set_task_notify_cmd))
             # Support Plans banner command. Photo handling is integrated into the
             # existing high-priority admin photo handler so normal task posters remain safe.
