@@ -1,4 +1,4 @@
-print("V67 FINAL - VIP DISPLAY FIX + MISSING COMMISSION FIX - 2026-08-26 15:35 IST")
+print("V70 FINAL - 2% L1 0.5% L2 TASK/PROMO/PRODUCT + 10% 3% PLAN + FIXED AMOUNT - 2026-08-26 16:10 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -318,14 +318,16 @@ def get_user_plan_id(uid):
         return 0
 
 def get_task_reward_for_user(task, uid):
-    plan_id = get_user_plan_id(uid)
-    rewards = task.get('rewards', None)
-    if rewards and isinstance(rewards, dict) and len(rewards) > 0:
-        if plan_id in rewards:
-            return rewards[plan_id]
-        if 'all' in rewards:
-            return rewards['all']
-    return task.get('reward', 5)
+    """V69 FIX: Return ONLY fixed amount set by admin - No VIP bonus!"""
+    try:
+        # Only use task's fixed reward, no extra
+        reward = int(task.get('reward', 5) or 5)
+        return reward
+    except:
+        return 5
+
+
+
 
 def get_tasks_for_today_filtered(uid):
     today_tasks = [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
@@ -958,10 +960,17 @@ PLATFORM_FEE_PERCENT = 7
 TASKS_REQUIRED_FOR_WITHDRAW = 1
 DEFAULT_DAILY_TASK_ID = -1
 REFERRAL_BONUS_PER_TASK = 10
-REFERRAL_PLAN_COMMISSION_PERCENT = 10.0
-L2_PLAN_COMMISSION_PERCENT = 3.0
 L1_TASK_COMMISSION_PERCENT = 2.0
 L2_TASK_COMMISSION_PERCENT = 0.5
+L1_PLAN_COMMISSION_PERCENT = 10.0
+L2_PLAN_COMMISSION_PERCENT = 3.0
+L1_PROMO_COMMISSION_PERCENT = 2.0
+L2_PROMO_COMMISSION_PERCENT = 0.5
+L1_PRODUCT_COMMISSION_PERCENT = 2.0
+L2_PRODUCT_COMMISSION_PERCENT = 0.5
+
+REFERRAL_PLAN_COMMISSION_PERCENT = 10.0
+L2_PLAN_COMMISSION_PERCENT = 3.0
 DAILY_TASK_LIMIT_BASIC = 10
 DAILY_TASK_LIMIT_PREMIUM = 20
 DAILY_TASK_LIMIT_FREE = 1
@@ -1834,7 +1843,7 @@ def is_paid_plan_active(uid):
 def get_balance(uid): return tasks_db.get(uid,0)*5 + bonus_balance.get(uid,0) + referral_earnings.get(uid,0) + promo_earnings_db.get(uid,0)
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
-    """Credit referral commission once and keep a dated ledger for Wallet/My Referrals."""
+    """Credit referral commission INSTANTLY - No pending, direct to wallet."""
     try:
         amount = float(amount)
     except Exception:
@@ -1842,7 +1851,7 @@ def add_referral_commission(referrer_uid, amount, commission_type, level=None, s
     if amount <= 0 or not referrer_uid:
         return 0.0
     ctype = str(commission_type)
-    is_daily = ctype in ("task", "product", "product_promo", "promo")
+    # V68 FIX: ALL commissions settled instantly - no tomorrow wait
     entry = {
         "date": str(get_ist_today()),
         "type": ctype,
@@ -1851,13 +1860,14 @@ def add_referral_commission(referrer_uid, amount, commission_type, level=None, s
         "amount": round(amount, 2),
         "description": description,
         "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
-        "status": "pending" if is_daily else "settled",
+        "status": "settled",  # INSTANT - was pending for task before
     }
     referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
-    if is_daily:
-        referral_pending_earnings[referrer_uid] = round(float(referral_pending_earnings.get(referrer_uid, 0) or 0) + amount, 2)
-    else:
-        referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    # Always add to settled - instant wallet credit
+    referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    # Clear any pending for same uid if exists
+    if referrer_uid in referral_pending_earnings:
+        referral_pending_earnings[referrer_uid] = 0
     return amount
 
 async def settle_previous_day_referrals(context):
@@ -4304,7 +4314,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_id not in daily_task_count: daily_task_count[target_id]={}
         daily_task_count[target_id][today]=daily_task_count[target_id].get(today,0)+1
         add_today_task_earning(target_id, reward, today)
-        if reward!=5: bonus_balance[target_id]=bonus_balance.get(target_id,0)+(reward-5)
+        # V69 FIX: No bonus - fixed amount only! Remove bonus system
         del pending_daily[target_id]
         task_open_time.pop(target_id, None)
         for tid, status_data in list(user_task_status.get(target_id, {}).items()):
@@ -6297,19 +6307,17 @@ async def get_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(context.args[0])
         bal = get_balance(uid)
         ref_earn = referral_earnings.get(uid, 0) or referral_earnings.get(str(uid), 0) or 0
-        pending = referral_pending_earnings.get(uid, 0) or referral_pending_earnings.get(str(uid), 0) or 0
-        bonus = bonus_balance.get(uid, 0) or bonus_balance.get(str(uid), 0) or 0
         promo = promo_earnings_db.get(uid, 0) or promo_earnings_db.get(str(uid), 0) or 0
         tasks = tasks_db.get(uid, 0) or tasks_db.get(str(uid), 0) or 0
+        # V69: Actual task earnings = total - referral - promo (no bonus)
+        total_task_actual = max(0, bal - ref_earn - promo)
         rec = users_db.get(uid) or users_db.get(str(uid)) or {}
         name = rec.get('name', 'Unknown')
         l1, l2 = get_referral_chain(uid)
         msg = f"WALLET FOR {name} ({uid})\n\n"
         msg += f"💰 Total Balance: Rs{bal:.2f}\n"
-        msg += f"  - Task Earnings: Rs{tasks * 5} ({tasks} tasks x Rs5)\n"
-        msg += f"  - Referral Settled: Rs{ref_earn:.2f}\n"
-        msg += f"  - Referral Pending: Rs{pending:.2f} (will settle tomorrow)\n"
-        msg += f"  - Bonus: Rs{bonus:.2f}\n"
+        msg += f"  - Task Earnings: Rs{total_task_actual:.2f} ({tasks} tasks x FIXED amount only)\n"
+        msg += f"  - Referral Earnings (Instant): Rs{ref_earn:.2f}\n"
         msg += f"  - Promo: Rs{promo:.2f}\n\n"
         msg += f"👥 Referrals: L1={len(l1)} L2={len(l2)}\n"
         msg += f"📋 L1 IDs: {l1[:5]}\n"
@@ -6344,7 +6352,7 @@ async def add_missing_commission_cmd(update: Update, context: ContextTypes.DEFAU
                 price=1000
         # L1 commission 10%
         l1_pct = 10.0
-        l2_pct = 5.0
+        l2_pct = 3.0
         # Check if already credited
         ledger = referral_commission_ledger.get(ref) or referral_commission_ledger.get(str(ref)) or []
         already = any(int(e.get('source_uid',-1) or -1)==src and str(e.get('type'))=='plan' for e in ledger)
@@ -6477,7 +6485,7 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"Referred By: {referrer}" + chr(10) + chr(10)
         msg += f"WALLET: Rs{total:.2f}" + chr(10)
         msg += f"  Task: Rs{tasks_done * 5} (tasks: {tasks_done})" + chr(10)
-        msg += f"  Bonus: Rs{bonus}" + chr(10)
+        msg += f"  REMOVED" + chr(10)
         msg += f"  Referral: Rs{ref_earn:.2f}" + chr(10)
         msg += f"  Promo: Rs{promo_earn}" + chr(10) + chr(10)
         msg += f"PLAN: {plan_name} Rs{plan_price}" + chr(10)
