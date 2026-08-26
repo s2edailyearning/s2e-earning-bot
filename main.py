@@ -7440,6 +7440,8 @@ def main():
             # must receive the update so the Upload Screenshot flow is reliable.
             print(" Catch-all photo fallback disabled - dedicated upload handlers active!")
 
+            app.add_handler(CallbackQueryHandler(user_referrals_menu, pattern=r"^my_referrals$"))
+            app.add_handler(CallbackQueryHandler(user_referrals_level_cb, pattern=r"^user_ref_l[12]$"))
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
             app.add_handler(CommandHandler("pending", pending_cmd))
@@ -7655,6 +7657,55 @@ def main():
             retry_count += 1
             time.sleep(5)
             continue
+
+
+# === L1/L2 30 LIMIT + USER PANEL REFERRALS ===
+MAX_DIRECT_REFERRALS = 30
+
+def _safe_ref_username(uid):
+    u = users_db.get(uid, {}) if isinstance(users_db, dict) else {}
+    username = u.get("username") or u.get("telegram_username") or ""
+    return ("@" + str(username).lstrip("@")) if username else "Username not set"
+
+def _safe_ref_plan(uid):
+    u = users_db.get(uid, {}) if isinstance(users_db, dict) else {}
+    return str(u.get("plan") or u.get("plan_name") or "Free")
+
+def get_user_l1_display(uid):
+    return get_l1_users(uid)[:MAX_DIRECT_REFERRALS]
+
+def get_user_l2_display(uid):
+    return get_l2_users(uid)
+
+async def user_referrals_menu(update, context):
+    q = update.callback_query
+    await q.answer()
+    await q.message.reply_text(
+        "👥 MY REFERRALS\n\nChoose a level:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🟢 L1 — Direct Referrals", callback_data="user_ref_l1")],
+            [InlineKeyboardButton("🔵 L2 — Level 2 Referrals", callback_data="user_ref_l2")]
+        ])
+    )
+
+async def user_referrals_level_cb(update, context):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+    if q.data == "user_ref_l1":
+        members = get_user_l1_display(uid)
+        title = "🟢 L1 MEMBERS"
+    else:
+        members = get_user_l2_display(uid)
+        title = "🔵 L2 MEMBERS"
+    if not members:
+        await q.message.reply_text(f"{title}\n\nNo members yet.")
+        return
+    lines = [title, ""]
+    for i, member_id in enumerate(members, 1):
+        lines.append(f"{i}. {_safe_ref_username(member_id)} — {_safe_ref_plan(member_id)}")
+    await q.message.reply_text("\n".join(lines)[:4000])
+# === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
 
 if __name__ == "__main__":
     main()
