@@ -1,4 +1,4 @@
-print("V61 FINAL - BULK APPROVAL FIX + SAME USER MULTI TASKS + PENDING_VERIFICATION - 2026-08-26 14:30 IST")
+print("V62 FINAL - BULK APPROVAL COMPLETE FIX + V60 FEATURES + SAME USER MULTI + ALL PENDING - 2026-08-26 15:00 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -6686,28 +6686,50 @@ async def approve_task_all_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 async def approve_all_pending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-    if not pending_daily:
-        await update.message.reply_text("No pending tasks!")
-        return
+    today = str(get_ist_today())
     approved = 0
+    # Approve pending_daily
     for uid in list(pending_daily.keys()):
         try:
             task = pending_daily[uid].get('task',{})
-            base_reward = int(task.get('reward',5) or 5)
-            reward = get_task_reward_for_user(task, uid)
+            reward = float(task.get('reward',5) or 5)
             tasks_db[uid] = tasks_db.get(uid,0) + 1
-            if reward != 5:
-                bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5)
-            del pending_daily[uid]
+            bonus_balance[uid] = bonus_balance.get(uid,0) + (reward - 5) if reward !=5 else bonus_balance.get(uid,0)
+            daily_task_count.setdefault(uid, {})
+            daily_task_count[uid][today] = daily_task_count[uid].get(today,0)+1
+            task_id = task.get('id')
+            if task_id is not None:
+                user_task_status.setdefault(uid, {})[task_id] = {'status':'completed','completed_at':get_ist_now(),'reward':reward}
+            pending_daily.pop(uid, None)
+            pending_daily.pop(str(uid), None)
             approved += 1
             try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Your Task Approved! Rs{reward} added!")
+                await context.bot.send_message(chat_id=uid, text=f"✅ Your Task Approved! Rs{reward:g} added!")
             except:
                 pass
         except:
             pass
+    # Approve pending_verification
+    for uid, status_dict in list(user_task_status.items()):
+        if not isinstance(status_dict, dict):
+            continue
+        for tid, sdata in list(status_dict.items()):
+            if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
+                try:
+                    task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == int(tid)), None)
+                    reward = float(task.get('reward',5) or 5) if task else 5.0
+                    tasks_db[uid] = tasks_db.get(uid,0) + 1
+                    daily_task_count.setdefault(uid, {})[today] = daily_task_count[uid].get(today,0)+1
+                    user_task_status[uid][tid] = {'status':'completed','completed_at':get_ist_now(),'reward':reward}
+                    approved += 1
+                    try:
+                        await context.bot.send_message(chat_id=uid, text=f"✅ Your Task Approved! Rs{reward:g} added!")
+                    except:
+                        pass
+                except:
+                    pass
     save_data()
-    await update.message.reply_text(f"✅ APPROVED ALL! {approved} members approved!")
+    await update.message.reply_text(f"✅ APPROVED ALL! {approved} members/tasks approved!")
 
 # Enhanced pending view with bulk buttons
 async def pending_bulk_view(update: Update, context: ContextTypes.DEFAULT_TYPE):
