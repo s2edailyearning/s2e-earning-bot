@@ -1,4 +1,4 @@
-print("S2E BOT V71 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS + 20% SHOPPING PROGRESS - 2026-08-27")
+print("S2E BOT V71 FINAL + SHOP PRODUCT PHOTO HANDLER STOP FIX - 2026-08-27")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -4173,6 +4173,12 @@ async def shop_product_image_photo_handler(update: Update, context: ContextTypes
             f"ID: {prod['id']}\n"
             f"Product: {prod['name']}"
         )
+        # IMPORTANT: This photo was consumed as a SHOP PRODUCT image.
+        # Stop all lower-priority photo handlers so it can never also be
+        # saved as the latest Daily Task image (e.g. Task 9).
+        raise ApplicationHandlerStop
+    except ApplicationHandlerStop:
+        raise
     except Exception as e:
         print(f"shop_product_image_photo_handler error: {e}")
         await update.message.reply_text("❌ Could not save product image. Please try again.")
@@ -9718,7 +9724,9 @@ def main():
                     # Product-image upload has priority over task-poster handling.
                     # Never let an admin product photo fall through to the task handler.
                     if context.user_data.get('awaiting_shop_product_image'):
-                        return
+                        # Product-image upload owns this PHOTO. Do not allow
+                        # any Daily Task image handler to process it.
+                        raise ApplicationHandlerStop
                     if not is_admin(uid):
                         return
                     if not update.message.photo and not update.message.document:
