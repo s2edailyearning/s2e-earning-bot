@@ -1066,7 +1066,7 @@ shop_orders_db = []  # [{id, uid, items, total, address, payment, status, create
 shop_order_counter = 1
 shop_purchases_db = {}  # uid -> confirmed/delivered purchase history
 shop_addresses_db = {}  # uid -> saved delivery address
-# Shopping credit: 20% of an order is credited only after the order is DELIVERED.
+# Shopping requirement: 20% of approved withdrawals must be matched by completed purchases in each joining-date cycle.
 SHOPPING_CREDIT_PERCENT = 20.0
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
@@ -3199,279 +3199,237 @@ def _shop_cart_kb(cart):
     rows.append([InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
     return InlineKeyboardMarkup(rows)
 
-def _shop_credit_for_order(order):
-    """Return the 20% Shopping Credit for one delivered order only."""
-    if not isinstance(order, dict) or str(order.get("status", "")).lower() != "delivered":
-        return 0.0
+def _parse_state_date(value):
+    """Parse YYYY-MM-DD (or an ISO datetime) safely."""
+    if value in (None, "", "N/A"):
+        return None
     try:
-        return round(float(order.get("total", 0) or 0) * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+        return date.fromisoformat(str(value)[:10])
     except Exception:
-        return 0.0
+        return None
 
 
-def _shopping_stats(uid):
-    """Calculate shopping progress from the real order ledger; no duplicate credit rows."""
-    uid = int(uid)
-    orders = [o for o in shop_orders_db if int(o.get("uid", -1)) == uid]
-    delivered = [o for o in orders if str(o.get("status", "")).lower() == "delivered"]
-    active = [o for o in orders if str(o.get("status", "")).lower() in (
-        "pending_admin_confirmation", "confirmed", "dispatched"
-    )]
-    rejected = [o for o in orders if str(o.get("status", "")).lower() == "rejected"]
-    delivered_total = round(sum(float(o.get("total", 0) or 0) for o in delivered), 2)
-    credit = round(delivered_total * SHOPPING_CREDIT_PERCENT / 100.0, 2)
-    pending_value = round(sum(float(o.get("total", 0) or 0) for o in active), 2)
+def _add_months_safe(d, months):
+    """Add calendar months while clamping the day to the last valid day."""
+    import calendar
+    total = d.year * 12 + (d.month - 1) + int(months)
+    year = total // 12
+    month = total % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _user_join_date(uid):
+    """Return the user's original registration/join date."""
+    try:
+        uid = int(uid)
+    except Exception:
+        return None
+    user = users_db.get(uid) or users_db.get(str(uid)) or {}
+    profile = globals().get("user_profiles", {}).get(uid) or globals().get("user_profiles", {}).get(str(uid)) or {}
+    raw = user.get("joined") or profile.get("joined") or user.get("reg_date") or user.get("created_at")
+    return _parse_state_date(raw)
+
+
+def _shopping_cycle(uid, on_date=None):
+    """
+    Shopping requirement uses a repeating one-month cycle anchored to the
+    user's joining date, not the 1st/last day of a calendar month.
+
+    Example: join 26-Aug -> 26-Aug..25-Sep, then 26-Sep..25-Oct.
+    """
+    join_date = _user_join_date(uid)
+    today = on_date or get_ist_today()
+    if not join_date:
+        return today, today, 0
+    month_diff = (today.year - join_date.year) * 12 + (today.month - join_date.month)
+    start = _add_months_safe(join_date, month_diff)
+    if today < start:
+        month_diff -= 1
+        start = _add_months_safe(join_date, month_diff)
+    end = _add_months_safe(start, 1) - timedelta(days=1)
+    return start, end, month_diff
+
+
+def _withdraw_entry_date(item):
+    """Use actual approval date for monthly withdrawal accounting."""
+    if not isinstance(item, dict):
+        return None
+    d = _parse_state_date(item.get("approved_at"))
+    if d:
+        return d
+    return _parse_state_date(item.get("date"))
+
+
+def _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end):
+    """Sum only approved withdrawals inside the current user cycle."""
+    total = 0.0
+    rows = []
+    history = withdraw_history.get(uid, []) or []
+    for item in history:
+        if str(item.get("status", "")).lower() != "approved":
+            continue
+        d = _withdraw_entry_date(item)
+        if not d or d < cycle_start or d > cycle_end:
+            continue
+        try:
+            amount = float(item.get("amount", 0) or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            total += amount
+            rows.append((d, amount))
+
+    # Legacy fallback: an approved current request may exist without a history row.
+    req = withdraw_requests.get(uid, {}) or {}
+    if str(req.get("status", "")).lower() == "approved":
+        d = _withdraw_entry_date(req)
+        try:
+            amount = float(req.get("amount", 0) or 0)
+        except Exception:
+            amount = 0.0
+        duplicate = any(abs(a - amount) < 0.001 and d == rd for rd, a in rows) if d else True
+        if d and cycle_start <= d <= cycle_end and amount > 0 and not duplicate:
+            total += amount
+            rows.append((d, amount))
+    return round(total, 2), rows
+
+
+def _delivered_purchases_in_cycle(uid, cycle_start, cycle_end):
+    """Sum delivered shopping orders completed inside the same cycle."""
+    total = 0.0
+    rows = []
+    for order in shop_orders_db:
+        try:
+            if int(order.get("uid", -1)) != int(uid):
+                continue
+        except Exception:
+            continue
+        if str(order.get("status", "")).lower() != "delivered":
+            continue
+        d = (
+            _parse_state_date(order.get("delivered_at"))
+            or _parse_state_date(order.get("date"))
+            or _parse_state_date(order.get("created_at"))
+        )
+        if not d or d < cycle_start or d > cycle_end:
+            continue
+        try:
+            amount = float(order.get("total", 0) or 0)
+        except Exception:
+            amount = 0.0
+        if amount > 0:
+            total += amount
+            rows.append((d, amount, order))
+    return round(total, 2), rows
+
+
+def _shopping_stats(uid, on_date=None):
+    """
+    REAL monthly shopping requirement.
+
+    Required purchase = 20% of approved withdrawals in the current cycle.
+    Purchased amount = delivered purchase value in the same cycle.
+    The cycle resets at the user's next joining-date anniversary.
+    """
+    cycle_start, cycle_end, cycle_no = _shopping_cycle(uid, on_date)
+    withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
+    purchased, purchase_rows = _delivered_purchases_in_cycle(uid, cycle_start, cycle_end)
+    required = round(withdrawn * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+    pending = round(max(0.0, required - purchased), 2)
+    extra = round(max(0.0, purchased - required), 2) if required > 0 else 0.0
+    complete = required > 0 and purchased >= required
     return {
-        "orders": orders,
-        "delivered": delivered,
-        "active": active,
-        "rejected": rejected,
-        "delivered_total": delivered_total,
-        "credit": credit,
-        "pending_value": pending_value,
+        "cycle_start": cycle_start,
+        "cycle_end": cycle_end,
+        "cycle_no": cycle_no,
+        "withdrawn": withdrawn,
+        "required": required,
+        "purchased": purchased,
+        "pending": pending,
+        "extra": extra,
+        "complete": complete,
+        "no_withdrawal": required <= 0,
+        "withdrawal_rows": withdrawal_rows,
+        "purchase_rows": purchase_rows,
+        # Compatibility values for existing screens.
+        "orders": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid)],
+        "delivered": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "delivered"],
+        "active": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")],
+        "rejected": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "rejected"],
+        "delivered_total": purchased,
+        "credit": required,
+        "pending_value": round(sum(float(o.get("total", 0) or 0) for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")), 2),
     }
 
 
 def _shopping_progress_text(uid):
     st = _shopping_stats(uid)
-    delivered_count = len(st["delivered"])
-    active_count = len(st["active"])
-    text = (
-        "🛍️ SHOPPING BALANCE & PROGRESS\n\n"
-        f"💰 Shopping Balance (20% Credit): ₹{st['credit']:g}\n"
-        f"📦 Delivered Purchase Value: ₹{st['delivered_total']:g}\n"
-        f"🎯 Credit Rate: {SHOPPING_CREDIT_PERCENT:g}%\n\n"
-        f"✅ Delivered Orders: {delivered_count}\n"
-        f"⏳ Pending/Active Orders: {active_count}\n"
-    )
-    if st["delivered"]:
-        text += "\n📊 20% CREDIT STATUS\n"
-        for order in st["delivered"][-10:][::-1]:
-            credit = _shop_credit_for_order(order)
-            text += f"✅ Order #{order.get('id')} — ₹{float(order.get('total',0)):g} → +₹{credit:g} (20%)\n"
-        text += "\n🎉 Delivered orders are counted as COMPLETED.\n"
+    start = st["cycle_start"].strftime("%d/%m/%Y")
+    end = st["cycle_end"].strftime("%d/%m/%Y")
+    if st["no_withdrawal"]:
+        status_line = "ℹ️ No approved withdrawal in this cycle yet."
+    elif st["complete"]:
+        status_line = "✅ COMPLETE — required purchase target reached."
     else:
-        text += "\n⏳ No delivered order yet. 20% credit will be added when Admin marks an order DELIVERED.\n"
-    if st["active"]:
-        text += f"\n⏳ Pending order value: ₹{st['pending_value']:g}\n"
+        status_line = f"⏳ PENDING — ₹{st['pending']:g} more purchase needed."
+
+    text = (
+        "🛍️ SHOPPING PROGRESS\n\n"
+        f"📅 Current Cycle: {start} → {end}\n"
+        "📌 Cycle follows your joining date (not calendar month).\n\n"
+        f"💸 Approved Withdrawals: ₹{st['withdrawn']:g}\n"
+        f"🎯 Required Purchase (20%): ₹{st['required']:g}\n"
+        f"🛒 Completed Purchases: ₹{st['purchased']:g}\n"
+        f"📊 Progress: ₹{st['purchased']:g}/₹{st['required']:g}\n\n"
+        f"{status_line}"
+    )
+    if st["extra"] > 0:
+        text += f"\n➕ Above target this cycle: ₹{st['extra']:g}"
+    if st["no_withdrawal"]:
+        text += "\n\n💡 Your required purchase target is 20% of the approved withdrawals you make in this cycle."
+    text += "\n\n🔄 On the next cycle start, progress resets to ₹0 and a new target is calculated from that cycle's withdrawals."
     return text[:4000]
 
 
 def _admin_shopping_summary_text():
-    orders = list(shop_orders_db)
-    pending = [o for o in orders if o.get("status") == "pending_admin_confirmation"]
-    confirmed = [o for o in orders if o.get("status") == "confirmed"]
-    dispatched = [o for o in orders if o.get("status") == "dispatched"]
-    delivered = [o for o in orders if o.get("status") == "delivered"]
-    active_uids = set()
-    for o in orders:
-        try:
-            active_uids.add(int(o.get("uid")))
-        except Exception:
-            pass
-    delivered_total = round(sum(float(o.get("total", 0) or 0) for o in delivered), 2)
-    credit_total = round(delivered_total * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+    """Admin-wide summary for the current joining-date cycle."""
+    today = get_ist_today()
+    uids = set()
+    for uid in list(users_db.keys()):
+        try: uids.add(int(uid))
+        except Exception: pass
+    for order in shop_orders_db:
+        try: uids.add(int(order.get("uid")))
+        except Exception: pass
+    for uid in withdraw_history.keys():
+        try: uids.add(int(uid))
+        except Exception: pass
+
+    total_withdrawn = total_required = total_purchased = 0.0
+    complete = pending = no_withdrawal = 0
+    for uid in uids:
+        st = _shopping_stats(uid, today)
+        total_withdrawn += st["withdrawn"]
+        total_required += st["required"]
+        total_purchased += st["purchased"]
+        if st["no_withdrawal"]:
+            no_withdrawal += 1
+        elif st["complete"]:
+            complete += 1
+        else:
+            pending += 1
     return (
         "🛍️ SHOPPING PROGRESS ADMIN\n\n"
-        f"👥 Shopping Users: {len(active_uids)}\n"
-        f"📦 Total Orders: {len(orders)}\n"
-        f"⏳ Pending Confirmation: {len(pending)}\n"
-        f"✅ Confirmed: {len(confirmed)}\n"
-        f"🚚 Dispatched: {len(dispatched)}\n"
-        f"🎉 Delivered: {len(delivered)}\n\n"
-        f"💰 Delivered Sales: ₹{delivered_total:g}\n"
-        f"🛍️ Total 20% Shopping Credit: ₹{credit_total:g}\n\n"
-        "20% credit is counted only after DELIVERED status."
+        f"👥 Users tracked: {len(uids)}\n"
+        f"💸 Current-cycle Approved Withdrawals: ₹{total_withdrawn:g}\n"
+        f"🎯 Current-cycle Required Purchase (20%): ₹{total_required:g}\n"
+        f"🛒 Current-cycle Completed Purchases: ₹{total_purchased:g}\n"
+        f"✅ Complete: {complete}\n"
+        f"⏳ Pending: {pending}\n"
+        f"ℹ️ No withdrawal yet: {no_withdrawal}\n\n"
+        "📌 Each user's cycle starts on their joining date and resets on the next monthly anniversary."
     )
-
-
-async def shopping_progress_cb(update, context):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    await q.message.reply_text(
-        _shopping_progress_text(q.from_user.id),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],
-            [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")],
-        ])
-    )
-
-
-async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    try:
-        cats = get_shopping_categories()
-        if not shopping_products_db and not cats:
-            await q.message.reply_text("🛒 Shopping - No products yet! Admin will add soon.", reply_markup=main_menu())
-            return
-        kb = []
-        for cat in cats:
-            count = len(get_products_by_category(cat))
-            kb.append([InlineKeyboardButton(f"📦 {cat} ({count})", callback_data=f"shop_cat_{cat}")])
-        cart = context.user_data.get("shopping_cart", {})
-        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
-        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
-        kb.append([InlineKeyboardButton("🛍️ Shopping Balance / 20% Progress", callback_data="shopping_progress")])
-        kb.append([InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")])
-        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
-        await q.message.reply_text("🛒 SHOPPING\n\nSelect a category or check your Shopping Balance:", reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(f"shopping_cb error {e}")
-        await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
-
-async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    try:
-        cat = q.data.replace("shop_cat_", "", 1)
-        prods = get_products_by_category(cat)
-        if not prods:
-            kb = [[InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")], [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
-            await q.message.reply_text(f"📦 {cat} - No products in this category yet!", reply_markup=InlineKeyboardMarkup(kb))
-            return
-        msg = f"📦 {cat} - {len(prods)} Products:\n\n"
-        kb = []
-        for p in prods[:20]:
-            stock = int(p.get("stock", 0) or 0)
-            msg += f"ID {p['id']}: {p['name']} - ₹{p['price']}\n{p.get('desc','')[:80]}\nStock: {stock}\n\n"
-            kb.append([InlineKeyboardButton(f"{p['name'][:28]} - ₹{p['price']}", callback_data=f"shop_prod_{p['id']}")])
-        cart = context.user_data.get("shopping_cart", {})
-        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
-        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
-        kb.append([InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")])
-        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
-        await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
-    except Exception as e:
-        print(f"shop_category_cb error {e}")
-        await q.message.reply_text("Error loading category", reply_markup=main_menu())
-
-async def shop_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    try:
-        pid = int(q.data.replace("shop_prod_", "", 1))
-        prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
-        if not prod:
-            await q.message.reply_text("Product not found!", reply_markup=main_menu()); return
-        stock = int(prod.get("stock", 0) or 0)
-        msg = (f"🛒 {prod['name']}\n\n📦 Category: {prod['category']}\n💰 Price: ₹{prod['price']}\n"
-               f"📝 Desc: {prod.get('desc','')}\n📦 Stock: {stock}\n\nSelect quantity and add to cart.")
-        kb = []
-        if stock > 0:
-            kb.append([InlineKeyboardButton("➕ Add 1 to Cart", callback_data=f"cart_add_{pid}")])
-        else:
-            msg += "\n\n❌ OUT OF STOCK"
-        kb += [[InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart")],
-               [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
-               [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
-        markup = InlineKeyboardMarkup(kb)
-        if prod.get("image"):
-            try:
-                await q.message.reply_photo(photo=prod["image"], caption=msg[:1000], reply_markup=markup); return
-            except Exception as e:
-                print(f"shop product image send failed: {e}")
-        await q.message.reply_text(msg[:4000], reply_markup=markup)
-    except Exception as e:
-        print(f"shop_product_cb error {e}")
-        await q.message.reply_text("Error", reply_markup=main_menu())
-
-async def shopping_cart_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    cart = context.user_data.setdefault("shopping_cart", {})
-    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
-
-async def cart_add_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    pid = int(q.data.replace("cart_add_", "", 1))
-    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
-    if not prod: return
-    stock = int(prod.get("stock",0) or 0)
-    cart = context.user_data.setdefault("shopping_cart", {})
-    current = int(cart.get(pid, 0))
-    if current >= stock:
-        await q.message.reply_text(f"❌ Only {stock} available.", reply_markup=_shop_cart_kb(cart)); return
-    cart[pid] = current + 1
-    await q.message.reply_text(f"✅ Added 1 × {prod['name']} to cart.", reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart"), InlineKeyboardButton("➕ Add More", callback_data=f"shop_prod_{pid}")],
-        [InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping")]
-    ]))
-
-async def _cart_change(update, context, delta):
-    q = update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    pid = int(q.data.rsplit("_", 1)[1])
-    cart = context.user_data.setdefault("shopping_cart", {})
-    current = int(cart.get(pid, 0))
-    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
-    if not prod: return
-    stock = int(prod.get("stock",0) or 0)
-    new_qty = current + delta
-    if new_qty <= 0: cart.pop(pid, None)
-    elif new_qty > stock:
-        await q.message.reply_text(f"❌ Only {stock} available."); return
-    else: cart[pid] = new_qty
-    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
-
-async def cart_plus_cb(update, context): await _cart_change(update, context, 1)
-async def cart_minus_cb(update, context): await _cart_change(update, context, -1)
-
-async def cart_clear_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query
-    try: await q.answer("Cart cleared")
-    except Exception: pass
-    context.user_data["shopping_cart"] = {}
-    await q.message.reply_text("🗑️ Cart cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
-
-
-async def _show_shop_checkout(update, context, edit=False):
-    """Show checkout details after an address is available."""
-    uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
-    cart = context.user_data.get("shopping_cart", {})
-    if not cart:
-        msg = "🛒 Cart is empty."
-        if update.callback_query:
-            await update.callback_query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")]]))
-        else:
-            await update.message.reply_text(msg)
-        return
-    address = str(context.user_data.get("shop_address", "") or shop_addresses_db.get(uid, "") or "").strip()
-    if not address:
-        context.user_data["awaiting_shop_address"] = True
-        prompt = (
-            "📍 DELIVERY ADDRESS\n\n"
-            "Please send your complete delivery address in ONE message.\n"
-            "Example:\n"
-            "Name: Ravi\nMobile: 9876543210\n"
-            "House/Street: 12-34, Main Road\nArea: Kukatpally\n"
-            "City: Hyderabad\nState: Telangana\nPincode: 500072"
-        )
-        if update.callback_query:
-            await update.callback_query.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="shopping_cart")]]))
-        else:
-            await update.message.reply_text(prompt)
-        return
-    text = await _shop_cart_text(uid, cart)
-    text += f"\n\n📍 Delivery Address:\n{address}\n\nChoose payment method:"
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 UPI - Update Soon", callback_data="shop_pay_upi"),
-         InlineKeyboardButton("💵 Cash on Delivery", callback_data="shop_pay_cod")],
-        [InlineKeyboardButton("✏️ Change Address", callback_data="shop_change_address")],
-        [InlineKeyboardButton("🛒 Back to Cart", callback_data="shopping_cart")],
-    ])
-    if update.callback_query:
-        await update.callback_query.message.reply_text(text, reply_markup=kb)
-    else:
-        await update.message.reply_text(text, reply_markup=kb)
 
 
 def _shop_order_items(cart):
@@ -3670,6 +3628,9 @@ async def _shop_admin_order_cb(update, context, action):
         if order.get("status")!="dispatched":
             await q.message.reply_text("Order must be dispatched first."); return
         order["status"]="delivered"
+        # Record the actual completion date so monthly shopping progress is
+        # attributed to the cycle in which the order was delivered.
+        order["delivered_at"] = str(get_ist_now())
         for p in shop_purchases_db.get(int(order["uid"]),[]):
             if int(p.get("order_id",0))==oid: p["status"]="delivered"
         save_data()
@@ -3695,8 +3656,9 @@ async def shop_purchases_cb(update, context):
     lines=[
         "📦 MY PURCHASES",
         "",
-        f"🛍️ Shopping Balance (20% delivered credit): ₹{st['credit']:g}",
-        f"🎉 Delivered purchase value: ₹{st['delivered_total']:g}",
+        f"📊 Current-cycle Progress: ₹{st['purchased']:g}/₹{st['required']:g}",
+        f"💸 Current-cycle Withdrawals: ₹{st['withdrawn']:g}",
+        f"🎯 Required Purchase (20%): ₹{st['required']:g}",
         "",
     ]
     for p in purchases[-15:][::-1]:
@@ -3704,8 +3666,7 @@ async def shop_purchases_cb(update, context):
         lines.append(f"Order #{p.get('order_id')} — ₹{float(p.get('total',0)):g} — {status}")
         for it in p.get("items",[]): lines.append(f"  • {it.get('name')} × {it.get('qty')}")
         if status == "DELIVERED":
-            credit = round(float(p.get('total',0) or 0) * SHOPPING_CREDIT_PERCENT / 100.0, 2)
-            lines.append(f"  🛍️ 20% Credit: +₹{credit:g}")
+            lines.append("  ✅ Purchase value counted in the joining-date monthly cycle.")
         lines.append(f"  📅 {p.get('date','')}\n")
     await q.message.reply_text(
         "\n".join(lines),
@@ -3780,7 +3741,7 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
             f"Categories: {', '.join(get_shopping_categories())}\n"
             f"Product Pending: {len(product_promo_pending)}\n\n"
             "Shopping order system: COD active | UPI: Update Soon\n"
-            "20% Shopping Credit: added only after DELIVERED\n\n"
+            "20% Shopping Requirement: based on approved withdrawals in each joining-date monthly cycle.\n\n"
             "Commands:\n"
             "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
             "/add_category <name>\n"
@@ -3809,18 +3770,36 @@ async def admin_shop_progress_cb(update, context):
     try: await q.answer()
     except Exception: pass
     if not is_admin(q.from_user.id): return
-    lines=[_admin_shopping_summary_text(), "", "👥 USER-WISE STATUS", ""]
+    today = get_ist_today()
+    lines=[_admin_shopping_summary_text(), "", "👥 USER-WISE CURRENT-CYCLE STATUS", ""]
     uids=set()
+    for uid in list(users_db.keys()):
+        try: uids.add(int(uid))
+        except Exception: pass
     for o in shop_orders_db:
         try: uids.add(int(o.get("uid")))
         except Exception: pass
+    for uid in withdraw_history.keys():
+        try: uids.add(int(uid))
+        except Exception: pass
+
     for uid in sorted(uids, reverse=True)[:30]:
-        st=_shopping_stats(uid)
+        st=_shopping_stats(uid, today)
         rec=users_db.get(uid) or users_db.get(str(uid)) or {}
         name=rec.get("name") or rec.get("first_name") or "User"
-        pending=len(st["active"])
-        status="⏳ PENDING" if pending else ("✅ COMPLETE" if st["delivered"] else "— NO DELIVERY")
-        lines.append(f"👤 {name} | ID {uid}\n{status} | Delivered ₹{st['delivered_total']:g} | 20% Credit ₹{st['credit']:g} | Pending {pending}\n")
+        if st["no_withdrawal"]:
+            status="ℹ️ NO WITHDRAWAL"
+        elif st["complete"]:
+            status="✅ COMPLETE"
+        else:
+            status="⏳ PENDING"
+        cycle=f"{st['cycle_start'].strftime('%d/%m/%Y')}→{st['cycle_end'].strftime('%d/%m/%Y')}"
+        lines.append(
+            f"👤 {name} | ID {uid}\n"
+            f"📅 Cycle: {cycle}\n"
+            f"{status} | Withdraw ₹{st['withdrawn']:g} | Required ₹{st['required']:g}\n"
+            f"🛒 Purchased ₹{st['purchased']:g}/₹{st['required']:g} | Pending ₹{st['pending']:g}\n"
+        )
     await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_shop_pending"), InlineKeyboardButton("🎉 Delivered", callback_data="admin_shop_delivered")],
         [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
@@ -3858,8 +3837,8 @@ async def admin_shop_delivered_cb(update, context):
     else:
         chunks=["🎉 DELIVERED SHOPPING ORDERS\n"]
         for o in delivered[-30:][::-1]:
-            credit=_shop_credit_for_order(o)
-            chunks.append(_shop_order_text(o)+f"\n\n🛍️ 20% Shopping Credit: +₹{credit:g}")
+            st = _shopping_stats(int(o.get("uid")), get_ist_today())
+            chunks.append(_shop_order_text(o)+f"\n\n📊 Current-cycle Purchase Progress: ₹{st['purchased']:g}/₹{st['required']:g}")
             chunks.append("")
         text="\n".join(chunks)
     await q.message.reply_text(text[:4000], reply_markup=InlineKeyboardMarkup([
