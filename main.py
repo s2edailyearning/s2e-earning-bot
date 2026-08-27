@@ -377,6 +377,7 @@ if _env:
         if x.strip().isdigit():
             _id = int(x.strip())
             if _id not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(_id)
+ADMIN_IDS = ADMIN_ID_LIST
 
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
@@ -1459,6 +1460,412 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
     promo_campaigns_db.append(campaign)
     promo_campaign_counter += 1
     return campaign
+
+def _product_reward_for_user(task, uid):
+    rewards = task.get('rewards', {}) if isinstance(task, dict) else {}
+    if isinstance(rewards, dict):
+        pid = get_user_plan_id(uid)
+        if pid in rewards:
+            return int(rewards[pid])
+        if str(pid) in rewards:
+            return int(rewards[str(pid)])
+        if 'all' in rewards:
+            return int(rewards['all'])
+    return int(task.get('reward', 0) if isinstance(task, dict) else 0)
+
+def get_active_product_promo_for_user(uid):
+    """Return only the newest live Product Promotion for today.
+
+    Product Promotion is a single campaign slot. Older campaigns must never
+    reappear when the user presses the menu button again. Campaign state is
+    persisted in product_promo_db; Telegram file_id values are also persisted,
+    so a Render restart does not make the video disappear.
+    """
+    now = get_ist_now()
+    today = str(get_ist_today())
+    candidates = []
+    for t in product_promo_db:
+        if not isinstance(t, dict) or t.get('date') != today:
+            continue
+        if t.get('status') != 'active' or not t.get('video_file_id'):
+            continue
+        try:
+            video_deadline_obj = parse_time_str(str(t.get('download_deadline','')))
+            shot_open_obj = parse_time_str(str(t.get('screenshot_open','')))
+            shot_close_obj = parse_time_str(str(t.get('screenshot_close','')))
+            if not video_deadline_obj or not shot_open_obj or not shot_close_obj:
+                continue
+            video_deadline = datetime.combine(get_ist_today(), _safe_time(video_deadline_obj) or video_deadline_obj, tzinfo=IST)
+            shot_open = datetime.combine(get_ist_today(), _safe_time(shot_open_obj) or shot_open_obj, tzinfo=IST)
+            shot_close = datetime.combine(get_ist_today(), _safe_time(shot_close_obj) or shot_close_obj, tzinfo=IST)
+            if shot_close <= shot_open:
+                shot_close += timedelta(days=1)
+            if now <= shot_close:
+                t['_download_open'] = now <= video_deadline
+                t['_screenshot_open'] = shot_open <= now <= shot_close
+                t['_screenshot_closed'] = now > shot_close
+                candidates.append(t)
+        except Exception:
+            continue
+    # Only the newest campaign is exposed. This prevents an older campaign
+    # from coming back after a new campaign was created.
+    if not candidates:
+        return []
+    newest = max(candidates, key=lambda x: int(x.get('id', 0) or 0))
+    return [newest]
+
+def _product_time_text(t):
+    return f"🎥 Video download until: {t.get('download_deadline','')}\n📸 Screenshot: {t.get('screenshot_open','')} → {t.get('screenshot_close','')}"
+
+def _product_reward_text(t, uid):
+    return f"💰 Reward: ₹{_product_reward_for_user(t, uid)}"
+
+def get_active_promo_campaigns():
+    today = get_ist_today()
+    return [c for c in promo_campaigns_db if c['status'] == 'active' and c['expiry'] >= today]
+
+def get_promo_campaign(campaign_id):
+    for c in promo_campaigns_db:
+        if c['id'] == campaign_id:
+            return c
+    return None
+
+def parse_time_str(time_str):
+    time_str = time_str.strip().upper()
+    try:
+        if ':' in time_str:
+            parts = time_str.replace('AM','').replace('PM','').strip().split(':')
+            hour = int(parts[0])
+            minute = int(parts[1].split()[0]) if len(parts)>1 else 0
+            if 'PM' in time_str and hour < 12:
+                hour += 12
+            if 'AM' in time_str and hour == 12:
+                hour = 0
+            return time(hour, minute)
+        else:
+            hour = int(time_str.replace('AM','').replace('PM','').split()[0])
+            if 'PM' in time_str and hour < 12:
+                hour += 12
+            if 'AM' in time_str and hour == 12:
+                hour = 0
+            return time(hour, 0)
+    except:
+        return None
+
+def parse_interval_str(interval_str):
+    interval_str = interval_str.lower().strip()
+    try:
+        if 'min' in interval_str:
+            return int(re.findall(r'\d+', interval_str)[0])
+        elif 'hour' in interval_str or 'hr' in interval_str:
+            hours = int(re.findall(r'\d+', interval_str)[0])
+            return hours * 60
+        else:
+            return int(interval_str)
+    except:
+        return TASK_COMPLETION_WINDOW_MINUTES
+
+def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=0, image_file_id=None):
+    # ===== DUPLICATE PROTECTION - 2 times bug fix =====
+    import time as _time
+    _now = _time.time()
+    if hasattr(add_scheduled_task_with_interval, '_last_t'):
+        _elapsed = _now - add_scheduled_task_with_interval._last_t
+        _last_title = getattr(add_scheduled_task_with_interval, '_last_title', '')
+        if _elapsed < 8 and _last_title == title and title.strip() != "":
+            print(f"⚠️ Duplicate task blocked (2x bug): {title} in {_elapsed:.1f}s")
+            return False, f"Duplicate - Task already added! Wait 10 sec"
+    add_scheduled_task_with_interval._last_t = _now
+    add_scheduled_task_with_interval._last_title = title
+
+    global scheduled_task_counter
+    open_time = parse_time_str(open_time_str)
+    if not open_time:
+        return False, f"Invalid open {open_time_str}"
+    close_time = None
+    if ':' in close_time_or_interval or 'AM' in close_time_or_interval.upper() or 'PM' in close_time_or_interval.upper():
+        close_time = parse_time_str(close_time_or_interval)
+        if not close_time:
+            return False, f"Invalid close {close_time_or_interval}"
+    else:
+        interval_mins = parse_interval_str(close_time_or_interval)
+        open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
+        close_dt = open_dt + timedelta(minutes=interval_mins)
+        close_time = close_dt.time()
+    next_time = parse_time_str(next_time_str)
+    if not next_time:
+        return False, f"Invalid next {next_time_str}"
+    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
+    close_dt = datetime.combine(get_ist_today(), close_time, tzinfo=IST)
+    next_dt = datetime.combine(get_ist_today(), next_time, tzinfo=IST)
+    if close_dt <= open_dt:
+        return False, f"Close {close_time.strftime('%H:%M')} must be after open"
+    if next_dt < close_dt:
+        return False, f"Next {next_time.strftime('%H:%M')} must be after close"
+    task = {
+        'id': scheduled_task_counter,
+        'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]) + 1,
+        'open_time': open_time.strftime("%H:%M"),
+        'open_time_obj': open_time,
+        'close_time': close_time.strftime("%H:%M"),
+        'close_time_obj': close_time,
+        'next_time': next_time.strftime("%H:%M"),
+        'next_time_obj': next_time,
+        'title': title,
+        'link': link,
+        'reward': reward,
+        'date': str(get_ist_today()),
+        'created_at': get_ist_now(),
+        'window_minutes': int((close_dt - open_dt).total_seconds() / 60),
+        'skippable': True if any(x in title.lower() for x in ['angel', 'upstox', 'demat', 'trading']) else False,
+        'image_file_id': image_file_id
+    }
+    if image_file_id:
+        task_images_db[task['id']] = image_file_id
+    scheduled_tasks_db.append(task)
+    scheduled_tasks_db.sort(key=lambda x: x['open_time'])
+    scheduled_task_counter += 1
+    return True, task
+
+def get_tasks_for_today():
+    return [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
+
+def get_current_scheduled_task_with_interval():
+    now = get_ist_time()
+    today_tasks = get_tasks_for_today()
+    if not today_tasks:
+        return None, None
+    import datetime as _dt2
+    # normalize now
+    if isinstance(now, str):
+        try:
+            now = _dt2.datetime.strptime(now, "%H:%M").time() if ":" in now else _dt2.time.fromisoformat(now)
+        except:
+            pass
+    for i, task in enumerate(today_tasks):
+        open_time = task.get('open_time_obj')
+        close_time = task.get('close_time_obj')
+        # fallback to string fields
+        if open_time is None:
+            ot_str = task.get('open_time')
+            try:
+                open_time = _dt2.datetime.strptime(ot_str, "%H:%M").time() if ot_str and ":" in ot_str else _dt2.time.fromisoformat(ot_str) if ot_str else None
+            except:
+                open_time = None
+        if close_time is None:
+            ct_str = task.get('close_time')
+            try:
+                close_time = _dt2.datetime.strptime(ct_str, "%H:%M").time() if ct_str and ":" in ct_str else _dt2.time.fromisoformat(ct_str) if ct_str else None
+            except:
+                close_time = None
+        if isinstance(open_time, str):
+            try:
+                open_time = _dt2.datetime.strptime(open_time, "%H:%M").time()
+            except:
+                try:
+                    open_time = _dt2.time.fromisoformat(open_time)
+                except:
+                    continue
+        if isinstance(close_time, str):
+            try:
+                close_time = _dt2.datetime.strptime(close_time, "%H:%M").time()
+            except:
+                try:
+                    close_time = _dt2.time.fromisoformat(close_time)
+                except:
+                    continue
+        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
+        if open_time and close_time and now:
+            try:
+                if open_time <= now <= close_time:
+                    return task, next_task
+            except:
+                pass
+        if close_time and now:
+            try:
+                if close_time < now and next_task:
+                    nt_open = next_task.get('open_time_obj') or next_task.get('open_time')
+                    if isinstance(nt_open, str):
+                        try:
+                            nt_open = _dt2.datetime.strptime(nt_open, "%H:%M").time()
+                        except:
+                            nt_open = _dt2.time.fromisoformat(nt_open)
+                    if isinstance(nt_open, _dt2.time) and now < nt_open:
+                        return None, next_task
+            except:
+                pass
+    if today_tasks:
+        try:
+            first_open = today_tasks[0].get('open_time_obj') or today_tasks[0].get('open_time')
+            if isinstance(first_open, str):
+                first_open = _dt2.datetime.strptime(first_open, "%H:%M").time() if ":" in first_open else _dt2.time.fromisoformat(first_open)
+            if isinstance(first_open, _dt2.time) and now < first_open:
+                return None, today_tasks[0]
+        except:
+            pass
+    return None, None
+
+    for i, task in enumerate(today_tasks):
+        open_time = task['open_time_obj']
+        close_time = task['close_time_obj']
+        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
+        if open_time <= now <= close_time:
+            return task, next_task
+        if close_time < now:
+            if next_task and now < next_task['open_time_obj']:
+                return None, next_task
+    if today_tasks and now < today_tasks[0]['open_time_obj']:
+        return None, today_tasks[0]
+    return None, None
+
+def check_missed_tasks_with_interval(uid):
+    if uid not in user_task_status:
+        user_task_status[uid] = {}
+    today_tasks = get_tasks_for_today()
+    now = get_ist_now()
+    missed = []
+    newly_missed = []
+    for task in today_tasks:
+        task_id = task['id']
+        _ct = task.get('close_time_obj') or task.get('close_time')
+        _ct = _safe_time(_ct) or task.get('close_time_obj')
+        if _ct is None:
+            continue
+        try:
+            close_dt = datetime.combine(get_ist_today(), _ct, tzinfo=IST)
+        except:
+            continue
+        status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
+        if status in ['completed', 'skipped']:
+            continue
+        if now >= close_dt:
+            if status != 'missed':
+                if uid not in user_task_status:
+                    user_task_status[uid] = {}
+                user_task_status[uid][task_id] = {'status': 'missed', 'missed_at': now, 'task_number': task['task_number']}
+                newly_missed.append(task)
+            missed.append(task)
+    return missed, newly_missed
+
+def mark_task_completed_with_interval(uid, task_id):
+    if uid not in user_task_status:
+        user_task_status[uid] = {}
+    user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
+    # V31 FIX: Increment daily_task_count and earnings so wallet shows 1/1
+    try:
+        today = str(get_ist_today())
+        # daily count
+        if uid not in daily_task_count:
+            daily_task_count[uid] = {}
+        daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+        # total tasks
+        tasks_db[uid] = tasks_db.get(uid, 0) + 1
+        try:
+            if uid in missed_tasks_db:
+                try:
+                    missed_tasks_db[uid] = {}
+                    save_data()
+                except: pass
+        except: pass
+        # earning ₹5 per task
+        reward = 5
+        add_today_task_earning(uid, reward, day=today)
+        # referral commission
+        try:
+            for ref_id, level in get_effective_referral_levels(uid):
+                if level == 1:
+                    pct = float(L1_TASK_COMMISSION_PERCENT) if 'L1_TASK_COMMISSION_PERCENT' in globals() else 0.10
+                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 1, uid, f"L1 task commission from {uid}", source_amount=reward)
+                elif level == 2:
+                    pct = float(L2_TASK_COMMISSION_PERCENT) if 'L2_TASK_COMMISSION_PERCENT' in globals() else 0.05
+                    add_referral_commission(ref_id, reward * pct / 100.0, "task", 2, uid, f"L2 task commission from {uid}", source_amount=reward)
+        except Exception as _ref_e:
+            print(f"Referral commission fail {_ref_e}")
+        print(f"V31 Task {task_id} completed for {uid} - count {daily_task_count[uid][today]} - earning {reward}")
+    except Exception as _e:
+        print(f"V31 increment fail {_e}")
+        import traceback; traceback.print_exc()
+    try:
+        save_data()
+        print(f"V31 Task {task_id} completed for {uid} - saved")
+    except Exception as _e:
+        print(f"Save after task fail {_e}")
+
+def calculate_age(d): 
+    today=get_ist_today()
+    return today.year-d.year-((today.month,today.day)<(d.month,d.day))
+
+def is_paid_plan_active(uid):
+    """True only when the referrer has an active paid plan at this moment.
+    Free members can still earn task/product referral commissions, but never plan-activation commission.
+    """
+    try:
+        raw = _get_user_plan_record(uid)
+        if not raw or not isinstance(raw, dict):
+            return False
+        status = str(raw.get("status", "")).lower()
+        if status not in ("active", "approved"):
+            return False
+        pid = int(raw.get("plan_id", raw.get("id", 0)) or 0)
+        if pid <= 0:
+            return False
+        expiry = raw.get("expiry") or raw.get("expires_at")
+        if expiry:
+            try:
+                from datetime import date as _date
+                if get_ist_today() > _date.fromisoformat(str(expiry)[:10]):
+                    return False
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+def is_admin(uid):
+    try:
+        return int(uid) in ADMIN_ID_LIST
+    except Exception:
+        return False
+
+
+def get_balance(uid):
+    # Only settled referral commissions enter the wallet. Work commissions
+    # are pending until the daily 00:01 IST settlement.
+    task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
+    product_total = float(globals().get("product_promo_earnings_db", {}).get(uid, 0) or 0)
+    shop_promo_total = float(promo_earnings_db.get(uid, 0) or 0)
+    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_total, 2)
+
+
+def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
+    """Record referral commission. Work commissions settle at 00:01 IST; plan activation stays immediate."""
+    try:
+        referrer_uid = int(referrer_uid)
+        amount = float(amount)
+    except Exception:
+        return 0.0
+    if amount <= 0 or not referrer_uid:
+        return 0.0
+    ctype = str(commission_type or "")
+    work_types = {"task", "product", "product_promo", "promo", "shop_promo"}
+    is_work = ctype in work_types
+    entry = {
+        "date": str(get_ist_today()),
+        "type": ctype,
+        "level": int(level) if level is not None else None,
+        "source_uid": source_uid,
+        "amount": round(amount, 2),
+        "description": description,
+        "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
+        "status": "pending" if is_work else "settled",
+    }
+    referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
+    if is_work:
+        referral_pending_earnings[referrer_uid] = round(float(referral_pending_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    else:
+        referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    return amount
+
 
 PRODUCT_PROMO_FIXED_REWARDS = {0: 10, 1: 30, 2: 80, 3: 200, 4: 500}
 
