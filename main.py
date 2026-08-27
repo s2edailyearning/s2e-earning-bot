@@ -1,4 +1,4 @@
-print("S2E BOT V71 FINAL + SHOP PRODUCT PHOTO HANDLER STOP FIX - 2026-08-27")
+print("S2E BOT V71 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS + 20% SHOPPING PROGRESS - 2026-08-27")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -3937,6 +3937,7 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
             "Commands:\n"
             "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
             "/add_category <name>\n"
+            "/edit_category <id> <new name>\n"
             "/add_shop_product category|name|price|desc|image|stock\n"
             "/list_promos\n"
             "/list_shop_products\n"
@@ -4061,6 +4062,7 @@ async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "/add_support_plan <type> <price> <desc>\n"
             "/list_plans\n"
             "/add_category <name>\n"
+            "/edit_category <id> <new name>\n"
             "/add_shop_product category|name|price|desc|image|stock\n"
             "/upload_doc - send doc with caption\n\n"
             "How to upload doc:\n"
@@ -4088,6 +4090,83 @@ async def add_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = " ".join(context.args).strip()
     cat = add_shopping_category(name)
     await update.message.reply_text(f"✅ Category Added: {cat['name']} (ID {cat['id']})\nAll categories: {', '.join(get_shopping_categories())}")
+
+async def edit_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: rename an existing shopping category by ID and keep its products linked."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    if len(context.args) < 2:
+        cats = get_shopping_categories()
+        lines = ["🗂️ EDIT SHOPPING CATEGORY", "", "Current categories:"]
+        for c in shopping_categories_db:
+            lines.append(f"ID {c.get('id')}: {c.get('name')}")
+        if not shopping_categories_db:
+            lines.append("No custom categories saved.")
+        lines.extend([
+            "",
+            "Usage:",
+            "/edit_category <category_id> <new name>",
+            "Example:",
+            "/edit_category 2 Clothing",
+            "",
+            "The category name and all shop products using the old name will be updated."
+        ])
+        await update.message.reply_text("\n".join(lines)[:4000])
+        return
+
+    try:
+        category_id = int(context.args[0])
+    except (TypeError, ValueError):
+        await update.message.reply_text("❌ Category ID must be a number. Example: /edit_category 2 Clothing")
+        return
+
+    new_name = " ".join(context.args[1:]).strip()
+    if not new_name:
+        await update.message.reply_text("❌ New category name cannot be empty.")
+        return
+
+    category = next((c for c in shopping_categories_db if int(c.get("id", -1)) == category_id), None)
+    if not category:
+        await update.message.reply_text(
+            f"❌ Category ID {category_id} not found. Use /edit_category to see category IDs."
+        )
+        return
+
+    old_name = str(category.get("name", "")).strip()
+    if old_name.lower() == new_name.lower():
+        await update.message.reply_text(f"ℹ️ Category ID {category_id} is already '{old_name}'.")
+        return
+
+    # Prevent duplicate category names.
+    duplicate = next((c for c in shopping_categories_db
+                      if int(c.get("id", -1)) != category_id
+                      and str(c.get("name", "")).strip().lower() == new_name.lower()), None)
+    if duplicate:
+        await update.message.reply_text(
+            f"❌ Category '{new_name}' already exists (ID {duplicate.get('id')})."
+        )
+        return
+
+    category["name"] = new_name
+
+    # Keep existing products attached to the renamed category.
+    updated_products = 0
+    for product in shopping_products_db:
+        if str(product.get("category", "")).strip().lower() == old_name.lower():
+            product["category"] = new_name
+            updated_products += 1
+
+    save_data()
+    await update.message.reply_text(
+        f"✅ Category Updated!\n\n"
+        f"ID: {category_id}\n"
+        f"Old name: {old_name}\n"
+        f"New name: {new_name}\n"
+        f"Products updated: {updated_products}\n\n"
+        f"All categories: {', '.join(get_shopping_categories())}"
+    )
+
 
 async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -4173,12 +4252,6 @@ async def shop_product_image_photo_handler(update: Update, context: ContextTypes
             f"ID: {prod['id']}\n"
             f"Product: {prod['name']}"
         )
-        # IMPORTANT: This photo was consumed as a SHOP PRODUCT image.
-        # Stop all lower-priority photo handlers so it can never also be
-        # saved as the latest Daily Task image (e.g. Task 9).
-        raise ApplicationHandlerStop
-    except ApplicationHandlerStop:
-        raise
     except Exception as e:
         print(f"shop_product_image_photo_handler error: {e}")
         await update.message.reply_text("❌ Could not save product image. Please try again.")
@@ -9724,9 +9797,7 @@ def main():
                     # Product-image upload has priority over task-poster handling.
                     # Never let an admin product photo fall through to the task handler.
                     if context.user_data.get('awaiting_shop_product_image'):
-                        # Product-image upload owns this PHOTO. Do not allow
-                        # any Daily Task image handler to process it.
-                        raise ApplicationHandlerStop
+                        return
                     if not is_admin(uid):
                         return
                     if not update.message.photo and not update.message.document:
@@ -10130,6 +10201,7 @@ def main():
             app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             app.add_handler(CommandHandler("add_category", add_category_cmd))
+            app.add_handler(CommandHandler("edit_category", edit_category_cmd))
             app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
             app.add_handler(CommandHandler("set_shop_product_image", set_shop_product_image_cmd))
             app.add_handler(CommandHandler("set_orders_channel", set_orders_channel_cmd))
