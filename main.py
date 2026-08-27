@@ -9093,6 +9093,16 @@ def main():
             app.add_handler(CallbackQueryHandler(refer_earn_cb, pattern="^refer_earn$"))
             app.add_handler(CallbackQueryHandler(withdraw_history_cb, pattern="^withdraw_history$"))
             app.add_handler(CallbackQueryHandler(wallet_cb, pattern="^wallet$"))
+
+            # Shopping + Documents & Plans callbacks
+            # These buttons exist in main_menu/admin_panel_keyboard; register
+            # their handlers so Telegram callback queries are actually processed.
+            app.add_handler(CallbackQueryHandler(shopping_cb, pattern=r"^shopping$"))
+            app.add_handler(CallbackQueryHandler(shop_category_cb, pattern=r"^shop_cat_.+$"))
+            app.add_handler(CallbackQueryHandler(shop_product_cb, pattern=r"^shop_prod_\d+$"))
+            app.add_handler(CallbackQueryHandler(docs_plans_cb, pattern=r"^docs_plans$"))
+            app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern=r"^admin_view_shopping$"))
+            app.add_handler(CallbackQueryHandler(admin_view_docs_cb, pattern=r"^admin_view_docs$"))
             
             async def daily_open_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q=update.callback_query; await q.answer()
