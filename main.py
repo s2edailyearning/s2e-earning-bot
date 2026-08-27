@@ -479,60 +479,32 @@ def notification_thread_func():
             now = get_ist_now()
             lead = get_task_notification_seconds()
 
-            # PRODUCT PROMOTION: notify shortly before the video download window opens.
-            # If the video was uploaded after the deadline but the campaign is still live,
-            # notify members immediately so the new task is not missed.
+            # PRODUCT PROMOTION: 7:59 PM IST screenshot reminder. Video-upload notification is sent immediately by product_video_handler.
             for product in list(product_promo_db):
                 try:
-                    if not isinstance(product, dict) or product.get('status') != 'active' or not product.get('video_file_id'):
+                    if not isinstance(product, dict) or product.get('status') != 'active' or not product.get('video_file_id') or product.get('date') != str(get_ist_today()):
                         continue
-                    if product.get('date') != str(get_ist_today()):
-                        continue
-                    deadline = parse_time_str(str(product.get('download_deadline','')))
-                    close_t = parse_time_str(str(product.get('screenshot_close','')))
-                    if not deadline or not close_t:
-                        continue
-                    now = get_ist_now()
-                    open_dt = datetime.combine(get_ist_today(), deadline, tzinfo=IST)
-                    close_dt = datetime.combine(get_ist_today(), close_t, tzinfo=IST)
-                    if close_dt <= open_dt:
-                        close_dt += timedelta(days=1)
+                    shot_open = parse_time_str(str(product.get('screenshot_open','20:00'))) or time(20,0)
+                    shot_close = parse_time_str(str(product.get('screenshot_close','22:00'))) or time(22,0)
+                    open_dt = datetime.combine(get_ist_today(), shot_open, tzinfo=IST)
+                    close_dt = datetime.combine(get_ist_today(), shot_close, tzinfo=IST)
+                    if close_dt <= open_dt: close_dt += timedelta(days=1)
                     diff = (open_dt - now).total_seconds()
-                    # FIX V50 STRICT: No notifications after download deadline. 11AM daka matrame.
-                    if now > close_dt or now > open_dt:
-                        continue
-                    due_now = (0 <= diff <= lead)
-                    if not due_now:
-                        continue
-                    notify_key = f"product:{get_ist_today()}:{product.get('id')}:{lead}"
-                    if notify_key in notified_tasks_30sec:
-                        continue
-                    notified_tasks_30sec.add(notify_key)
-                    async def send_product_notifications(_p=product, _lead=lead, _late=(diff < 0)):
-                        sent = 0
-                        for uid in list(users_db.keys()):
-                            try:
-                                uid_int = int(uid)
-                                rec = users_db.get(uid) or users_db.get(str(uid)) or {}
-                                if uid_int <= 0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec):
-                                    continue
-                                reward = _product_reward_for_user(_p, uid_int)
-                                # V50: Only before deadline notification, always accurate
-                                if _late:
-                                    continue  # Don't send any notification after deadline
-                                else:
-                                    msg = (f"⏰ PRODUCT PROMOTION STARTING IN {_lead} SECONDS!\n\n🎥 {_p.get('title','Product Promotion')}\n"
-                                           f"💰 Reward: ₹{reward}\n"
-                                           f"🕐 Download until: {_p.get('download_deadline','')}\n\nTap the button below when it opens.")
-                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
-                                await bot_application.bot.send_message(chat_id=uid_int, text=msg[:4000], reply_markup=kb)
-                                sent += 1
-                            except Exception as e:
-                                print(f"product notification failed for {uid}: {e}")
-                        print(f"Product notification sent for {sent} users (campaign {_p.get('id')})")
-                    asyncio.run_coroutine_threadsafe(send_product_notifications(), bot_event_loop)
-                except Exception as e:
-                    print(f"Product notification scan error: {e}")
+                    if 0 <= diff <= 2:
+                        key=f"product_screenshot_reminder:{get_ist_today()}:{product.get('id')}"
+                        if key not in notified_tasks_30sec:
+                            notified_tasks_30sec.add(key)
+                            async def _send_product_reminder(_p=product):
+                                for raw_uid in list(users_db.keys()):
+                                    try:
+                                        uid_int=int(raw_uid); rec=users_db.get(raw_uid) or users_db.get(str(raw_uid)) or {}
+                                        if uid_int<=0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec): continue
+                                        reward=_product_reward_for_user(_p,uid_int)
+                                        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📸 Open Product Promotion",callback_data="product_promo")]])
+                                        await bot_application.bot.send_message(chat_id=uid_int,text=(f"📸 PRODUCT PROMOTION SCREENSHOT TIME\n\nPlease upload your WhatsApp Status screenshot now.\n\n⏰ Screenshot Upload Time: 8:00 PM – 10:00 PM\n💰 Your reward: ₹{reward}\n\n🚫 After 10:00 PM submissions are closed."),reply_markup=kb)
+                                    except Exception as e: print(f"product reminder failed for {raw_uid}: {e}")
+                            asyncio.run_coroutine_threadsafe(_send_product_reminder(),bot_event_loop)
+                except Exception as e: print(f"product reminder scan error: {e}")
 
             # DAILY TASKS
             for task in get_tasks_for_today():
@@ -1055,6 +1027,17 @@ product_promo_counter = 1
 product_promo_pending = {}
 # {uid: {campaign_id: approved_at}} - prevents duplicate Product Promotion payouts.
 product_promo_approved = {}
+
+# Documents and Shopping module state
+documents_db = []
+document_counter = 1
+shopping_products_db = []
+shopping_product_counter = 1
+shopping_carts_db = {}
+shopping_orders_db = []
+shopping_order_counter = 1
+shopping_monthly_db = {}
+
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -1184,7 +1167,7 @@ def _restore_all_int_keys_after_load():
         "promo_earnings_db", "product_promo_earnings_db", "promo_views_db", "promo_pending",
         "product_promo_pending", "product_promo_approved", "admin_names_db",
         "pending_plan_purchases", "support_plans_db", "task_images_db",
-        "support_banner_db",
+        "support_banner_db", "documents_db", "shopping_products_db", "shopping_carts_db", "shopping_orders_db", "shopping_monthly_db",
     ]
     for name in dict_names:
         obj = globals().get(name)
@@ -1222,7 +1205,7 @@ def save_data():
             "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "support_plan_image_file_id", "pending_plans",
-            "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT",
+            "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT", "PRODUCT_PROMO_FIXED_REWARDS", "documents_db", "document_counter", "shopping_products_db", "shopping_product_counter", "shopping_carts_db", "shopping_orders_db", "shopping_order_counter", "shopping_monthly_db",
         ]
         data = {}
         for name in state_names:
@@ -1477,392 +1460,12 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
     promo_campaign_counter += 1
     return campaign
 
+PRODUCT_PROMO_FIXED_REWARDS = {0: 10, 1: 30, 2: 80, 3: 200, 4: 500}
+
 def _product_reward_for_user(task, uid):
-    rewards = task.get('rewards', {}) if isinstance(task, dict) else {}
-    if isinstance(rewards, dict):
-        pid = get_user_plan_id(uid)
-        if pid in rewards:
-            return int(rewards[pid])
-        if str(pid) in rewards:
-            return int(rewards[str(pid)])
-        if 'all' in rewards:
-            return int(rewards['all'])
-    return int(task.get('reward', 0) if isinstance(task, dict) else 0)
-
-def get_active_product_promo_for_user(uid):
-    """Return only the newest live Product Promotion for today.
-
-    Product Promotion is a single campaign slot. Older campaigns must never
-    reappear when the user presses the menu button again. Campaign state is
-    persisted in product_promo_db; Telegram file_id values are also persisted,
-    so a Render restart does not make the video disappear.
-    """
-    now = get_ist_now()
-    today = str(get_ist_today())
-    candidates = []
-    for t in product_promo_db:
-        if not isinstance(t, dict) or t.get('date') != today:
-            continue
-        if t.get('status') != 'active' or not t.get('video_file_id'):
-            continue
-        try:
-            video_deadline_obj = parse_time_str(str(t.get('download_deadline','')))
-            shot_open_obj = parse_time_str(str(t.get('screenshot_open','')))
-            shot_close_obj = parse_time_str(str(t.get('screenshot_close','')))
-            if not video_deadline_obj or not shot_open_obj or not shot_close_obj:
-                continue
-            video_deadline = datetime.combine(get_ist_today(), _safe_time(video_deadline_obj) or video_deadline_obj, tzinfo=IST)
-            shot_open = datetime.combine(get_ist_today(), _safe_time(shot_open_obj) or shot_open_obj, tzinfo=IST)
-            shot_close = datetime.combine(get_ist_today(), _safe_time(shot_close_obj) or shot_close_obj, tzinfo=IST)
-            if shot_close <= shot_open:
-                shot_close += timedelta(days=1)
-            if now <= shot_close:
-                t['_download_open'] = now <= video_deadline
-                t['_screenshot_open'] = shot_open <= now <= shot_close
-                t['_screenshot_closed'] = now > shot_close
-                candidates.append(t)
-        except Exception:
-            continue
-    # Only the newest campaign is exposed. This prevents an older campaign
-    # from coming back after a new campaign was created.
-    if not candidates:
-        return []
-    newest = max(candidates, key=lambda x: int(x.get('id', 0) or 0))
-    return [newest]
-
-def _product_time_text(t):
-    return f"🎥 Video download until: {t.get('download_deadline','')}\n📸 Screenshot: {t.get('screenshot_open','')} → {t.get('screenshot_close','')}"
-
-def _product_reward_text(t, uid):
-    return f"💰 Reward: ₹{_product_reward_for_user(t, uid)}"
-
-def get_active_promo_campaigns():
-    today = get_ist_today()
-    return [c for c in promo_campaigns_db if c['status'] == 'active' and c['expiry'] >= today]
-
-def get_promo_campaign(campaign_id):
-    for c in promo_campaigns_db:
-        if c['id'] == campaign_id:
-            return c
-    return None
-
-def parse_time_str(time_str):
-    time_str = time_str.strip().upper()
-    try:
-        if ':' in time_str:
-            parts = time_str.replace('AM','').replace('PM','').strip().split(':')
-            hour = int(parts[0])
-            minute = int(parts[1].split()[0]) if len(parts)>1 else 0
-            if 'PM' in time_str and hour < 12:
-                hour += 12
-            if 'AM' in time_str and hour == 12:
-                hour = 0
-            return time(hour, minute)
-        else:
-            hour = int(time_str.replace('AM','').replace('PM','').split()[0])
-            if 'PM' in time_str and hour < 12:
-                hour += 12
-            if 'AM' in time_str and hour == 12:
-                hour = 0
-            return time(hour, 0)
-    except:
-        return None
-
-def parse_interval_str(interval_str):
-    interval_str = interval_str.lower().strip()
-    try:
-        if 'min' in interval_str:
-            return int(re.findall(r'\d+', interval_str)[0])
-        elif 'hour' in interval_str or 'hr' in interval_str:
-            hours = int(re.findall(r'\d+', interval_str)[0])
-            return hours * 60
-        else:
-            return int(interval_str)
-    except:
-        return TASK_COMPLETION_WINDOW_MINUTES
-
-def add_scheduled_task_with_interval(open_time_str, close_time_or_interval, next_time_str, title, link, reward=0, image_file_id=None):
-    # ===== DUPLICATE PROTECTION - 2 times bug fix =====
-    import time as _time
-    _now = _time.time()
-    if hasattr(add_scheduled_task_with_interval, '_last_t'):
-        _elapsed = _now - add_scheduled_task_with_interval._last_t
-        _last_title = getattr(add_scheduled_task_with_interval, '_last_title', '')
-        if _elapsed < 8 and _last_title == title and title.strip() != "":
-            print(f"⚠️ Duplicate task blocked (2x bug): {title} in {_elapsed:.1f}s")
-            return False, f"Duplicate - Task already added! Wait 10 sec"
-    add_scheduled_task_with_interval._last_t = _now
-    add_scheduled_task_with_interval._last_title = title
-
-    global scheduled_task_counter
-    open_time = parse_time_str(open_time_str)
-    if not open_time:
-        return False, f"Invalid open {open_time_str}"
-    close_time = None
-    if ':' in close_time_or_interval or 'AM' in close_time_or_interval.upper() or 'PM' in close_time_or_interval.upper():
-        close_time = parse_time_str(close_time_or_interval)
-        if not close_time:
-            return False, f"Invalid close {close_time_or_interval}"
-    else:
-        interval_mins = parse_interval_str(close_time_or_interval)
-        open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
-        close_dt = open_dt + timedelta(minutes=interval_mins)
-        close_time = close_dt.time()
-    next_time = parse_time_str(next_time_str)
-    if not next_time:
-        return False, f"Invalid next {next_time_str}"
-    open_dt = datetime.combine(get_ist_today(), open_time, tzinfo=IST)
-    close_dt = datetime.combine(get_ist_today(), close_time, tzinfo=IST)
-    next_dt = datetime.combine(get_ist_today(), next_time, tzinfo=IST)
-    if close_dt <= open_dt:
-        return False, f"Close {close_time.strftime('%H:%M')} must be after open"
-    if next_dt < close_dt:
-        return False, f"Next {next_time.strftime('%H:%M')} must be after close"
-    task = {
-        'id': scheduled_task_counter,
-        'task_number': len([t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]) + 1,
-        'open_time': open_time.strftime("%H:%M"),
-        'open_time_obj': open_time,
-        'close_time': close_time.strftime("%H:%M"),
-        'close_time_obj': close_time,
-        'next_time': next_time.strftime("%H:%M"),
-        'next_time_obj': next_time,
-        'title': title,
-        'link': link,
-        'reward': reward,
-        'date': str(get_ist_today()),
-        'created_at': get_ist_now(),
-        'window_minutes': int((close_dt - open_dt).total_seconds() / 60),
-        'skippable': True if any(x in title.lower() for x in ['angel', 'upstox', 'demat', 'trading']) else False,
-        'image_file_id': image_file_id
-    }
-    if image_file_id:
-        task_images_db[task['id']] = image_file_id
-    scheduled_tasks_db.append(task)
-    scheduled_tasks_db.sort(key=lambda x: x['open_time'])
-    scheduled_task_counter += 1
-    return True, task
-
-def get_tasks_for_today():
-    return [t for t in scheduled_tasks_db if t['date'] == str(get_ist_today())]
-
-def get_current_scheduled_task_with_interval():
-    now = get_ist_time()
-    today_tasks = get_tasks_for_today()
-    if not today_tasks:
-        return None, None
-    import datetime as _dt2
-    # normalize now
-    if isinstance(now, str):
-        try:
-            now = _dt2.datetime.strptime(now, "%H:%M").time() if ":" in now else _dt2.time.fromisoformat(now)
-        except:
-            pass
-    for i, task in enumerate(today_tasks):
-        open_time = task.get('open_time_obj')
-        close_time = task.get('close_time_obj')
-        # fallback to string fields
-        if open_time is None:
-            ot_str = task.get('open_time')
-            try:
-                open_time = _dt2.datetime.strptime(ot_str, "%H:%M").time() if ot_str and ":" in ot_str else _dt2.time.fromisoformat(ot_str) if ot_str else None
-            except:
-                open_time = None
-        if close_time is None:
-            ct_str = task.get('close_time')
-            try:
-                close_time = _dt2.datetime.strptime(ct_str, "%H:%M").time() if ct_str and ":" in ct_str else _dt2.time.fromisoformat(ct_str) if ct_str else None
-            except:
-                close_time = None
-        if isinstance(open_time, str):
-            try:
-                open_time = _dt2.datetime.strptime(open_time, "%H:%M").time()
-            except:
-                try:
-                    open_time = _dt2.time.fromisoformat(open_time)
-                except:
-                    continue
-        if isinstance(close_time, str):
-            try:
-                close_time = _dt2.datetime.strptime(close_time, "%H:%M").time()
-            except:
-                try:
-                    close_time = _dt2.time.fromisoformat(close_time)
-                except:
-                    continue
-        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
-        if open_time and close_time and now:
-            try:
-                if open_time <= now <= close_time:
-                    return task, next_task
-            except:
-                pass
-        if close_time and now:
-            try:
-                if close_time < now and next_task:
-                    nt_open = next_task.get('open_time_obj') or next_task.get('open_time')
-                    if isinstance(nt_open, str):
-                        try:
-                            nt_open = _dt2.datetime.strptime(nt_open, "%H:%M").time()
-                        except:
-                            nt_open = _dt2.time.fromisoformat(nt_open)
-                    if isinstance(nt_open, _dt2.time) and now < nt_open:
-                        return None, next_task
-            except:
-                pass
-    if today_tasks:
-        try:
-            first_open = today_tasks[0].get('open_time_obj') or today_tasks[0].get('open_time')
-            if isinstance(first_open, str):
-                first_open = _dt2.datetime.strptime(first_open, "%H:%M").time() if ":" in first_open else _dt2.time.fromisoformat(first_open)
-            if isinstance(first_open, _dt2.time) and now < first_open:
-                return None, today_tasks[0]
-        except:
-            pass
-    return None, None
-
-    for i, task in enumerate(today_tasks):
-        open_time = task['open_time_obj']
-        close_time = task['close_time_obj']
-        next_task = today_tasks[i+1] if i+1 < len(today_tasks) else None
-        if open_time <= now <= close_time:
-            return task, next_task
-        if close_time < now:
-            if next_task and now < next_task['open_time_obj']:
-                return None, next_task
-    if today_tasks and now < today_tasks[0]['open_time_obj']:
-        return None, today_tasks[0]
-    return None, None
-
-def check_missed_tasks_with_interval(uid):
-    if uid not in user_task_status:
-        user_task_status[uid] = {}
-    today_tasks = get_tasks_for_today()
-    now = get_ist_now()
-    missed = []
-    newly_missed = []
-    for task in today_tasks:
-        task_id = task['id']
-        _ct = task.get('close_time_obj') or task.get('close_time')
-        _ct = _safe_time(_ct) or task.get('close_time_obj')
-        if _ct is None:
-            continue
-        try:
-            close_dt = datetime.combine(get_ist_today(), _ct, tzinfo=IST)
-        except:
-            continue
-        status = user_task_status[uid].get(task_id, {}).get('status') if isinstance(user_task_status[uid].get(task_id), dict) else user_task_status[uid].get(task_id)
-        if status in ['completed', 'skipped']:
-            continue
-        if now >= close_dt:
-            if status != 'missed':
-                if uid not in user_task_status:
-                    user_task_status[uid] = {}
-                user_task_status[uid][task_id] = {'status': 'missed', 'missed_at': now, 'task_number': task['task_number']}
-                newly_missed.append(task)
-            missed.append(task)
-    return missed, newly_missed
-
-def mark_task_completed_with_interval(uid, task_id):
-    if uid not in user_task_status:
-        user_task_status[uid] = {}
-    user_task_status[uid][task_id] = {'status': 'completed', 'completed_at': get_ist_now()}
-    # V31 FIX: Increment daily_task_count and earnings so wallet shows 1/1
-    try:
-        today = str(get_ist_today())
-        # daily count
-        if uid not in daily_task_count:
-            daily_task_count[uid] = {}
-        daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
-        # total tasks
-        tasks_db[uid] = tasks_db.get(uid, 0) + 1
-        try:
-            if uid in missed_tasks_db:
-                try:
-                    missed_tasks_db[uid] = {}
-                    save_data()
-                except: pass
-        except: pass
-        # earning ₹5 per task
-        reward = 5
-        add_today_task_earning(uid, reward, day=today)
-        # Referral commission is intentionally NOT created here.
-        # It is created once, at admin approval time, and settled at 00:01 IST.
-        print(f"V31 Task {task_id} completed for {uid} - count {daily_task_count[uid][today]} - earning {reward}")
-    except Exception as _e:
-        print(f"V31 increment fail {_e}")
-        import traceback; traceback.print_exc()
-    try:
-        save_data()
-        print(f"V31 Task {task_id} completed for {uid} - saved")
-    except Exception as _e:
-        print(f"Save after task fail {_e}")
-
-def is_admin(uid): return uid in ADMIN_ID_LIST
-def calculate_age(d): 
-    today=get_ist_today()
-    return today.year-d.year-((today.month,today.day)<(d.month,d.day))
-def is_paid_plan_active(uid):
-    """True only when the referrer has an active paid plan at this moment.
-    Free members can still earn task/product referral commissions, but never plan-activation commission.
-    """
-    try:
-        raw = _get_user_plan_record(uid)
-        if not raw or not isinstance(raw, dict):
-            return False
-        status = str(raw.get("status", "")).lower()
-        if status not in ("active", "approved"):
-            return False
-        pid = int(raw.get("plan_id", raw.get("id", 0)) or 0)
-        if pid <= 0:
-            return False
-        expiry = raw.get("expiry") or raw.get("expires_at")
-        if expiry:
-            try:
-                from datetime import date as _date
-                if get_ist_today() > _date.fromisoformat(str(expiry)[:10]):
-                    return False
-            except Exception:
-                pass
-        return True
-    except Exception:
-        return False
-
-def get_balance(uid):
-    # Own task/promotion earnings are credited immediately when approved.
-    # Referral work commissions are deliberately excluded until 00:01 IST settlement.
-    task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
-    shop_promo_total = float(promo_earnings_db.get(uid, 0) or 0)
-    product_promo_total = float(product_promo_earnings_db.get(uid, 0) or 0)
-    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_promo_total, 2)
-
-def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
-    """Record referral commission. Work commissions settle next day; plan commission is immediate."""
-    try:
-        amount = float(amount)
-    except Exception:
-        return 0.0
-    if amount <= 0 or not referrer_uid:
-        return 0.0
-    ctype = str(commission_type)
-    is_work_commission = ctype in {"task", "product", "product_promo", "promo", "shop_promo"}
-    status = "pending" if is_work_commission else "settled"
-    entry = {
-        "date": str(get_ist_today()),
-        "type": ctype,
-        "level": int(level) if level is not None else None,
-        "source_uid": source_uid,
-        "amount": round(amount, 2),
-        "description": description,
-        "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
-        "status": status,
-    }
-    referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
-    if is_work_commission:
-        referral_pending_earnings[referrer_uid] = round(float(referral_pending_earnings.get(referrer_uid, 0) or 0) + amount, 2)
-    else:
-        referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
-    return amount
+    try: pid = int(get_user_plan_id(uid))
+    except Exception: pid = 0
+    return int(PRODUCT_PROMO_FIXED_REWARDS.get(pid, 10))
 
 async def settle_previous_day_referrals(context):
     """At 00:01 IST, settle yesterday's task/product/shop-promo referral commissions."""
@@ -2210,6 +1813,7 @@ def main_menu():
         [InlineKeyboardButton("💰 Wallet", callback_data="wallet"), InlineKeyboardButton("📅 Daily Task", callback_data="daily")],
         [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw"), InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks")],
         [InlineKeyboardButton("📢 Product Promotion", callback_data="product_promo")],
+        [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("📚 Documents & Plans", callback_data="documents_plans")],
         [InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop"), InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled")],
         [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("👤 My Details", callback_data="my_details")],
         [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
@@ -3276,8 +2880,9 @@ async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=q.from_user.id
     promos=get_active_product_promo_for_user(uid)
     if not promos:
-        await q.message.reply_text("📢 PRODUCT PROMOTION\n\nNo active product promotion right now.", reply_markup=main_menu())
-        return
+        todays=[x for x in product_promo_db if isinstance(x,dict) and x.get('date')==str(get_ist_today()) and x.get('status')=='active' and x.get('video_file_id')]
+        msg="📢 PRODUCT PROMOTION\n\n⏰ Today's Product Promotion time is over.\n\n📅 Wait for the next day's Product Promotion." if todays else "📢 PRODUCT PROMOTION\n\nNo active Product Promotion right now.\n\n📅 Wait for the next day's Product Promotion."
+        await q.message.reply_text(msg,reply_markup=main_menu()); return
 
     kb=[]
     lines=["📢 PRODUCT PROMOTION\n"]
@@ -3454,38 +3059,27 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
         t['video_file_id']=file_id; t['status']='active'
         context.user_data.pop('awaiting_product_video',None)
         save_data()
-        # If the upload happens after the download window already opened, send the notification immediately.
+        # Product video upload notification: send immediately to all eligible members.
         try:
-            now = get_ist_now()
-            dl = parse_time_str(str(t.get('download_deadline','')))
-            sc = parse_time_str(str(t.get('screenshot_close','')))
-            if dl and sc:
-                dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
-                sc_dt = datetime.combine(get_ist_today(), sc, tzinfo=IST)
-                if sc_dt <= dl_dt: sc_dt += timedelta(days=1)
-                if now > dl_dt and now <= sc_dt:
-                    key = f"product:{get_ist_today()}:{t.get('id')}:immediate"
-                    if key not in notified_tasks_30sec:
-                        notified_tasks_30sec.add(key)
-                        for member_uid in list(users_db.keys()):
-                            try:
-                                muid = int(member_uid); rec = users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
-                                if muid <= 0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
-                                    continue
-                                # V50: Only send LIVE if download still open
-                                now_check = get_ist_now()
-                                dl = parse_time_str(str(t.get('download_deadline','')))
-                                if dl:
-                                    dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
-                                    if now_check > dl_dt:
-                                        continue  # Don't send LIVE after deadline
-                                reward = _product_reward_for_user(t, muid)
-                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
-                                await context.bot.send_message(chat_id=muid, text=(f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n💰 Download until: {t.get('download_deadline','')}\n\nTap below to open the task."), reply_markup=kb)
-                            except Exception as _ne:
-                                print(f"product immediate notification failed for {member_uid}: {_ne}")
+            for member_uid in list(users_db.keys()):
+                try:
+                    muid=int(member_uid); rec=users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
+                    if muid<=0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
+                        continue
+                    reward=_product_reward_for_user(t,muid)
+                    kb=InlineKeyboardMarkup([[InlineKeyboardButton("⬇️ Download Product Promotion Video", callback_data=f"product_download_{tid}")]])
+                    await context.bot.send_message(chat_id=muid,text=(
+                        f"📢 PRODUCT PROMOTION VIDEO AVAILABLE!\n\n"
+                        f"🎥 {t.get('title','Product Promotion')}\n"
+                        f"💰 Your reward: ₹{reward}\n\n"
+                        f"⬇️ Download the video and post it on your WhatsApp Status.\n"
+                        f"⏰ Video download available until: {t.get('download_deadline','10:00')}\n"
+                        f"📸 Screenshot upload time: {t.get('screenshot_open','20:00')} – {t.get('screenshot_close','22:00')}"
+                    ),reply_markup=kb)
+                except Exception as _ne:
+                    print(f"product upload notification failed for {member_uid}: {_ne}")
         except Exception as _e:
-            print(f"product immediate notification check failed: {_e}")
+            print(f"product upload notification outer error: {_e}")
         await update.message.reply_text(f"✅ Product Promotion {tid} video saved and activated.\nMembers will see it in 📢 Product Promotion, NOT in Daily Task.")
     except Exception as e:
         print(f'product_video_handler error: {e}')
@@ -7751,6 +7345,9 @@ async def add_task_5plans_cmd(update, context):
             'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
             'audience': audience,
             'description': description,
+            'next_time': close_time,
+            'next_time_obj': ct,
+            'window_minutes': int((datetime.combine(get_ist_today(), ct) - datetime.combine(get_ist_today(), ot)).total_seconds() / 60),
             'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
         }
         scheduled_tasks_db.append(task)
@@ -8657,6 +8254,11 @@ def main():
                     except:
                         pass
 
+            # Direct Documents & Plans file upload handler. It runs before the
+            # existing task/product image handlers, but only consumes messages when
+            # the admin explicitly started /add_document upload mode.
+            app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, document_file_upload_handler), group=-3)
+
             #  Add simple handlers with high priority - No ConversationHandler!
             app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, product_video_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, product_screenshot_photo_handler), group=0)
@@ -8707,6 +8309,14 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
+            app.add_handler(CommandHandler("add_document", add_document_cmd))
+            app.add_handler(CommandHandler("list_documents", list_documents_cmd))
+            app.add_handler(CommandHandler("remove_document", remove_document_cmd))
+            app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
+            app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
+            app.add_handler(CommandHandler("remove_shop_product", remove_shop_product_cmd))
+            app.add_handler(CommandHandler("shop_orders", shop_orders_cmd))
+            app.add_handler(CommandHandler("approve_shop_order", approve_shop_order_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("scheduled_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("list_scheduled_tasks", list_scheduled_tasks_cmd))
@@ -8789,6 +8399,12 @@ def main():
             app.add_handler(CallbackQueryHandler(product_approve_cb, pattern=r"^product_approve_\d+_\d+$"))
             app.add_handler(CallbackQueryHandler(product_reject_cb, pattern=r"^product_reject_\d+_\d+$"))
             app.add_handler(CallbackQueryHandler(product_bulk_approve_cb, pattern=r"^product_bulk_approve_all$"))
+            app.add_handler(CallbackQueryHandler(shopping_cb, pattern=r"^shopping$"))
+            app.add_handler(CallbackQueryHandler(documents_plans_cb, pattern=r"^documents_plans$"))
+            app.add_handler(CallbackQueryHandler(document_open_cb, pattern=r"^document_open_\d+$"))
+            app.add_handler(CallbackQueryHandler(shop_add_cb, pattern=r"^shop_add_\d+$"))
+            app.add_handler(CallbackQueryHandler(shop_cart_cb, pattern=r"^shop_cart$"))
+            app.add_handler(CallbackQueryHandler(shop_checkout_cb, pattern=r"^shop_checkout$"))
             app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
             app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
@@ -9309,6 +8925,179 @@ async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT
         result += "\n\nSome users may have blocked the bot or deleted their chat."
     await msg.reply_text(result)
 # === END CONTROLLED BROADCAST SYSTEM ===
+
+
+# ===== DOCUMENTS & SHOPPING MODULE =====
+def _shopping_cycle(uid):
+    uid=int(uid); month=get_ist_now().strftime('%Y-%m')
+    rec=shopping_monthly_db.get(uid) or shopping_monthly_db.get(str(uid))
+    if not isinstance(rec,dict) or rec.get('month')!=month:
+        rec={'month':month,'target':0.0,'spent':0.0,'completed':False}; shopping_monthly_db[uid]=rec
+    if not rec.get('completed'): rec['target']=round(get_withdrawn_for_cap(uid)*0.20,2)
+    return rec
+
+async def documents_plans_cb(update, context):
+    q=update.callback_query; await q.answer(); info=_canonical_plan_info(q.from_user.id)
+    lines=["📚 DOCUMENTS & PLANS","",f"💎 Current Plan: {info.get('display','Not activated')}",f"📅 Valid till: {info.get('expiry','-')}",""]
+    if documents_db:
+        lines.append("📂 AVAILABLE FILES")
+        for d in documents_db[-30:]:
+            kind = d.get('kind','document').upper()
+            lines.append(f"{d['id']}. {d['title']} [{kind}]")
+            if d.get('description'): lines.append(f"   {d['description']}")
+    else:
+        lines.append("📄 No documents added yet.")
+    kb=[]
+    for d in documents_db[-20:]:
+        kb.append([InlineKeyboardButton(f"📥 {d['title'][:35]}", callback_data=f"document_open_{d['id']}")])
+    kb += [[InlineKeyboardButton("💎 Support Plans",callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
+    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
+
+async def document_open_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    try: did=int(q.data.rsplit('_',1)[1])
+    except: return
+    d=next((x for x in documents_db if int(x.get('id',-1))==did),None)
+    if not d:
+        await q.message.reply_text("❌ Document not found.", reply_markup=main_menu()); return
+    try:
+        fid=d.get('file_id')
+        if fid:
+            kind=d.get('kind','document')
+            if kind=='photo':
+                await context.bot.send_photo(chat_id=uid, photo=fid, caption=d.get('description') or d.get('title',''))
+            else:
+                await context.bot.send_document(chat_id=uid, document=fid, caption=d.get('description') or d.get('title',''))
+        elif d.get('url'):
+            await q.message.reply_text(f"📄 {d.get('title','Document')}\n\n{d.get('description','')}\n\n🔗 {d['url']}", reply_markup=main_menu())
+        else:
+            await q.message.reply_text("❌ This document has no file or link.", reply_markup=main_menu())
+    except Exception as e:
+        await q.message.reply_text(f"❌ Could not send file: {e}", reply_markup=main_menu())
+
+async def document_file_upload_handler(update, context):
+    uid=update.effective_user.id
+    if not is_admin(uid) or not context.user_data.get('awaiting_document_upload'):
+        return
+    msg=update.message
+    if not msg or (not msg.document and not msg.photo):
+        return
+    title=context.user_data.get('document_title') or (msg.caption or '').strip() or 'Document'
+    description=context.user_data.get('document_description','')
+    if msg.document:
+        file_id=msg.document.file_id; kind='document'; mime=msg.document.mime_type or ''
+    else:
+        file_id=msg.photo[-1].file_id; kind='photo'; mime='image'
+    global document_counter
+    d={'id':document_counter,'title':title[:150],'description':description[:1000],'file_id':file_id,'kind':kind,'mime_type':mime,'created_at':str(get_ist_now())}
+    documents_db.append(d); document_counter+=1
+    context.user_data.pop('awaiting_document_upload',None); context.user_data.pop('document_title',None); context.user_data.pop('document_description',None)
+    save_data()
+    await msg.reply_text(f"✅ File saved in Documents & Plans!\n\n🆔 ID: {d['id']}\n📄 {d['title']}\n📦 Type: {kind.upper()}\n\nUsers can open it anytime from 📚 Documents & Plans.")
+
+async def shopping_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cycle=_shopping_cycle(uid); cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    lines=["🛒 SHOPPING","",f"📅 Month: {cycle['month']}",f"🎯 Monthly shopping target (20% of approved withdrawals): ₹{cycle['target']:.2f}",f"🛍️ Verified purchases: ₹{cycle['spent']:.2f}",f"📌 Remaining: ₹{max(0,cycle['target']-cycle['spent']):.2f}",""]
+    if cycle.get('completed'): lines.append("✅ Monthly shopping target completed. Next month starts fresh.")
+    kb=[]
+    for pdt in shopping_products_db[-15:]:
+        lines.append(f"🛍️ {pdt['id']}. {pdt['name']} — ₹{float(pdt['price']):.2f}")
+        if pdt.get('description'): lines.append(f"   {pdt['description']}")
+        kb.append([InlineKeyboardButton(f"🛒 Add {pdt['name'][:25]}",callback_data=f"shop_add_{pdt['id']}")])
+    if not shopping_products_db: lines.append("No products available right now.")
+    kb += [[InlineKeyboardButton(f"🧺 Cart ({len(cart)})",callback_data="shop_cart")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
+    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
+
+async def shop_add_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    try: pid=int(q.data.rsplit('_',1)[1])
+    except: return
+    pdt=next((x for x in shopping_products_db if int(x.get('id',-1))==pid),None)
+    if not pdt: await q.message.reply_text("❌ Product not found.",reply_markup=main_menu()); return
+    shopping_carts_db.setdefault(uid,[]).append({'product_id':pid,'name':pdt['name'],'price':float(pdt['price']),'qty':1}); save_data()
+    await q.message.reply_text(f"✅ Added: {pdt['name']} — ₹{float(pdt['price']):.2f}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧺 View Cart",callback_data="shop_cart")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")]]))
+
+async def shop_cart_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
+    total=sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart)
+    lines=["🧺 YOUR CART",""]+[f"• {x['name']} × {x.get('qty',1)} = ₹{float(x['price'])*int(x.get('qty',1)):.2f}" for x in cart]+["",f"💰 Total: ₹{total:.2f}"]
+    await q.message.reply_text("\n".join(lines),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Submit Purchase",callback_data="shop_checkout")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]))
+
+async def shop_checkout_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
+    global shopping_order_counter
+    total=round(sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart),2)
+    order={'id':shopping_order_counter,'uid':uid,'items':cart,'total':total,'status':'pending_verification','created_at':str(get_ist_now())}; shopping_orders_db.append(order); shopping_order_counter+=1; shopping_carts_db.pop(uid,None); shopping_carts_db.pop(str(uid),None); save_data()
+    await q.message.reply_text(f"✅ Purchase request #{order['id']} submitted.\n\n💰 Amount: ₹{total:.2f}\n⏳ Waiting for purchase verification.\n\n💰 Your main wallet balance is unchanged.",reply_markup=main_menu())
+    for aid in list(ADMIN_IDS):
+        try: await context.bot.send_message(chat_id=aid,text=f"🛒 SHOP ORDER #{order['id']}\nUser: {uid}\nAmount: ₹{total:.2f}\nApprove: /approve_shop_order {order['id']}")
+        except: pass
+
+async def add_document_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    raw=update.message.text.replace('/add_document','',1).strip()
+    if raw:
+        parts=[x.strip() for x in raw.split('|')]
+        # Backward-compatible link mode: /add_document TITLE | URL | DESCRIPTION
+        if len(parts)>=2 and parts[1].startswith(('http://','https://')):
+            global document_counter
+            d={'id':document_counter,'title':parts[0],'url':parts[1],'description':parts[2] if len(parts)>2 else '','kind':'link'}
+            documents_db.append(d); document_counter+=1; save_data(); await update.message.reply_text(f"✅ Document link added: {d['id']}"); return
+        title=parts[0]; description=parts[1] if len(parts)>1 else ''
+    else:
+        title='Document'; description=''
+    context.user_data['awaiting_document_upload']=True
+    context.user_data['document_title']=title
+    context.user_data['document_description']=description
+    await update.message.reply_text("📤 Now send the PDF / PPT / PPTX / DOC / DOCX file or an image.\n\nThe uploaded file will be stored by Telegram file_id and users can open it anytime from 📚 Documents & Plans.")
+
+async def list_documents_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text("📚 Documents & Files:\n\n"+("\n".join(f"{d['id']}. {d['title']} | {d.get('kind','document').upper()}" for d in documents_db) if documents_db else "No documents."))
+
+async def remove_document_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: did=int(context.args[0])
+    except: await update.message.reply_text("Usage: /remove_document ID"); return
+    documents_db[:]=[d for d in documents_db if int(d.get('id',-1))!=did]; save_data(); await update.message.reply_text(f"✅ Document {did} removed.")
+
+async def add_shop_product_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    global shopping_product_counter
+    parts=[x.strip() for x in update.message.text.replace('/add_shop_product','',1).strip().split('|')]
+    if len(parts)<2: await update.message.reply_text("Usage: /add_shop_product NAME | PRICE | LINK | DESCRIPTION"); return
+    try: price=float(parts[1])
+    except: await update.message.reply_text("❌ Price must be a number."); return
+    pdt={'id':shopping_product_counter,'name':parts[0],'price':price,'link':parts[2] if len(parts)>2 else '','description':parts[3] if len(parts)>3 else ''}; shopping_products_db.append(pdt); shopping_product_counter+=1; save_data(); await update.message.reply_text(f"✅ Product added: {pdt['id']} | ₹{price:.2f}")
+
+async def list_shop_products_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text("🛍️ Products:\n\n"+("\n".join(f"{p['id']}. {p['name']} — ₹{float(p['price']):.2f} | {p.get('link','')}" for p in shopping_products_db) if shopping_products_db else "No products."))
+
+async def remove_shop_product_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: pid=int(context.args[0])
+    except: await update.message.reply_text("Usage: /remove_shop_product ID"); return
+    shopping_products_db[:]=[p for p in shopping_products_db if int(p.get('id',-1))!=pid]; save_data(); await update.message.reply_text(f"✅ Product {pid} removed.")
+
+async def shop_orders_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    pending=[o for o in shopping_orders_db if o.get('status')=='pending_verification']
+    await update.message.reply_text("🛒 Pending Orders:\n\n"+("\n".join(f"#{o['id']} User {o['uid']} ₹{float(o['total']):.2f} → /approve_shop_order {o['id']}" for o in pending) if pending else "No pending orders."))
+
+async def approve_shop_order_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: oid=int(context.args[0])
+    except: await update.message.reply_text("Usage: /approve_shop_order ID"); return
+    order=next((o for o in shopping_orders_db if int(o.get('id',-1))==oid),None)
+    if not order or order.get('status')!='pending_verification': await update.message.reply_text("❌ Order not found or already processed."); return
+    uid=int(order['uid']); cycle=_shopping_cycle(uid); cycle['spent']=round(float(cycle.get('spent',0))+float(order.get('total',0)),2); cycle['target']=round(max(float(cycle.get('target',0)),get_withdrawn_for_cap(uid)*0.20),2); cycle['completed']=cycle['target']>0 and cycle['spent']>=cycle['target']; order['status']='approved'; order['approved_at']=str(get_ist_now()); save_data()
+    await update.message.reply_text(f"✅ Order #{oid} approved.\n🎯 Target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\nCompleted: {'YES' if cycle['completed'] else 'NO'}")
+    try: await context.bot.send_message(chat_id=uid,text=f"🛒 Purchase verified: ₹{float(order['total']):.2f}\n🎯 Monthly target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\n{'✅ Monthly target completed. Next month starts fresh.' if cycle['completed'] else '📌 Continue shopping to complete this month’s target.'}",reply_markup=main_menu())
+    except: pass
+
 
 if __name__ == "__main__":
     main()
