@@ -3100,6 +3100,38 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 
+async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        uid = q.from_user.id
+        active_campaigns = get_active_promo_campaigns()
+        if not active_campaigns:
+            await q.message.reply_text("🛒 Shopping - No active campaigns now!", reply_markup=main_menu())
+            return
+        msg = f"🛒 SHOPPING - {len(active_campaigns)} active offers!\n\n"
+        for c in active_campaigns[:5]:
+            msg += f"🏪 {c.get('shop_name','Shop')} - {c.get('title','Offer')} - {c.get('place','')}\n"
+        await q.message.reply_text(msg[:4000], reply_markup=main_menu())
+    except Exception as e:
+        print(f"shopping_cb error {e}")
+        await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
+
+async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        await support_plans_cb(update, context)
+    except Exception as e:
+        print(f"docs_plans_cb error {e}")
+        await q.message.reply_text("📚 Documents & Plans\n\nSupport plans here.", reply_markup=main_menu())
+
 async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try:
@@ -3116,8 +3148,6 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
         "Commands:\n"
         "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
         "/list_promos\n"
-        "/add_product (if exists)\n\n"
-        "Use Product Promotion button for approvals."
     )
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
 
@@ -3137,29 +3167,45 @@ async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Commands:\n"
         "/add_support_plan <type> <price> <desc>\n"
         "/list_plans\n"
-        "/upload_doc - send document after command\n\n"
-        "Users will see these in Documents & Plans menu."
+        "/upload_doc - send doc with caption\n\n"
+        "Users see these in Documents & Plans menu."
     )
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
 
-async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+async def restore_deleted_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /restore <user_id> or /restore all\nRestores removed user.")
+        return
+    arg = context.args[0].strip().lower()
+    if arg == "all":
+        count = len(deleted_users_db)
+        deleted_users_db.clear()
+        save_data()
+        await update.message.reply_text(f"✅ Restored ALL {count} deleted users! They can now /start again.")
+        return
     try:
-        await q.answer()
-    except:
-        pass
-    uid = q.from_user.id
-    # Reuse promo tasks logic for shopping
-    await promo_tasks_cb(update, context) if 'promo_tasks_cb' in globals() else await q.message.reply_text("🛒 Shopping - Coming Soon! Promo Tasks available.", reply_markup=main_menu())
+        target = int(context.args[0])
+        removed = False
+        if target in deleted_users_db:
+            deleted_users_db.pop(target, None)
+            removed = True
+        if str(target) in deleted_users_db:
+            deleted_users_db.pop(str(target), None)
+            removed = True
+        if removed:
+            save_data()
+            await update.message.reply_text(f"✅ Restored user {target}! Ask user to send /start.")
+            try:
+                await context.bot.send_message(chat_id=target, text="✅ You have been restored! Please send /start to rejoin S2E.")
+            except:
+                pass
+        else:
+            await update.message.reply_text(f"User {target} not found in deleted list. Use /deletelist")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
-async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
-    # Show support plans as documents
-    await support_plans_cb(update, context) if 'support_plans_cb' in globals() else await q.message.reply_text("📚 Documents & Plans - No docs yet.", reply_markup=main_menu())
 
 
 async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -8465,7 +8511,7 @@ def main():
             )
             app.add_error_handler(error_handler)
             try:
-                app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern="^admin_view_shopping$"))
+                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
                 app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
                 app.add_handler(CallbackQueryHandler(withdraw_cb, pattern='^withdraw$',), group=-2)
                 app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
@@ -8922,6 +8968,9 @@ def main():
             app.add_handler(CommandHandler("myteam", my_team_cmd))
             app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
+            app.add_handler(CommandHandler("restore", restore_deleted_user_cmd))
+            app.add_handler(CommandHandler("undelete", restore_deleted_user_cmd))
+            app.add_handler(CommandHandler("unremove", restore_deleted_user_cmd))
             app.add_handler(CommandHandler("user_refs", user_refs_cmd))
             app.add_handler(CommandHandler("ref_date", ref_date_cmd))
             app.add_handler(CommandHandler("debug_refs", debug_refs_cmd))
