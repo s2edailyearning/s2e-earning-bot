@@ -1,4 +1,4 @@
-print("S2E BOT V71 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS + 20% SHOPPING PROGRESS - 2026-08-27")
+print("S2E BOT V72 FINAL - VARIABLE PRODUCTS + SHOP CART + CHECKOUT + COD/UPI + ORDERS + 20% SHOPPING PROGRESS - 2026-08-27")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -856,6 +856,27 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
         name = str(plan.get("name", "Plan"))
         expiry = get_ist_today() + timedelta(days=duration)
 
+        # Snapshot the member's wallet immediately BEFORE activation. Free members
+        # have a ₹100 wallet cap. When they activate a paid plan, keep the old
+        # earning history for admin audit but reset the current spendable wallet
+        # to min(old_balance, ₹100). Future earnings are added normally.
+        pre_activation_balance = round(get_balance(uid), 2)
+        free_cap = 100.0
+        old_adjustment = float(wallet_cap_adjustments_db.get(uid, 0) or wallet_cap_adjustments_db.get(str(uid), 0) or 0)
+        current_raw_before_adjustment = round(pre_activation_balance - old_adjustment, 2)
+        target_balance = round(min(current_raw_before_adjustment, free_cap), 2)
+        new_adjustment = round(target_balance - current_raw_before_adjustment, 2)
+        wallet_cap_adjustments_db[uid] = new_adjustment
+        wallet_activation_audit_db[str(uid)] = {
+            "pre_activation_balance": pre_activation_balance,
+            "post_activation_balance": target_balance,
+            "free_cap": free_cap,
+            "adjustment": new_adjustment,
+            "activated_at": str(get_ist_now()),
+            "plan_name": name,
+            "plan_price": price,
+        }
+
         # Snapshot the plan at activation time. Future edits to the master plan
         # must NOT change this member's already-purchased terms.
         plan_snapshot = {
@@ -903,6 +924,9 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
             "activated_at": str(get_ist_now()),
             "date": str(get_ist_today()),
             "expiry": str(expiry),
+            "pre_activation_balance": pre_activation_balance,
+            "post_activation_balance": target_balance,
+            "wallet_cap_adjustment": new_adjustment,
         })
 
         user_plans[str(uid)] = plan_snapshot
@@ -1087,6 +1111,15 @@ support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 # Each row keeps the activation date/time, user, plan and amount so admin can
 # query activations by date without changing existing user-plan snapshots.
 plan_activation_history_db = []
+# Admin-uploaded Documents & Plans resources. Each item stores a Telegram file_id
+# so it survives redeploys without needing a public URL.
+documents_db = []  # [{id,name,kind,file_id,caption,uploaded_at}]
+document_counter = 1
+# Immutable wallet-cap audit at the moment a member activates a paid plan.
+# The earning ledgers remain intact; a negative adjustment makes the spendable
+# wallet equal to the Free cap (₹100) when activation happens.
+wallet_cap_adjustments_db = {}
+wallet_activation_audit_db = {}
 
 
 # === PERSISTENT STORAGE - RESTORED / SAFE JSON 
@@ -1252,7 +1285,8 @@ def save_data():
             "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "shop_orders_db", "shop_order_counter", "shop_purchases_db", "shop_addresses_db",
-            "plan_activation_history_db",
+            "plan_activation_history_db", "documents_db", "document_counter",
+            "wallet_cap_adjustments_db", "wallet_activation_audit_db",
             "support_plan_image_file_id", "pending_plans",
             "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT",
         ]
@@ -1546,16 +1580,70 @@ def add_shopping_category(name):
     save_data()
     return cat
 
-def add_shopping_product(category, name, price, desc, image_link="", stock=100):
+def _parse_shop_variants(raw):
+    """Parse variants in name:price:stock form, e.g. M:499:10,L:499:15,XL:529:8."""
+    variants = []
+    if not raw:
+        return variants
+    for token in str(raw).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        bits = [x.strip() for x in token.split(":")]
+        if len(bits) < 2:
+            raise ValueError(f"Invalid variant '{token}'. Use Name:Price:Stock")
+        vname = bits[0]
+        if not vname:
+            raise ValueError("Variant name cannot be empty")
+        try:
+            vprice = float(bits[1])
+            if vprice < 0:
+                raise ValueError
+        except Exception:
+            raise ValueError(f"Invalid variant price in '{token}'")
+        try:
+            vstock = int(bits[2]) if len(bits) >= 3 and bits[2] != "" else 0
+            if vstock < 0:
+                raise ValueError
+        except Exception:
+            raise ValueError(f"Invalid variant stock in '{token}'")
+        variants.append({"id": len(variants)+1, "name": vname, "price": vprice, "stock": vstock})
+    return variants
+
+def _shop_product_stock(prod):
+    variants = prod.get("variants") or []
+    if variants:
+        return sum(int(v.get("stock", 0) or 0) for v in variants)
+    return int(prod.get("stock", 0) or 0)
+
+def _shop_variant(prod, variant_id=None):
+    variants = prod.get("variants") or []
+    if not variants or variant_id is None:
+        return None
+    try:
+        vid = int(variant_id)
+    except Exception:
+        return None
+    return next((v for v in variants if int(v.get("id", 0)) == vid), None)
+
+def add_shopping_product(category, name, price, desc, image_link="", stock=100, variants=None):
     global shopping_products_counter
+    variants = variants or []
+    if variants:
+        base_price = float(variants[0].get("price", 0) or 0)
+        total_stock = sum(int(v.get("stock", 0) or 0) for v in variants)
+    else:
+        base_price = int(price) if str(price).isdigit() else float(price)
+        total_stock = int(stock) if str(stock).isdigit() else 100
     prod = {
         "id": shopping_products_counter,
         "category": category.strip(),
         "name": name.strip(),
-        "price": int(price) if str(price).isdigit() else float(price),
+        "price": base_price,
         "desc": desc.strip(),
         "image": image_link.strip(),
-        "stock": int(stock) if str(stock).isdigit() else 100,
+        "stock": total_stock,
+        "variants": variants,
         "created_at": str(get_ist_today())
     }
     shopping_products_db.append(prod)
@@ -1935,7 +2023,8 @@ def get_balance(uid):
     task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
     shop_promo_total = float(promo_earnings_db.get(uid, 0) or 0)
     product_promo_total = float(product_promo_earnings_db.get(uid, 0) or 0)
-    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_promo_total, 2)
+    adjustment = float(wallet_cap_adjustments_db.get(uid, 0) or wallet_cap_adjustments_db.get(str(uid), 0) or 0)
+    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_promo_total + adjustment, 2)
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
     """Record referral commission. Work commissions settle next day; plan commission is immediate."""
@@ -3200,47 +3289,71 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 
+def _cart_key_parts(raw_key):
+    """Return (product_id, variant_id or None) for old/new cart keys."""
+    text = str(raw_key)
+    if ":" in text:
+        a, b = text.split(":", 1)
+        try:
+            return int(a), int(b)
+        except Exception:
+            return None, None
+    try:
+        return int(text), None
+    except Exception:
+        return None, None
+
+def _cart_item_info(raw_key, qty):
+    pid, vid = _cart_key_parts(raw_key)
+    if pid is None:
+        return None
+    prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
+    if not prod or int(qty) <= 0:
+        return None
+    variant = _shop_variant(prod, vid)
+    if (prod.get("variants") or []) and not variant:
+        return None
+    price = float(variant.get("price", 0)) if variant else float(prod.get("price", 0) or 0)
+    stock = int(variant.get("stock", 0) or 0) if variant else int(prod.get("stock", 0) or 0)
+    label = str(prod.get("name", "Product"))
+    if variant:
+        label += f" — {variant.get('name', 'Option')}"
+    return {"pid": pid, "vid": vid, "prod": prod, "variant": variant, "price": price, "stock": stock, "label": label, "qty": int(qty)}
+
 async def _shop_cart_text(uid, cart):
     if not cart:
         return "🛒 YOUR CART\n\nCart is empty."
     lines = ["🛒 YOUR CART", ""]
     total = 0
-    for raw_pid, raw_qty in list(cart.items()):
-        try:
-            pid, qty = int(raw_pid), int(raw_qty)
-        except Exception:
-            continue
-        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
-        if not prod or qty <= 0:
-            continue
-        price = float(prod.get("price", 0))
-        subtotal = price * qty
+    for raw_key, raw_qty in list(cart.items()):
+        try: qty = int(raw_qty)
+        except Exception: continue
+        info = _cart_item_info(raw_key, qty)
+        if not info: continue
+        subtotal = info["price"] * qty
         total += subtotal
-        lines.append(f"📦 {prod.get('name','Product')}\n₹{price:g} × {qty} = ₹{subtotal:g}")
+        lines.append(f"📦 {info['label']}\n₹{info['price']:g} × {qty} = ₹{subtotal:g}")
         lines.append("")
     lines.append(f"💰 TOTAL: ₹{total:g}")
     return "\n".join(lines)
 
 def _shop_cart_kb(cart):
     rows = []
-    for raw_pid, raw_qty in list(cart.items()):
-        try:
-            pid, qty = int(raw_pid), int(raw_qty)
-        except Exception:
-            continue
-        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
-        if not prod:
-            continue
-        stock = int(prod.get("stock", 0) or 0)
+    for raw_key, raw_qty in list(cart.items()):
+        try: qty = int(raw_qty)
+        except Exception: continue
+        info = _cart_item_info(raw_key, qty)
+        if not info: continue
         rows.append([
-            InlineKeyboardButton("➖", callback_data=f"cart_minus_{pid}"),
-            InlineKeyboardButton(f"{prod.get('name','Product')[:18]} × {qty}", callback_data=f"shop_prod_{pid}"),
-            InlineKeyboardButton("➕", callback_data=f"cart_plus_{pid}")
+            InlineKeyboardButton("➖", callback_data=f"cart_minus_{raw_key}"),
+            InlineKeyboardButton(f"{info['label'][:18]} × {qty}", callback_data=f"shop_prod_{info['pid']}"),
+            InlineKeyboardButton("➕", callback_data=f"cart_plus_{raw_key}")
         ])
     rows.append([InlineKeyboardButton("💳 Checkout", callback_data="cart_checkout")])
     rows.append([InlineKeyboardButton("🗑️ Clear Cart", callback_data="cart_clear")])
     rows.append([InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
     return InlineKeyboardMarkup(rows)
+
 
 def _parse_state_date(value):
     """Parse YYYY-MM-DD (or an ISO datetime) safely."""
@@ -3477,20 +3590,28 @@ def _admin_shopping_summary_text():
 
 def _shop_order_items(cart):
     items=[]
-    for pid, qty in cart.items():
-        try: pid=int(pid); qty=int(qty)
+    for raw_key, raw_qty in cart.items():
+        try: qty=int(raw_qty)
         except: continue
-        prod=next((p for p in shopping_products_db if int(p.get("id",0))==pid), None)
-        if not prod or qty <= 0: continue
-        price=float(prod.get("price",0) or 0)
-        items.append({"product_id":pid,"name":str(prod.get("name","Product")),"qty":qty,"price":price,"subtotal":round(price*qty,2)})
+        info = _cart_item_info(raw_key, qty)
+        if not info: continue
+        items.append({
+            "product_id": info["pid"],
+            "variant_id": info["vid"],
+            "variant": str(info["variant"].get("name")) if info["variant"] else "",
+            "name": str(info["prod"].get("name","Product")),
+            "qty": qty,
+            "price": info["price"],
+            "subtotal": round(info["price"]*qty,2)
+        })
     return items
 
 
 def _shop_order_text(order):
     lines=[f"📦 SHOP ORDER #{order['id']}", "", f"Customer ID: {order['uid']}", f"Payment: {order['payment']}", f"Status: {order['status']}", ""]
     for it in order.get("items",[]):
-        lines.append(f"• {it['name']} × {it['qty']} = ₹{it['subtotal']:g}")
+        vlabel = f" — {it.get('variant')}" if it.get('variant') else ""
+        lines.append(f"• {it['name']}{vlabel} × {it['qty']} = ₹{it['subtotal']:g}")
     lines += [f"\n💰 Total: ₹{float(order.get('total',0)):g}", f"\n📍 Address:\n{order.get('address','')}"]
     return "\n".join(lines)
 
@@ -3568,16 +3689,29 @@ async def shop_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
         if not prod:
             await q.message.reply_text("Product not found!", reply_markup=main_menu()); return
-        stock = int(prod.get("stock", 0) or 0)
-        msg = (f"🛒 {prod['name']}\n\n📦 Category: {prod['category']}\n💰 Price: ₹{prod['price']}\n"
-               f"📝 Desc: {prod.get('desc','')}\n📦 Stock: {stock}\n\nSelect quantity and add to cart.")
+        variants = prod.get("variants") or []
+        stock = _shop_product_stock(prod)
+        msg = (f"🛒 {prod['name']}\n\n📦 Category: {prod['category']}\n")
+        if variants:
+            msg += "💎 VARIANTS\n"
+            for v in variants:
+                msg += f"• {v.get('name')} — ₹{float(v.get('price',0)):g} — Stock: {int(v.get('stock',0) or 0)}\n"
+            msg += f"\n📦 Total Stock: {stock}\n📝 Desc: {prod.get('desc','')}\n\nSelect an option below."
+        else:
+            msg += (f"💰 Price: ₹{prod['price']}\n📝 Desc: {prod.get('desc','')}\n📦 Stock: {stock}\n\nSelect quantity and add to cart.")
         kb = []
-        if stock > 0:
+        if variants:
+            for v in variants:
+                if int(v.get("stock",0) or 0) > 0:
+                    kb.append([InlineKeyboardButton(f"{v.get('name','Option')} — ₹{float(v.get('price',0)):g}", callback_data=f"cart_add_{pid}_{int(v.get('id',0))}")])
+            if not any(int(v.get("stock",0) or 0) > 0 for v in variants):
+                msg += "\n\n❌ OUT OF STOCK"
+        elif stock > 0:
             kb.append([InlineKeyboardButton("➕ Add 1 to Cart", callback_data=f"cart_add_{pid}")])
         else:
             msg += "\n\n❌ OUT OF STOCK"
         kb += [[InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart")],
-               [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
+               [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}" )],
                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
         markup = InlineKeyboardMarkup(kb)
         if prod.get("image"):
@@ -3601,16 +3735,28 @@ async def cart_add_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try: await q.answer()
     except Exception: pass
-    pid = int(q.data.replace("cart_add_", "", 1))
+    raw = str(q.data).replace("cart_add_", "", 1)
+    parts = raw.split("_", 1)
+    try: pid = int(parts[0])
+    except Exception: return
+    vid = None
+    if len(parts) > 1:
+        try: vid = int(parts[1])
+        except Exception: return
     prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
     if not prod: return
-    stock = int(prod.get("stock",0) or 0)
+    variant = _shop_variant(prod, vid)
+    if (prod.get("variants") or []) and not variant:
+        await q.message.reply_text("❌ Please select a valid product option."); return
+    stock = int(variant.get("stock",0) or 0) if variant else int(prod.get("stock",0) or 0)
+    key = f"{pid}:{vid}" if variant else pid
     cart = context.user_data.setdefault("shopping_cart", {})
-    current = int(cart.get(pid, 0))
+    current = int(cart.get(key, 0))
     if current >= stock:
         await q.message.reply_text(f"❌ Only {stock} available.", reply_markup=_shop_cart_kb(cart)); return
-    cart[pid] = current + 1
-    await q.message.reply_text(f"✅ Added 1 × {prod['name']} to cart.", reply_markup=InlineKeyboardMarkup([
+    cart[key] = current + 1
+    label = prod["name"] + (f" — {variant.get('name')}" if variant else "")
+    await q.message.reply_text(f"✅ Added 1 × {label} to cart.", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart"), InlineKeyboardButton("➕ Add More", callback_data=f"shop_prod_{pid}")],
         [InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping")]
     ]))
@@ -3619,17 +3765,21 @@ async def _cart_change(update, context, delta):
     q = update.callback_query
     try: await q.answer()
     except Exception: pass
-    pid = int(q.data.rsplit("_", 1)[1])
+    raw_key = str(q.data).rsplit("_", 1)[1]
+    pid, vid = _cart_key_parts(raw_key)
+    if pid is None: return
     cart = context.user_data.setdefault("shopping_cart", {})
-    current = int(cart.get(pid, 0))
+    key = raw_key if ":" in raw_key else pid
+    current = int(cart.get(key, 0))
     prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
     if not prod: return
-    stock = int(prod.get("stock",0) or 0)
+    variant = _shop_variant(prod, vid)
+    stock = int(variant.get("stock",0) or 0) if variant else int(prod.get("stock",0) or 0)
     new_qty = current + delta
-    if new_qty <= 0: cart.pop(pid, None)
+    if new_qty <= 0: cart.pop(key, None)
     elif new_qty > stock:
         await q.message.reply_text(f"❌ Only {stock} available."); return
-    else: cart[pid] = new_qty
+    else: cart[key] = new_qty
     await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
 
 async def cart_plus_cb(update, context): await _cart_change(update, context, 1)
@@ -3642,6 +3792,45 @@ async def cart_clear_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["shopping_cart"] = {}
     await q.message.reply_text("🗑️ Cart cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
+
+
+async def _show_shop_checkout(update, context):
+    """Show the intended Shopping checkout sequence: address -> UPI/COD."""
+    uid = update.effective_user.id
+    cart = context.user_data.get("shopping_cart", {})
+    if not cart:
+        await update.effective_message.reply_text("🛒 Cart is empty.", reply_markup=main_menu())
+        return
+    address = str(context.user_data.get("shop_address", "") or shop_addresses_db.get(uid, "") or "").strip()
+    if not address:
+        context.user_data["awaiting_shop_address"] = True
+        await update.effective_message.reply_text(
+            "📍 DELIVERY ADDRESS\n\n"
+            "Please send your complete delivery address in ONE message.\n"
+            "Include Name, Mobile, House/Street, Area, City, State and Pincode.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Back to Cart", callback_data="shopping_cart")
+            ]])
+        )
+        return
+    items = _shop_order_items(cart)
+    total = round(sum(float(i.get("subtotal", 0) or 0) for i in items), 2)
+    text = (
+        "💳 CHECKOUT\n\n"
+        f"💰 Total: ₹{total:g}\n\n"
+        f"📍 Delivery Address:\n{address}\n\n"
+        "💳 Payment Options:\n"
+        "UPI: Update Soon\n"
+        "💵 Cash on Delivery: Available\n\n"
+        "Choose a payment option below."
+    )
+    kb = [
+        [InlineKeyboardButton("💳 UPI — Update Soon", callback_data="shop_pay_upi")],
+        [InlineKeyboardButton("💵 Cash on Delivery", callback_data="shop_pay_cod")],
+        [InlineKeyboardButton("📍 Change Address", callback_data="shop_change_address")],
+        [InlineKeyboardButton("🛒 Back to Cart", callback_data="shopping_cart")],
+    ]
+    await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def shop_change_address_cb(update, context):
@@ -3751,16 +3940,22 @@ async def shop_pay_cod_cb(update, context):
     # Recheck stock before reserving.
     for it in items:
         prod=next((p for p in shopping_products_db if int(p.get("id",0))==it["product_id"]), None)
-        if not prod or int(prod.get("stock",0) or 0) < it["qty"]:
-            await q.message.reply_text(f"❌ Not enough stock for {it['name']}. Available: {int(prod.get('stock',0) or 0) if prod else 0}")
+        v = _shop_variant(prod, it.get("variant_id")) if prod else None
+        available = int(v.get("stock",0) or 0) if v else (int(prod.get("stock",0) or 0) if prod else 0)
+        if not prod or available < it["qty"]:
+            label = f"{it['name']} — {it.get('variant')}" if it.get('variant') else it['name']
+            await q.message.reply_text(f"❌ Not enough stock for {label}. Available: {available}")
             return
     total=round(sum(i["subtotal"] for i in items),2)
     oid=int(shop_order_counter); shop_order_counter += 1
     order={"id":oid,"uid":uid,"items":items,"total":total,"address":address,"payment":"Cash on Delivery","status":"pending_admin_confirmation","created_at":get_ist_now().isoformat() if hasattr(get_ist_now(), 'isoformat') else str(get_ist_now())}
     # Reserve stock while pending; rejected orders restore it.
     for it in items:
-        prod=next((p for p in shopping_products_db if int(p.get("id",0))==it["product_id"]), None)
-        if prod: prod["stock"]=int(prod.get("stock",0) or 0)-it["qty"]
+        prod=next((p for p in shopping_products_db if int(p.get("id",0))==int(it["product_id"])), None)
+        if prod:
+            v = _shop_variant(prod, it.get("variant_id"))
+            if v: v["stock"] = int(v.get("stock",0) or 0) - int(it["qty"] or 0)
+            else: prod["stock"] = int(prod.get("stock",0) or 0) - int(it["qty"] or 0)
     shop_orders_db.append(order)
     save_data()
     context.user_data["shopping_cart"]={}
@@ -3803,7 +3998,11 @@ async def _shop_admin_order_cb(update, context, action):
         order["status"]="rejected"
         for it in order.get("items",[]):
             prod=next((p for p in shopping_products_db if int(p.get("id",0))==int(it.get("product_id",0))),None)
-            if prod: prod["stock"]=int(prod.get("stock",0) or 0)+int(it.get("qty",0) or 0)
+            if prod:
+                vid = it.get("variant_id")
+                v = _shop_variant(prod, vid)
+                if v: v["stock"] = int(v.get("stock",0) or 0) + int(it.get("qty",0) or 0)
+                else: prod["stock"] = int(prod.get("stock",0) or 0) + int(it.get("qty",0) or 0)
         save_data()
         await context.bot.send_message(chat_id=order["uid"], text=f"❌ ORDER #{oid} REJECTED\n\nAdmin could not confirm this order. Please contact Admin if needed.")
         await _update_order_channel_message(context, q, order, "rejected")
@@ -3856,7 +4055,9 @@ async def shop_purchases_cb(update, context):
     for p in purchases[-15:][::-1]:
         status = str(p.get('status','')).upper()
         lines.append(f"Order #{p.get('order_id')} — ₹{float(p.get('total',0)):g} — {status}")
-        for it in p.get("items",[]): lines.append(f"  • {it.get('name')} × {it.get('qty')}")
+        for it in p.get("items",[]):
+            vlabel = f" — {it.get('variant')}" if it.get('variant') else ""
+            lines.append(f"  • {it.get('name')}{vlabel} × {it.get('qty')}")
         if status == "DELIVERED":
             lines.append("  ✅ Purchase value counted in the joining-date monthly cycle.")
         lines.append(f"  📅 {p.get('date','')}\n")
@@ -3910,10 +4111,98 @@ async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try: await q.answer()
     except Exception: pass
     try:
-        await support_plans_cb(update, context)
+        info = _canonical_plan_info(q.from_user.id)
+        lines = [
+            "📚 DOCUMENTS & PLANS", "",
+            f"💎 Current Plan: {info.get('display','Not activated')}",
+            f"📅 Valid till: {info.get('expiry') or '-'}", ""
+        ]
+        kb = []
+        if documents_db:
+            lines.append("📂 AVAILABLE DOCUMENTS")
+            for d in documents_db[-30:]:
+                did = int(d.get("id", 0) or 0)
+                name = str(d.get("name") or "Document")[:55]
+                kind = str(d.get("kind") or "file").upper()
+                lines.append(f"{did}. {name} ({kind})")
+                kb.append([InlineKeyboardButton(f"📄 {name[:42]}", callback_data=f"document_open_{did}")])
+            lines.append("")
+        else:
+            lines.append("📂 AVAILABLE DOCUMENTS")
+            lines.append("Update Soon")
+            lines.append("")
+        lines.append("💎 Support Plans")
+        lines.append("Choose Support Plans from the Menu to view/activate a plan.")
+        kb.append([InlineKeyboardButton("💎 Support Plans", callback_data="support_plans")])
+        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+        await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
         print(f"docs_plans_cb error {e}")
-        await q.message.reply_text("📚 Documents & Plans\n\nSupport plans here.", reply_markup=main_menu())
+        await q.message.reply_text("📚 Documents & Plans\n\nUpdate Soon", reply_markup=main_menu())
+
+async def document_open_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    try:
+        did = int(str(q.data).replace("document_open_", "", 1))
+    except Exception:
+        return
+    doc = next((d for d in documents_db if int(d.get("id", 0) or 0) == did), None)
+    if not doc:
+        await q.message.reply_text("❌ Document not found.", reply_markup=main_menu())
+        return
+    file_id = doc.get("file_id")
+    caption = str(doc.get("caption") or doc.get("name") or "")[:1000]
+    try:
+        if str(doc.get("kind", "")).lower() == "photo":
+            await q.message.reply_photo(photo=file_id, caption=caption, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Documents & Plans", callback_data="docs_plans")]]))
+        else:
+            await q.message.reply_document(document=file_id, caption=caption, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Documents & Plans", callback_data="docs_plans")]]))
+    except Exception as e:
+        print(f"document_open_cb error: {e}")
+        await q.message.reply_text("❌ Could not open this document. Please contact Admin.", reply_markup=main_menu())
+
+async def upload_doc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    context.user_data["awaiting_admin_document_upload"] = True
+    await update.message.reply_text(
+        "📤 Send the Document/Photo now.\n\n"
+        "Supported: PDF, PPT, PPTX and images.\n"
+        "Optional: add a caption/title with the file. It will appear in user Documents & Plans."
+    )
+
+async def admin_document_upload_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    caption = str(update.message.caption or "").strip()
+    if not context.user_data.get("awaiting_admin_document_upload") and not caption.lower().startswith("/upload_doc"):
+        return
+    global document_counter
+    file_id = None; kind = "file"; name = "Document"
+    if update.message.document:
+        file_id = update.message.document.file_id
+        name = update.message.document.file_name or "Document"
+        mime = str(update.message.document.mime_type or "").lower()
+        kind = "pdf" if "pdf" in mime or name.lower().endswith(".pdf") else "document"
+    elif update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        kind = "photo"
+        name = "Image"
+    if not file_id:
+        await update.message.reply_text("❌ Please send a PDF/PPT/PPTX document or image.")
+        return
+    clean_caption = caption
+    if clean_caption.lower().startswith("/upload_doc"):
+        clean_caption = clean_caption[len("/upload_doc"):].strip()
+    doc = {"id": int(document_counter), "name": name, "kind": kind, "file_id": file_id, "caption": clean_caption or name, "uploaded_at": str(get_ist_now())}
+    documents_db.append(doc)
+    document_counter += 1
+    context.user_data.pop("awaiting_admin_document_upload", None)
+    save_data()
+    await update.message.reply_text(f"✅ Document saved!\nID: {doc['id']}\nName: {name}\nUsers can open it from 📚 Documents & Plans.", reply_markup=admin_panel_keyboard())
+
 
 async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -4055,7 +4344,8 @@ async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         total_docs = len(support_plans_db) if 'support_plans_db' in globals() else 0
         msg = (
             "📚 DOCUMENTS & PLANS ADMIN\n\n"
-            f"Total Plans/Docs: {total_docs}\n"
+            f"Support Plans: {total_docs}\n"
+            f"Uploaded Documents: {len(documents_db)}\n"
             f"Shop Categories: {len(shopping_categories_db)}\n"
             f"Shop Products: {len(shopping_products_db)}\n\n"
             "Commands:\n"
@@ -4064,7 +4354,7 @@ async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "/add_category <name>\n"
             "/edit_category <id> <new name>\n"
             "/add_shop_product category|name|price|desc|image|stock\n"
-            "/upload_doc - send doc with caption\n\n"
+            "/upload_doc - then send PDF/PPT/PPTX/image\n\n"
             "How to upload doc:\n"
             "Just send a document (PDF) with caption, bot will save as support plan\n"
             "Users see these in Documents & Plans menu."
@@ -4168,20 +4458,44 @@ async def edit_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def delete_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: delete an empty shopping category. Products must be removed/moved first."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("🗑️ DELETE CATEGORY\n\nUsage: /delete_category <category_id>\nExample: /delete_category 2\n\nCategory must have no products.")
+        return
+    try:
+        cid = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Category ID must be a number.")
+        return
+    cat = next((c for c in shopping_categories_db if int(c.get("id", -1)) == cid), None)
+    if not cat:
+        await update.message.reply_text(f"❌ Category ID {cid} not found.")
+        return
+    name = str(cat.get("name", ""))
+    linked = get_products_by_category(name)
+    if linked:
+        await update.message.reply_text(f"❌ Cannot delete '{name}'. It has {len(linked)} product(s). Delete/move those products first.")
+        return
+    shopping_categories_db.remove(cat)
+    save_data()
+    await update.message.reply_text(f"✅ Category deleted: {name} (ID {cid})")
+
+
 async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     raw = update.message.text.replace("/add_shop_product","",1).strip()
     if not raw or "|" not in raw:
         await update.message.reply_text(
-            "🛒 ADD SHOP PRODUCT - Category Wise\n\n"
-            "Usage:\n"
-            "/add_shop_product category|name|price|desc|image_link|stock\n\n"
-            "Example:\n"
-            "/add_shop_product Electronics|Redmi Mobile|10000|6GB RAM 128GB|https://image.link|10\n\n"
-            "Example 2:\n"
-            "/add_shop_product Clothing|T-Shirt|500|Cotton T-Shirt L size||50\n\n"
-            "First create category with /add_category if not exists"
+            "🛒 ADD SHOP PRODUCT\n\n"
+            "Single product:\n/add_shop_product category|name|price|desc|image_link|stock\n\n"
+            "Variable product (M/L/XL etc.):\n"
+            "/add_shop_product category|name|price|desc|image_link|stock|variants\n"
+            "Variants format: M:499:10,L:499:15,XL:529:8\n\n"
+            "Grocery example: 50g:70:20,100g:120:20,250g:200:10"
         )
         return
     try:
@@ -4189,18 +4503,26 @@ async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         if len(parts) < 4:
             await update.message.reply_text("Need at least category|name|price|desc")
             return
-        category = parts[0].strip()
-        name = parts[1].strip()
-        price = parts[2].strip()
-        desc = parts[3].strip() if len(parts)>3 else ""
+        category, name, price, desc = [x.strip() for x in parts[:4]]
         image = parts[4].strip() if len(parts)>4 else ""
-        stock = parts[5].strip() if len(parts)>5 else "100"
-        # auto add category if not exists
+        stock = parts[5].strip() if len(parts)>5 and parts[5].strip() else "100"
+        variant_raw = parts[6].strip() if len(parts)>6 else ""
+        variants = _parse_shop_variants(variant_raw)
+        if variants:
+            price_for_base = str(variants[0]["price"])
+            stock_for_base = str(sum(int(v["stock"]) for v in variants))
+        else:
+            price_for_base = price
+            stock_for_base = stock
         add_shopping_category(category)
-        prod = add_shopping_product(category, name, price, desc, image, stock)
-        await update.message.reply_text(f"✅ Product Added!\nID {prod['id']}: {prod['name']} - Rs{prod['price']}\nCategory: {prod['category']}\nStock: {prod['stock']}\n\nUsers can see in 🛒 Shopping -> {category}")
+        prod = add_shopping_product(category, name, price_for_base, desc, image, stock_for_base, variants)
+        if variants:
+            vtext = ", ".join(f"{v['name']} ₹{v['price']:g} ({v['stock']})" for v in variants)
+            await update.message.reply_text(f"✅ VARIABLE PRODUCT ADDED!\n\nID: {prod['id']}\nProduct: {prod['name']}\nCategory: {prod['category']}\nVariants: {vtext}\nTotal Stock: {_shop_product_stock(prod)}\n\nUsers select the option before adding to cart.")
+        else:
+            await update.message.reply_text(f"✅ Product Added!\nID {prod['id']}: {prod['name']} - Rs{prod['price']}\nCategory: {prod['category']}\nStock: {prod['stock']}\n\nUsers can see in 🛒 Shopping -> {category}")
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        await update.message.reply_text(f"❌ Product add error: {e}")
 
 async def edit_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: edit an existing shopping product by ID.
@@ -4216,7 +4538,7 @@ async def edit_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             "✏️ EDIT SHOP PRODUCT\n\n"
             "Usage:\n"
-            "/edit_shop_product ID|category|name|price|description|stock\n\n"
+            "/edit_shop_product ID|category|name|price|description|stock|variants\n\n"
             "Example:\n"
             "/edit_shop_product 1|Trending Products|H2O Lluck Water Bottle 800ML|70|BPA Free, Leak Proof|5\n\n"
             "Leave any field blank to keep the old value."
@@ -4283,6 +4605,21 @@ async def edit_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TY
                 await update.message.reply_text("❌ Stock must be a non-negative whole number. Example: 5")
                 return
 
+        # Optional variant update: field 7 after ID|category|name|price|description|stock.
+        if len(parts) > 6 and parts[6].strip() != "":
+            try:
+                new_variants = _parse_shop_variants(parts[6].strip())
+                prod["variants"] = new_variants
+                if new_variants:
+                    prod["price"] = float(new_variants[0]["price"])
+                    prod["stock"] = _shop_product_stock(prod)
+                    changed.append("Variants updated")
+                else:
+                    changed.append("Variants cleared")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Invalid variants: {e}")
+                return
+
         save_data()
         if not changed:
             changed.append("No changes made")
@@ -4292,7 +4629,8 @@ async def edit_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TY
             f"Category: {prod.get('category', '')}\n"
             f"Product: {prod.get('name', '')}\n"
             f"Price: ₹{float(prod.get('price', 0)):g}\n"
-            f"Stock: {prod.get('stock', 0)}\n"
+            f"Stock: {_shop_product_stock(prod)}\n"
+            f"Variants: {len(prod.get('variants') or [])}\n"
             f"Image: {'✅ Set' if prod.get('image') else '❌ Not set'}\n\n"
             + "\n".join(f"• {x}" for x in changed)
         )
@@ -4402,7 +4740,8 @@ async def list_shop_products_cmd(update: Update, context: ContextTypes.DEFAULT_T
             f"📂 Category: {p.get('category', '')}\n"
             f"📦 Product: {p.get('name', '')}\n"
             f"💰 Price: ₹{float(p.get('price', 0)):g}\n"
-            f"📊 Stock: {p.get('stock', 0)}\n"
+            f"📊 Stock: {_shop_product_stock(p)}\n"
+            f"💎 Variants: {', '.join(str(v.get('name')) + ' ₹' + str(v.get('price')) + ' (' + str(v.get('stock')) + ')' for v in (p.get('variants') or [])) or 'None'}\n"
             f"🖼️ Image: {'✅ Set' if p.get('image') else '❌ Not set'}\n"
             f"📝 {str(p.get('desc', ''))[:120]}\n\n"
         )
@@ -4518,6 +4857,8 @@ async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💵 Total Referral Commission: ₹{float(total_ref):.2f}"
     )
     kb=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🟢 L1 — Direct Referrals", callback_data="user_ref_l1")],
+        [InlineKeyboardButton("🔵 L2 — Level 2 Referrals", callback_data="user_ref_l2")],
         [InlineKeyboardButton("🔗 Refer & Earn", callback_data="refer_earn")],
         [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
     ])
@@ -7802,7 +8143,11 @@ async def get_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👥 Referrals: L1={len(l1)} L2={len(l2)}\n"
             f"📋 L1 IDs: {l1[:10]}\n"
             f"📋 L2 IDs: {l2[:10]}\n\n"
-            f"Referral Parent: {referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'}"
+            f"Referral Parent: {referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'}\n\n"
+            f"🧾 PLAN ACTIVATION WALLET AUDIT\n"
+            f"Pre-Activation Balance: ₹{float((wallet_activation_audit_db.get(uid) or wallet_activation_audit_db.get(str(uid)) or {}).get('pre_activation_balance', 0) or 0):.2f}\n"
+            f"Post-Activation Balance: ₹{float((wallet_activation_audit_db.get(uid) or wallet_activation_audit_db.get(str(uid)) or {}).get('post_activation_balance', 0) or 0):.2f}\n"
+            f"Wallet Cap Adjustment: ₹{float((wallet_activation_audit_db.get(uid) or wallet_activation_audit_db.get(str(uid)) or {}).get('adjustment', 0) or 0):.2f}"
         )
         await update.message.reply_text(msg[:4000])
     except Exception as e:
@@ -10277,9 +10622,9 @@ def main():
             app.add_handler(CallbackQueryHandler(shop_category_cb, pattern=r"^shop_cat_.+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_product_cb, pattern=r"^shop_prod_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shopping_cart_cb, pattern=r"^shopping_cart$"), group=-2)
-            app.add_handler(CallbackQueryHandler(cart_add_cb, pattern=r"^cart_add_\d+$"), group=-2)
-            app.add_handler(CallbackQueryHandler(cart_plus_cb, pattern=r"^cart_plus_\d+$"), group=-2)
-            app.add_handler(CallbackQueryHandler(cart_minus_cb, pattern=r"^cart_minus_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_add_cb, pattern=r"^cart_add_\d+(?:_\d+)?$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_plus_cb, pattern=r"^cart_plus_\d+(?::\d+)?$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_minus_cb, pattern=r"^cart_minus_\d+(?::\d+)?$"), group=-2)
             app.add_handler(CallbackQueryHandler(cart_clear_cb, pattern=r"^cart_clear$"), group=-2)
             app.add_handler(CallbackQueryHandler(cart_checkout_cb, pattern=r"^cart_checkout$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_change_address_cb, pattern=r"^shop_change_address$"), group=-2)
@@ -10294,9 +10639,12 @@ def main():
             app.add_handler(CallbackQueryHandler(shop_order_reject_cb, pattern=r"^shop_order_reject_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_dispatch_cb, pattern=r"^shop_order_dispatch_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_delivered_cb, pattern=r"^shop_order_delivered_\d+$"), group=-2)
-            app.add_handler(CallbackQueryHandler(docs_plans_cb, pattern=r"^docs_plans$"), group=-2)
+            app.add_handler(CallbackQueryHandler(docs_plans_cb, pattern=r"^(docs_plans|documents_plans)$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern=r"^admin_view_shopping$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_view_docs_cb, pattern=r"^admin_view_docs$"), group=-2)
+            app.add_handler(CallbackQueryHandler(document_open_cb, pattern=r"^document_open_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(user_referrals_level_cb, pattern=r"^user_ref_l[12]$"), group=-2)
+            app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & filters.ChatType.PRIVATE, admin_document_upload_handler), group=-6)
 
             app.add_handler(CallbackQueryHandler(daily_open_cb, pattern=r"^daily_open_-?\d+$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
@@ -10345,6 +10693,7 @@ def main():
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             app.add_handler(CommandHandler("add_category", add_category_cmd))
             app.add_handler(CommandHandler("edit_category", edit_category_cmd))
+            app.add_handler(CommandHandler("delete_category", delete_category_cmd))
             app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
             app.add_handler(CommandHandler("edit_shop_product", edit_shop_product_cmd))
             app.add_handler(CommandHandler("delete_shop_product", delete_shop_product_cmd))
@@ -10352,6 +10701,7 @@ def main():
             app.add_handler(CommandHandler("set_shop_product_image", set_shop_product_image_cmd))
             app.add_handler(CommandHandler("set_orders_channel", set_orders_channel_cmd))
             app.add_handler(CommandHandler("set_shop_payment_link", set_shop_payment_link_cmd))
+            app.add_handler(CommandHandler("upload_doc", upload_doc_cmd))
             app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, shop_product_image_photo_handler), group=-5)
             app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
             app.add_handler(CommandHandler("shop_products", list_shop_products_cmd))
