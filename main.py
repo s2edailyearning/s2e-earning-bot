@@ -2223,6 +2223,8 @@ def admin_panel_keyboard():
          InlineKeyboardButton("🏪 Promo Campaigns", callback_data="admin_view_promos")],
         [InlineKeyboardButton("📊 Stats", callback_data="admin_view_stats"),
          InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
+        [InlineKeyboardButton("🛒 Shopping", callback_data="admin_view_shopping"),
+         InlineKeyboardButton("📚 Documents & Plans", callback_data="admin_view_docs")],
         [InlineKeyboardButton("📢 Product Promotion", callback_data="admin_product_promo"),
          InlineKeyboardButton("💾 Backup", callback_data="admin_backup")],
         [InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin"),
@@ -2237,6 +2239,7 @@ def main_menu():
         [InlineKeyboardButton("💰 Wallet", callback_data="wallet"), InlineKeyboardButton("📅 Daily Task", callback_data="daily")],
         [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw"), InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks")],
         [InlineKeyboardButton("📢 Product Promotion", callback_data="product_promo")],
+        [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("📚 Documents & Plans", callback_data="docs_plans")],
         [InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop"), InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled")],
         [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("👤 My Details", callback_data="my_details")],
         [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
@@ -3095,6 +3098,69 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
         name = users_db.get(uid,{}).get('name','Unknown')
         msg += f"👤 {uid} {name} /unban {uid}\n"
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
+
+
+async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    uid = q.from_user.id
+    if not is_admin(uid):
+        return
+    msg = (
+        "🛒 SHOPPING ADMIN PANEL\n\n"
+        f"Total Promo Campaigns: {len(promo_campaigns_db)}\n"
+        f"Product Pending: {len(product_promo_pending)}\n\n"
+        "Commands:\n"
+        "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
+        "/list_promos\n"
+        "/add_product (if exists)\n\n"
+        "Use Product Promotion button for approvals."
+    )
+    await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+
+async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    uid = q.from_user.id
+    if not is_admin(uid):
+        return
+    total_docs = len(support_plans_db) if 'support_plans_db' in globals() else 0
+    msg = (
+        "📚 DOCUMENTS & PLANS ADMIN\n\n"
+        f"Total Plans/Docs: {total_docs}\n\n"
+        "Commands:\n"
+        "/add_support_plan <type> <price> <desc>\n"
+        "/list_plans\n"
+        "/upload_doc - send document after command\n\n"
+        "Users will see these in Documents & Plans menu."
+    )
+    await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+
+async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    uid = q.from_user.id
+    # Reuse promo tasks logic for shopping
+    await promo_tasks_cb(update, context) if 'promo_tasks_cb' in globals() else await q.message.reply_text("🛒 Shopping - Coming Soon! Promo Tasks available.", reply_markup=main_menu())
+
+async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    # Show support plans as documents
+    await support_plans_cb(update, context) if 'support_plans_cb' in globals() else await q.message.reply_text("📚 Documents & Plans - No docs yet.", reply_markup=main_menu())
+
 
 async def back_admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Safe Back-to-Admin handler; CallbackQuery is never passed to admin_panel()."""
@@ -5966,6 +6032,10 @@ async def back_admin_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")
             ],
             [
+                InlineKeyboardButton("🛒 Shopping", callback_data="admin_view_shopping"),
+                InlineKeyboardButton("📚 Documents & Plans", callback_data="admin_view_docs")
+            ],
+            [
                 InlineKeyboardButton("📢 Product Promotion", callback_data="admin_product_promo"),
                 InlineKeyboardButton("💾 Backup", callback_data="admin_backup")
             ],
@@ -8395,7 +8465,7 @@ def main():
             )
             app.add_error_handler(error_handler)
             try:
-                app.add_handler(CallbackQueryHandler(back_admin_cb_fixed, pattern='^back_admin$',), group=-2)
+                app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern="^admin_view_shopping$"))
                 app.add_handler(CallbackQueryHandler(back_menu_cb_fixed, pattern='^back_menu$',), group=-2)
                 app.add_handler(CallbackQueryHandler(withdraw_cb, pattern='^withdraw$',), group=-2)
                 app.add_handler(CallbackQueryHandler(promo_tasks_cb_fixed, pattern='^promo_tasks$',), group=-2)
