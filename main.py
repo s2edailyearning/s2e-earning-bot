@@ -1,4 +1,4 @@
-print("S2E BOT V65 FINAL - SHOPPING IMAGE + CONTACT ADMIN FIX - 2026-08-27 14:20 IST")
+print("S2E BOT V70 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS - 2026-08-27 15:00 IST")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -1060,6 +1060,12 @@ shopping_categories_db = []  # [{"id":1, "name":"Electronics"}]
 shopping_products_db = []  # [{"id":1, "category":"Electronics", "name":"Mobile", "price":10000, "desc":"...", "image":"link", "stock":10}]
 shopping_products_counter = 1
 shopping_categories_counter = 1
+SHOP_PAYMENT_LINK = ""  # Legacy optional payment URL; UPI button now shows Update Soon
+ORDERS_CHANNEL_ID = -10044442056794  # Dedicated Shopping Orders channel
+shop_orders_db = []  # [{id, uid, items, total, address, payment, status, created_at, ...}]
+shop_order_counter = 1
+shop_purchases_db = {}  # uid -> confirmed/delivered purchase history
+shop_addresses_db = {}  # uid -> saved delivery address
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -1188,7 +1194,7 @@ def _restore_all_int_keys_after_load():
         "task_open_time", "user_task_status", "task_notification_settings_db", "skip_db",
         "promo_earnings_db", "product_promo_earnings_db", "promo_views_db", "promo_pending",
         "product_promo_pending", "product_promo_approved", "admin_names_db",
-        "pending_plan_purchases", "support_plans_db", "task_images_db",
+        "pending_plan_purchases", "support_plans_db", "task_images_db", "shop_purchases_db", "shop_addresses_db",
         "support_banner_db",
     ]
     for name in dict_names:
@@ -1223,9 +1229,10 @@ def save_data():
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
             "user_task_status", "task_notifications_sent", "task_notification_settings_db", "skip_db",
-            "promo_campaigns_db", "promo_campaign_counter", "shopping_categories_db", "shopping_products_db", "shopping_products_counter", "shopping_categories_counter", "promo_earnings_db", "product_promo_earnings_db",
+            "promo_campaigns_db", "promo_campaign_counter", "shopping_categories_db", "shopping_products_db", "shopping_products_counter", "shopping_categories_counter", "SHOP_PAYMENT_LINK", "ORDERS_CHANNEL_ID", "promo_earnings_db", "product_promo_earnings_db",
             "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
+            "shop_orders_db", "shop_order_counter", "shop_purchases_db", "shop_addresses_db",
             "support_plan_image_file_id", "pending_plans",
             "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT",
         ]
@@ -2272,6 +2279,7 @@ def admin_panel_keyboard():
          InlineKeyboardButton("🚫 Banned List", callback_data="admin_view_banned")],
         [InlineKeyboardButton("🛒 Shopping", callback_data="admin_view_shopping"),
          InlineKeyboardButton("📚 Documents & Plans", callback_data="admin_view_docs")],
+        [InlineKeyboardButton("📦 Shop Orders", callback_data="admin_shop_orders")],
         [InlineKeyboardButton("📢 Product Promotion", callback_data="admin_product_promo"),
          InlineKeyboardButton("💾 Backup", callback_data="admin_backup")],
         [InlineKeyboardButton("👑 Admins", callback_data="admin_add_admin"),
@@ -3147,34 +3155,74 @@ async def admin_view_banned_cb(update: Update, context: ContextTypes.DEFAULT_TYP
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Admin", callback_data="back_admin")]]))
 
 
+async def _shop_cart_text(uid, cart):
+    if not cart:
+        return "🛒 YOUR CART\n\nCart is empty."
+    lines = ["🛒 YOUR CART", ""]
+    total = 0
+    for raw_pid, raw_qty in list(cart.items()):
+        try:
+            pid, qty = int(raw_pid), int(raw_qty)
+        except Exception:
+            continue
+        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
+        if not prod or qty <= 0:
+            continue
+        price = float(prod.get("price", 0))
+        subtotal = price * qty
+        total += subtotal
+        lines.append(f"📦 {prod.get('name','Product')}\n₹{price:g} × {qty} = ₹{subtotal:g}")
+        lines.append("")
+    lines.append(f"💰 TOTAL: ₹{total:g}")
+    return "\n".join(lines)
+
+def _shop_cart_kb(cart):
+    rows = []
+    for raw_pid, raw_qty in list(cart.items()):
+        try:
+            pid, qty = int(raw_pid), int(raw_qty)
+        except Exception:
+            continue
+        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
+        if not prod:
+            continue
+        stock = int(prod.get("stock", 0) or 0)
+        rows.append([
+            InlineKeyboardButton("➖", callback_data=f"cart_minus_{pid}"),
+            InlineKeyboardButton(f"{prod.get('name','Product')[:18]} × {qty}", callback_data=f"shop_prod_{pid}"),
+            InlineKeyboardButton("➕", callback_data=f"cart_plus_{pid}")
+        ])
+    rows.append([InlineKeyboardButton("💳 Checkout", callback_data="cart_checkout")])
+    rows.append([InlineKeyboardButton("🗑️ Clear Cart", callback_data="cart_clear")])
+    rows.append([InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+    return InlineKeyboardMarkup(rows)
+
 async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
+    try: await q.answer()
+    except Exception: pass
     try:
         cats = get_shopping_categories()
         if not shopping_products_db and not cats:
             await q.message.reply_text("🛒 Shopping - No products yet! Admin will add soon.", reply_markup=main_menu())
             return
-        # Show categories
         kb = []
         for cat in cats:
             count = len(get_products_by_category(cat))
             kb.append([InlineKeyboardButton(f"📦 {cat} ({count})", callback_data=f"shop_cat_{cat}")])
+        cart = context.user_data.get("shopping_cart", {})
+        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
+        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
         kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
-        await q.message.reply_text("🛒 SHOPPING - Select Category:\n\nCategory wise products chudataniki category click chey!", reply_markup=InlineKeyboardMarkup(kb))
+        await q.message.reply_text("🛒 SHOPPING\n\nSelect a category:", reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
         print(f"shopping_cb error {e}")
         await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
 
 async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
+    try: await q.answer()
+    except Exception: pass
     try:
         cat = q.data.replace("shop_cat_", "", 1)
         prods = get_products_by_category(cat)
@@ -3184,9 +3232,13 @@ async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         msg = f"📦 {cat} - {len(prods)} Products:\n\n"
         kb = []
-        for p in prods[:10]:
-            msg += f"ID {p['id']}: {p['name']} - Rs{p['price']}\n{p['desc'][:50]}\n\n"
-            kb.append([InlineKeyboardButton(f"{p['name']} - Rs{p['price']}", callback_data=f"shop_prod_{p['id']}")])
+        for p in prods[:20]:
+            stock = int(p.get("stock", 0) or 0)
+            msg += f"ID {p['id']}: {p['name']} - ₹{p['price']}\n{p.get('desc','')[:80]}\nStock: {stock}\n\n"
+            kb.append([InlineKeyboardButton(f"{p['name'][:28]} - ₹{p['price']}", callback_data=f"shop_prod_{p['id']}")])
+        cart = context.user_data.get("shopping_cart", {})
+        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
+        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
         kb.append([InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")])
         kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
         await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
@@ -3196,47 +3248,394 @@ async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def shop_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
+    try: await q.answer()
+    except Exception: pass
     try:
         pid = int(q.data.replace("shop_prod_", "", 1))
-        prod = next((p for p in shopping_products_db if int(p.get("id",0))==pid), None)
+        prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
         if not prod:
-            await q.message.reply_text("Product not found!", reply_markup=main_menu())
-            return
-        msg = (
-            f"🛒 {prod['name']}\n\n"
-            f"📦 Category: {prod['category']}\n"
-            f"💰 Price: Rs{prod['price']}\n"
-            f"📝 Desc: {prod['desc']}\n"
-            f"📦 Stock: {prod['stock']}\n\n"
-            f"Buy cheyalanukunte Contact Us click chey!"
-        )
-        kb = [
-            [InlineKeyboardButton("💬 Buy Now - Contact Admin", url=get_contact_url())],
-            [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
-            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
-        ]
+            await q.message.reply_text("Product not found!", reply_markup=main_menu()); return
+        stock = int(prod.get("stock", 0) or 0)
+        msg = (f"🛒 {prod['name']}\n\n📦 Category: {prod['category']}\n💰 Price: ₹{prod['price']}\n"
+               f"📝 Desc: {prod.get('desc','')}\n📦 Stock: {stock}\n\nSelect quantity and add to cart.")
+        kb = []
+        if stock > 0:
+            kb.append([InlineKeyboardButton("➕ Add 1 to Cart", callback_data=f"cart_add_{pid}")])
+        else:
+            msg += "\n\n❌ OUT OF STOCK"
+        kb += [[InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart")],
+               [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
+               [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+        markup = InlineKeyboardMarkup(kb)
         if prod.get("image"):
             try:
-                await q.message.reply_photo(photo=prod["image"], caption=msg[:1000], reply_markup=InlineKeyboardMarkup(kb))
-                return
-            except:
-                pass
-        await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
+                await q.message.reply_photo(photo=prod["image"], caption=msg[:1000], reply_markup=markup); return
+            except Exception as e:
+                print(f"shop product image send failed: {e}")
+        await q.message.reply_text(msg[:4000], reply_markup=markup)
     except Exception as e:
         print(f"shop_product_cb error {e}")
         await q.message.reply_text("Error", reply_markup=main_menu())
 
+async def shopping_cart_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    cart = context.user_data.setdefault("shopping_cart", {})
+    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
+
+async def cart_add_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    pid = int(q.data.replace("cart_add_", "", 1))
+    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
+    if not prod: return
+    stock = int(prod.get("stock",0) or 0)
+    cart = context.user_data.setdefault("shopping_cart", {})
+    current = int(cart.get(pid, 0))
+    if current >= stock:
+        await q.message.reply_text(f"❌ Only {stock} available.", reply_markup=_shop_cart_kb(cart)); return
+    cart[pid] = current + 1
+    await q.message.reply_text(f"✅ Added 1 × {prod['name']} to cart.", reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart"), InlineKeyboardButton("➕ Add More", callback_data=f"shop_prod_{pid}")],
+        [InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping")]
+    ]))
+
+async def _cart_change(update, context, delta):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    pid = int(q.data.rsplit("_", 1)[1])
+    cart = context.user_data.setdefault("shopping_cart", {})
+    current = int(cart.get(pid, 0))
+    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
+    if not prod: return
+    stock = int(prod.get("stock",0) or 0)
+    new_qty = current + delta
+    if new_qty <= 0: cart.pop(pid, None)
+    elif new_qty > stock:
+        await q.message.reply_text(f"❌ Only {stock} available."); return
+    else: cart[pid] = new_qty
+    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
+
+async def cart_plus_cb(update, context): await _cart_change(update, context, 1)
+async def cart_minus_cb(update, context): await _cart_change(update, context, -1)
+
+async def cart_clear_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    try: await q.answer("Cart cleared")
+    except Exception: pass
+    context.user_data["shopping_cart"] = {}
+    await q.message.reply_text("🗑️ Cart cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+
+
+async def _show_shop_checkout(update, context, edit=False):
+    """Show checkout details after an address is available."""
+    uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
+    cart = context.user_data.get("shopping_cart", {})
+    if not cart:
+        msg = "🛒 Cart is empty."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")]]))
+        else:
+            await update.message.reply_text(msg)
+        return
+    address = str(context.user_data.get("shop_address", "") or shop_addresses_db.get(uid, "") or "").strip()
+    if not address:
+        context.user_data["awaiting_shop_address"] = True
+        prompt = (
+            "📍 DELIVERY ADDRESS\n\n"
+            "Please send your complete delivery address in ONE message.\n"
+            "Example:\n"
+            "Name: Ravi\nMobile: 9876543210\n"
+            "House/Street: 12-34, Main Road\nArea: Kukatpally\n"
+            "City: Hyderabad\nState: Telangana\nPincode: 500072"
+        )
+        if update.callback_query:
+            await update.callback_query.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="shopping_cart")]]))
+        else:
+            await update.message.reply_text(prompt)
+        return
+    text = await _shop_cart_text(uid, cart)
+    text += f"\n\n📍 Delivery Address:\n{address}\n\nChoose payment method:"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 UPI - Update Soon", callback_data="shop_pay_upi"),
+         InlineKeyboardButton("💵 Cash on Delivery", callback_data="shop_pay_cod")],
+        [InlineKeyboardButton("✏️ Change Address", callback_data="shop_change_address")],
+        [InlineKeyboardButton("🛒 Back to Cart", callback_data="shopping_cart")],
+    ])
+    if update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=kb)
+    else:
+        await update.message.reply_text(text, reply_markup=kb)
+
+
+def _shop_order_items(cart):
+    items=[]
+    for pid, qty in cart.items():
+        try: pid=int(pid); qty=int(qty)
+        except: continue
+        prod=next((p for p in shopping_products_db if int(p.get("id",0))==pid), None)
+        if not prod or qty <= 0: continue
+        price=float(prod.get("price",0) or 0)
+        items.append({"product_id":pid,"name":str(prod.get("name","Product")),"qty":qty,"price":price,"subtotal":round(price*qty,2)})
+    return items
+
+
+def _shop_order_text(order):
+    lines=[f"📦 SHOP ORDER #{order['id']}", "", f"Customer ID: {order['uid']}", f"Payment: {order['payment']}", f"Status: {order['status']}", ""]
+    for it in order.get("items",[]):
+        lines.append(f"• {it['name']} × {it['qty']} = ₹{it['subtotal']:g}")
+    lines += [f"\n💰 Total: ₹{float(order.get('total',0)):g}", f"\n📍 Address:\n{order.get('address','')}"]
+    return "\n".join(lines)
+
+
+async def shop_change_address_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    context.user_data["awaiting_shop_address"] = True
+    await q.message.reply_text("📍 Send your complete delivery address in ONE message.\n\nYou can include Name, Mobile, House/Street, Area, City, State and Pincode.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Back to Cart", callback_data="shopping_cart")]]))
+
+
+async def shop_address_text_handler(update, context):
+    if not context.user_data.get("awaiting_shop_address"):
+        return False
+    address=str(update.message.text or "").strip()
+    if len(address) < 10:
+        await update.message.reply_text("❌ Address is too short. Please send the complete delivery address.")
+        return True
+    context.user_data["shop_address"] = address
+    shop_addresses_db[update.effective_user.id] = address
+    save_data()
+    context.user_data["awaiting_shop_address"] = False
+    await update.message.reply_text("✅ Delivery address saved.")
+    await _show_shop_checkout(update, context)
+    return True
+
+
+async def shop_pay_upi_cb(update, context):
+    q=update.callback_query
+    try: await q.answer("UPI will be available soon")
+    except: pass
+    await q.message.reply_text("🔜 UPI PAYMENT UPDATE SOON\n\nUPI payment is not active yet. Please use Cash on Delivery for now.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💵 Cash on Delivery", callback_data="shop_pay_cod")],[InlineKeyboardButton("🛒 Back to Cart", callback_data="shopping_cart")]]))
+
+
+async def set_orders_channel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    global ORDERS_CHANNEL_ID
+    raw=update.message.text.replace("/set_orders_channel", "", 1).strip()
+    if not raw:
+        await update.message.reply_text(f"📦 Current Orders Channel: {ORDERS_CHANNEL_ID or 'Not set'}\n\nUsage: /set_orders_channel <channel_id or @username>\nExample: /set_orders_channel -10044442056794\n\nBot must be Admin in the channel with Post Messages permission.")
+        return
+    value=raw.split()[0]
+    if value.startswith("-"):
+        try: value=int(value)
+        except ValueError:
+            await update.message.reply_text("❌ Invalid channel ID. Example: -10044442056794"); return
+    elif not value.startswith("@"):
+        await update.message.reply_text("❌ Use a channel ID like -10044442056794 or @channelusername."); return
+    ORDERS_CHANNEL_ID=value
+    save_data()
+    try:
+        chat=await context.bot.get_chat(ORDERS_CHANNEL_ID)
+        await update.message.reply_text(f"✅ Orders Channel saved!\n\n📢 {chat.title or value}\n🆔 {value}\n\nAll new Shopping orders will be posted there.\n⚠️ Bot must be Admin with Post Messages permission.")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Channel ID saved: {value}\n\nTelegram could not verify it yet. Make sure the bot is Admin with Post Messages permission.\nDetails: {e}")
+
+async def _post_shop_order_to_channel(context, order):
+    channel=ORDERS_CHANNEL_ID
+    if not channel: return None
+    name="Customer"; username=""
+    try:
+        c=await context.bot.get_chat(int(order["uid"]))
+        name=((getattr(c,"first_name","") or "")+" "+(getattr(c,"last_name","") or "")).strip() or "Customer"
+        username=getattr(c,"username","") or ""
+    except Exception: pass
+    order["customer_name"]=name; order["customer_username"]=username
+    text="🛒 NEW SHOPPING ORDER\n\n"+_shop_order_text(order)+f"\n\n👤 Customer: {name}"
+    if username: text+=f"\n🔗 Username: @{username}"
+    text+="\n\nChoose an action below."
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Confirm Order",callback_data=f"shop_order_confirm_{order['id']}"),InlineKeyboardButton("❌ Reject",callback_data=f"shop_order_reject_{order['id']}")]])
+    return await context.bot.send_message(chat_id=channel,text=text,reply_markup=kb)
+
+async def _update_order_channel_message(context, q, order, status):
+    suffix={
+      "confirmed":"\n\n✅ ORDER CONFIRMED\n\nAfter giving the parcel to courier, click:",
+      "rejected":"\n\n❌ ORDER REJECTED\n\nStock has been restored.",
+      "dispatched":"\n\n🚚 ORDER DISPATCHED\n\nAfter delivery, click:",
+      "delivered":"\n\n🎉 ORDER SUCCESSFULLY DELIVERED"
+    }.get(status, f"\n\n📦 STATUS: {status}")
+    kb=None
+    if status=="confirmed": kb=InlineKeyboardMarkup([[InlineKeyboardButton("🚚 Mark Dispatched",callback_data=f"shop_order_dispatch_{order['id']}")]])
+    elif status=="dispatched": kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Mark Delivered",callback_data=f"shop_order_delivered_{order['id']}")]])
+    try:
+        if q.message and getattr(q.message.chat,"id",None)==ORDERS_CHANNEL_ID:
+            await q.message.edit_text(_shop_order_text(order)+suffix,reply_markup=kb); return
+    except Exception as e: print(f"order channel edit failed: {e}")
+    # Existing Admin Shop Orders screen fallback
+    await q.message.reply_text(_shop_order_text(order)+suffix,reply_markup=kb)
+
+
+async def shop_pay_cod_cb(update, context):
+    global shop_order_counter
+    q=update.callback_query
+    try: await q.answer("Creating COD order...")
+    except: pass
+    uid=q.from_user.id
+    cart=context.user_data.get("shopping_cart", {})
+    address=str(context.user_data.get("shop_address", "") or shop_addresses_db.get(uid, "") or "").strip()
+    if not cart:
+        await q.message.reply_text("🛒 Cart is empty."); return
+    if not address:
+        context.user_data["awaiting_shop_address"] = True
+        await q.message.reply_text("📍 Please add your delivery address first.")
+        return
+    items=_shop_order_items(cart)
+    if not items:
+        await q.message.reply_text("❌ No valid products in cart."); return
+    # Recheck stock before reserving.
+    for it in items:
+        prod=next((p for p in shopping_products_db if int(p.get("id",0))==it["product_id"]), None)
+        if not prod or int(prod.get("stock",0) or 0) < it["qty"]:
+            await q.message.reply_text(f"❌ Not enough stock for {it['name']}. Available: {int(prod.get('stock',0) or 0) if prod else 0}")
+            return
+    total=round(sum(i["subtotal"] for i in items),2)
+    oid=int(shop_order_counter); shop_order_counter += 1
+    order={"id":oid,"uid":uid,"items":items,"total":total,"address":address,"payment":"Cash on Delivery","status":"pending_admin_confirmation","created_at":get_ist_now().isoformat() if hasattr(get_ist_now(), 'isoformat') else str(get_ist_now())}
+    # Reserve stock while pending; rejected orders restore it.
+    for it in items:
+        prod=next((p for p in shopping_products_db if int(p.get("id",0))==it["product_id"]), None)
+        if prod: prod["stock"]=int(prod.get("stock",0) or 0)-it["qty"]
+    shop_orders_db.append(order)
+    save_data()
+    context.user_data["shopping_cart"]={}
+    channel_posted=False
+    try:
+        sent_msg=await _post_shop_order_to_channel(context, order)
+        channel_posted=sent_msg is not None
+        if channel_posted:
+            order["channel_message_id"]=getattr(sent_msg,"message_id",None)
+            order["orders_channel_id"]=ORDERS_CHANNEL_ID
+            save_data()
+    except Exception as e:
+        print(f"shop order channel post failed: {e}")
+    placement_note=("📢 Order sent to S2E Orders channel.\n" if channel_posted else "⚠️ Orders channel is not reachable. Please check bot Admin permissions.\n")
+    await q.message.reply_text(f"✅ ORDER #{oid} PLACED\n\n💵 Cash on Delivery\n💰 Total: ₹{total:g}\n\nYour order is waiting for Admin confirmation. You will receive updates for Confirmed → Dispatched → Delivered.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+
+
+async def _shop_admin_order_cb(update, context, action):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    if not is_admin(q.from_user.id): return
+    try: oid=int(q.data.rsplit("_",1)[1])
+    except: return
+    order=next((o for o in shop_orders_db if int(o.get("id",0))==oid),None)
+    if not order:
+        await q.message.reply_text("❌ Order not found."); return
+    if action=="confirm":
+        if order.get("status") not in ("pending_admin_confirmation", "rejected"):
+            await q.message.reply_text(f"Order #{oid} is already {order.get('status')}."); return
+        order["status"]="confirmed"
+        # Add to customer's purchase history at admin confirmation.
+        shop_purchases_db.setdefault(int(order["uid"]), []).append({"order_id":oid,"items":order.get("items",[]),"total":order.get("total",0),"status":"confirmed","date":str(get_ist_today())})
+        save_data()
+        await context.bot.send_message(chat_id=order["uid"], text=f"✅ ORDER #{oid} CONFIRMED\n\nYour product order has been confirmed by Admin.\n💰 Total: ₹{float(order.get('total',0)):g}\n💵 Cash on Delivery\n\nNext status: 🚚 Dispatched", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")]]))
+        await _update_order_channel_message(context, q, order, "confirmed")
+    elif action=="reject":
+        if order.get("status") != "pending_admin_confirmation":
+            await q.message.reply_text(f"Order #{oid} is already {order.get('status')}."); return
+        order["status"]="rejected"
+        for it in order.get("items",[]):
+            prod=next((p for p in shopping_products_db if int(p.get("id",0))==int(it.get("product_id",0))),None)
+            if prod: prod["stock"]=int(prod.get("stock",0) or 0)+int(it.get("qty",0) or 0)
+        save_data()
+        await context.bot.send_message(chat_id=order["uid"], text=f"❌ ORDER #{oid} REJECTED\n\nAdmin could not confirm this order. Please contact Admin if needed.")
+        await _update_order_channel_message(context, q, order, "rejected")
+    elif action=="dispatch":
+        if order.get("status")!="confirmed":
+            await q.message.reply_text("Order must be confirmed first."); return
+        order["status"]="dispatched"
+        for p in shop_purchases_db.get(int(order["uid"]),[]):
+            if int(p.get("order_id",0))==oid: p["status"]="dispatched"
+        save_data()
+        await context.bot.send_message(chat_id=order["uid"], text=f"🚚 ORDER #{oid} DISPATCHED\n\nYour order has been handed to courier.\n\nNext status: 📦 Successfully Delivered")
+        await _update_order_channel_message(context, q, order, "dispatched")
+    elif action=="delivered":
+        if order.get("status")!="dispatched":
+            await q.message.reply_text("Order must be dispatched first."); return
+        order["status"]="delivered"
+        for p in shop_purchases_db.get(int(order["uid"]),[]):
+            if int(p.get("order_id",0))==oid: p["status"]="delivered"
+        save_data()
+        await context.bot.send_message(chat_id=order["uid"], text=f"🎉 ORDER #{oid} SUCCESSFULLY DELIVERED\n\nThank you for your purchase! Your order is completed.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")]]))
+        await _update_order_channel_message(context, q, order, "delivered")
+
+
+async def shop_order_confirm_cb(update, context): await _shop_admin_order_cb(update, context, "confirm")
+async def shop_order_reject_cb(update, context): await _shop_admin_order_cb(update, context, "reject")
+async def shop_order_dispatch_cb(update, context): await _shop_admin_order_cb(update, context, "dispatch")
+async def shop_order_delivered_cb(update, context): await _shop_admin_order_cb(update, context, "delivered")
+
+
+async def shop_purchases_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    uid=q.from_user.id
+    purchases=shop_purchases_db.get(uid,[])
+    if not purchases:
+        await q.message.reply_text("📦 MY PURCHASES\n\nNo confirmed purchases yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])); return
+    lines=["📦 MY PURCHASES\n"]
+    for p in purchases[-15:][::-1]:
+        lines.append(f"Order #{p.get('order_id')} — ₹{float(p.get('total',0)):g} — {str(p.get('status','')).upper()}")
+        for it in p.get("items",[]): lines.append(f"  • {it.get('name')} × {it.get('qty')}")
+        lines.append(f"  📅 {p.get('date','')}\n")
+    await q.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+
+
+async def admin_shop_orders_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except: pass
+    if not is_admin(q.from_user.id): return
+    pending=[o for o in shop_orders_db if o.get("status") in ("pending_admin_confirmation","confirmed","dispatched")]
+    if not pending:
+        await q.message.reply_text("📦 SHOP ORDERS\n\nNo active orders.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]])); return
+    for o in pending[-20:][::-1]:
+        kb=[]
+        st=o.get("status")
+        if st=="pending_admin_confirmation": kb=[[InlineKeyboardButton("✅ Confirm", callback_data=f"shop_order_confirm_{o['id']}"),InlineKeyboardButton("❌ Reject", callback_data=f"shop_order_reject_{o['id']}")]]
+        elif st=="confirmed": kb=[[InlineKeyboardButton("🚚 Dispatched", callback_data=f"shop_order_dispatch_{o['id']}")]]
+        elif st=="dispatched": kb=[[InlineKeyboardButton("✅ Delivered", callback_data=f"shop_order_delivered_{o['id']}")]]
+        await q.message.reply_text(_shop_order_text(o), reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def cart_checkout_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    await _show_shop_checkout(update, context)
+
+async def set_shop_payment_link_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    global SHOP_PAYMENT_LINK
+    raw = update.message.text.replace("/set_shop_payment_link", "", 1).strip()
+    if not raw:
+        await update.message.reply_text(f"Current Shopping payment link:\n{SHOP_PAYMENT_LINK or 'Not set'}\n\nUsage: /set_shop_payment_link https://...")
+        return
+    if not raw.startswith(("https://", "http://")):
+        await update.message.reply_text("❌ Use a valid http/https payment URL."); return
+    SHOP_PAYMENT_LINK = raw
+    save_data()
+    await update.message.reply_text(f"✅ Shopping payment link set:\n{SHOP_PAYMENT_LINK}")
 
 async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    try:
-        await q.answer()
-    except:
-        pass
+    try: await q.answer()
+    except Exception: pass
     try:
         await support_plans_cb(update, context)
     except Exception as e:
@@ -3268,7 +3667,7 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
             "/list_promos\n"
             "/list_shop_products\n"
         )
-        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 Shop Orders", callback_data="admin_shop_orders")],[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
     except Exception as e:
         print(f"admin_view_shopping_cb error {e}")
         import traceback; traceback.print_exc()
@@ -3616,7 +4015,7 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Withdrawable Now: ₹{withdrawable:.2f}\n"
         f"Hold (Upgrade plan to withdraw): ₹{hold_balance:.2f}"
     )
-    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💸 Withdraw History", callback_data="withdraw_history")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+    await q.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],[InlineKeyboardButton("💸 Withdraw History", callback_data="withdraw_history")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
 async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
@@ -9184,6 +9583,29 @@ def main():
                       "After completing, tap Upload Screenshot.")
                 kb=InlineKeyboardMarkup([[InlineKeyboardButton("📤 Upload Screenshot", callback_data="daily_upload_screenshot")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
                 await q.message.reply_text(text, reply_markup=kb)
+            # V68: Shopping + Documents handlers (user and admin)
+            app.add_handler(CallbackQueryHandler(shopping_cb, pattern=r"^shopping$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_category_cb, pattern=r"^shop_cat_.+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_product_cb, pattern=r"^shop_prod_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shopping_cart_cb, pattern=r"^shopping_cart$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_add_cb, pattern=r"^cart_add_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_plus_cb, pattern=r"^cart_plus_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_minus_cb, pattern=r"^cart_minus_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_clear_cb, pattern=r"^cart_clear$"), group=-2)
+            app.add_handler(CallbackQueryHandler(cart_checkout_cb, pattern=r"^cart_checkout$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_change_address_cb, pattern=r"^shop_change_address$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_pay_upi_cb, pattern=r"^shop_pay_upi$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_pay_cod_cb, pattern=r"^shop_pay_cod$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_purchases_cb, pattern=r"^shop_purchases$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_shop_orders_cb, pattern=r"^admin_shop_orders$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_order_confirm_cb, pattern=r"^shop_order_confirm_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_order_reject_cb, pattern=r"^shop_order_reject_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_order_dispatch_cb, pattern=r"^shop_order_dispatch_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shop_order_delivered_cb, pattern=r"^shop_order_delivered_\d+$"), group=-2)
+            app.add_handler(CallbackQueryHandler(docs_plans_cb, pattern=r"^docs_plans$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern=r"^admin_view_shopping$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_view_docs_cb, pattern=r"^admin_view_docs$"), group=-2)
+
             app.add_handler(CallbackQueryHandler(daily_open_cb, pattern=r"^daily_open_-?\d+$"))
             app.add_handler(CallbackQueryHandler(daily_cb, pattern="^daily$"))
             app.add_handler(CallbackQueryHandler(scheduled_cb, pattern="^scheduled$"))
@@ -9231,6 +9653,8 @@ def main():
             app.add_handler(CommandHandler("add_category", add_category_cmd))
             app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
             app.add_handler(CommandHandler("set_shop_product_image", set_shop_product_image_cmd))
+            app.add_handler(CommandHandler("set_orders_channel", set_orders_channel_cmd))
+            app.add_handler(CommandHandler("set_shop_payment_link", set_shop_payment_link_cmd))
             app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, shop_product_image_photo_handler), group=-5)
             app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
             app.add_handler(CommandHandler("shop_products", list_shop_products_cmd))
@@ -9253,6 +9677,7 @@ def main():
             app.add_handler(CallbackQueryHandler(wd_confirm_cb, pattern="^wd_confirm_"))
             app.add_handler(CallbackQueryHandler(wd_edit_upi_cb, pattern="^wd_edit_upi$"))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wd_edit_upi_text_handler), group=-1)
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, shop_address_text_handler), group=-4)
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_details_text), group=2)
             app.add_handler(CallbackQueryHandler(wd_admin_approve_cb, pattern="^wd_admin_approve_"))
             app.add_handler(CallbackQueryHandler(wd_admin_reject_cb, pattern="^wd_admin_reject_"))
