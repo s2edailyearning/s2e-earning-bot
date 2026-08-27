@@ -1,3 +1,4 @@
+print("V65 FINAL - SHOP PRODUCT IMAGE + FIXED CONTACT @s2edayincome - 2026-08-27 14:00 IST")
 print("V74 FINAL - ALL FIXED + TEST 2% 0.5% + 10% 3% + CHAIN - 2026-08-26 18:12 IST")
 print("V45 FINAL CLEAN - ALL SUPABASE SAFE + MISSED DEPLOY FIX + MYDETAILS + SHORT WITHDRAW - 2026-08-25 16:20 IST")
 
@@ -195,7 +196,8 @@ MISSED_ENABLED = True
 ADMIN_UPI = os.getenv("ADMIN_UPI", "s2eearning@upi")
 PAYMENT_UPI = ADMIN_UPI
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "@s2edayincome")
-CONTACT_USERNAME = SUPPORT_USERNAME
+# Fixed public contact for Shopping / Contact Admin buttons
+CONTACT_USERNAME = "@s2edayincome"
 # Contact Us opens the admin directly by Telegram user ID, so it does not depend on a public username.
 CONTACT_ADMIN_ID = int(os.getenv("CONTACT_ADMIN_ID", "7256515560")) if str(os.getenv("CONTACT_ADMIN_ID", "")).lstrip("-").isdigit() else 7256515560
 
@@ -3362,6 +3364,80 @@ async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
+
+async def set_shop_product_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set an image for an existing shopping product by ID, then receive the photo."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "🖼️ Usage: /set_shop_product_image <product_id>\n\n"
+            "Example: /set_shop_product_image 1\n"
+            "Then send the product image as a PHOTO."
+        )
+        return
+    try:
+        pid = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Product ID must be a number. Example: /set_shop_product_image 1")
+        return
+    prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
+    if not prod:
+        await update.message.reply_text(f"❌ Product ID {pid} not found. Use /list_shop_products")
+        return
+    context.user_data["set_shop_product_image_id"] = pid
+    await update.message.reply_text(
+        f"🖼️ Now send the image for Product ID {pid}: {prod.get('name','Product')}\n"
+        "Send it as a PHOTO."
+    )
+
+async def shop_product_image_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save an admin-uploaded Telegram photo as an existing shopping product image."""
+    try:
+        uid = update.effective_user.id
+        if not is_admin(uid):
+            return
+        pid = context.user_data.get("set_shop_product_image_id")
+
+        # Also support sending a photo with caption: /set_shop_product_image <id>
+        caption = update.message.caption or ""
+        if not pid:
+            m = re.search(r"/set_shop_product_image\s+(\d+)", caption, re.I)
+            if m:
+                pid = int(m.group(1))
+        if not pid:
+            return
+
+        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == int(pid)), None)
+        if not prod:
+            context.user_data.pop("set_shop_product_image_id", None)
+            await update.message.reply_text(f"❌ Product ID {pid} not found.")
+            return
+
+        file_id = None
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+        elif update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith("image/"):
+            file_id = update.message.document.file_id
+
+        if not file_id:
+            return
+
+        prod["image"] = file_id
+        save_data()
+        context.user_data.pop("set_shop_product_image_id", None)
+
+        await update.message.reply_text(
+            f"✅ Product image saved!\n\n"
+            f"ID: {prod['id']}\n"
+            f"Product: {prod['name']}\n"
+            f"Category: {prod['category']}\n\n"
+            "Users will now see this image when they open the product."
+        )
+        print(f"Shop product image set: product {pid} by admin {uid}")
+    except Exception as e:
+        print(f"shop_product_image_photo_handler error: {e}")
+
 async def list_shop_products_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -5006,11 +5082,7 @@ def get_contact_url(message_text=None):
         if message_text:
             return base + "?text=" + quote(str(message_text), safe="")
         return base
-    # Fallback only when no username has been configured.
-    try:
-        return f"tg://user?id={int(CONTACT_ADMIN_ID)}"
-    except Exception:
-        return CHANNEL_LINK
+    return CHANNEL_LINK
 
 async def set_contact_username_cmd(update, context):
     if not is_admin(update.effective_user.id):
@@ -9007,6 +9079,7 @@ def main():
                         pass
 
             #  Add simple handlers with high priority - No ConversationHandler!
+            app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, shop_product_image_photo_handler), group=-3)
             app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, product_video_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, product_screenshot_photo_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO, v56_task_image_simple_handler), group=1)
@@ -9183,6 +9256,7 @@ def main():
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
             app.add_handler(CommandHandler("add_category", add_category_cmd))
             app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
+            app.add_handler(CommandHandler("set_shop_product_image", set_shop_product_image_cmd))
             app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
             app.add_handler(CommandHandler("shop_products", list_shop_products_cmd))
             app.add_handler(CommandHandler("restore", restore_deleted_user_cmd))
