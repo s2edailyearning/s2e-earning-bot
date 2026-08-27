@@ -3452,6 +3452,155 @@ def _shop_order_text(order):
     return "\n".join(lines)
 
 
+async def shopping_progress_cb(update, context):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    await q.message.reply_text(
+        _shopping_progress_text(q.from_user.id),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],
+            [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")],
+        ])
+    )
+
+
+async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    try:
+        cats = get_shopping_categories()
+        if not shopping_products_db and not cats:
+            await q.message.reply_text("🛒 Shopping - No products yet! Admin will add soon.", reply_markup=main_menu())
+            return
+        kb = []
+        for cat in cats:
+            count = len(get_products_by_category(cat))
+            kb.append([InlineKeyboardButton(f"📦 {cat} ({count})", callback_data=f"shop_cat_{cat}")])
+        cart = context.user_data.get("shopping_cart", {})
+        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
+        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
+        kb.append([InlineKeyboardButton("🛍️ Shopping Balance / 20% Progress", callback_data="shopping_progress")])
+        kb.append([InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")])
+        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+        await q.message.reply_text("🛒 SHOPPING\n\nSelect a category or check your Shopping Balance:", reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        print(f"shopping_cb error {e}")
+        await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
+
+async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    try:
+        cat = q.data.replace("shop_cat_", "", 1)
+        prods = get_products_by_category(cat)
+        if not prods:
+            kb = [[InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")], [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+            await q.message.reply_text(f"📦 {cat} - No products in this category yet!", reply_markup=InlineKeyboardMarkup(kb))
+            return
+        msg = f"📦 {cat} - {len(prods)} Products:\n\n"
+        kb = []
+        for p in prods[:20]:
+            stock = int(p.get("stock", 0) or 0)
+            msg += f"ID {p['id']}: {p['name']} - ₹{p['price']}\n{p.get('desc','')[:80]}\nStock: {stock}\n\n"
+            kb.append([InlineKeyboardButton(f"{p['name'][:28]} - ₹{p['price']}", callback_data=f"shop_prod_{p['id']}")])
+        cart = context.user_data.get("shopping_cart", {})
+        count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
+        kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
+        kb.append([InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")])
+        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+        await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        print(f"shop_category_cb error {e}")
+        await q.message.reply_text("Error loading category", reply_markup=main_menu())
+
+async def shop_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    try:
+        pid = int(q.data.replace("shop_prod_", "", 1))
+        prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
+        if not prod:
+            await q.message.reply_text("Product not found!", reply_markup=main_menu()); return
+        stock = int(prod.get("stock", 0) or 0)
+        msg = (f"🛒 {prod['name']}\n\n📦 Category: {prod['category']}\n💰 Price: ₹{prod['price']}\n"
+               f"📝 Desc: {prod.get('desc','')}\n📦 Stock: {stock}\n\nSelect quantity and add to cart.")
+        kb = []
+        if stock > 0:
+            kb.append([InlineKeyboardButton("➕ Add 1 to Cart", callback_data=f"cart_add_{pid}")])
+        else:
+            msg += "\n\n❌ OUT OF STOCK"
+        kb += [[InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart")],
+               [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
+               [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+        markup = InlineKeyboardMarkup(kb)
+        if prod.get("image"):
+            try:
+                await q.message.reply_photo(photo=prod["image"], caption=msg[:1000], reply_markup=markup); return
+            except Exception as e:
+                print(f"shop product image send failed: {e}")
+        await q.message.reply_text(msg[:4000], reply_markup=markup)
+    except Exception as e:
+        print(f"shop_product_cb error {e}")
+        await q.message.reply_text("Error", reply_markup=main_menu())
+
+async def shopping_cart_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    cart = context.user_data.setdefault("shopping_cart", {})
+    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
+
+async def cart_add_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    pid = int(q.data.replace("cart_add_", "", 1))
+    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
+    if not prod: return
+    stock = int(prod.get("stock",0) or 0)
+    cart = context.user_data.setdefault("shopping_cart", {})
+    current = int(cart.get(pid, 0))
+    if current >= stock:
+        await q.message.reply_text(f"❌ Only {stock} available.", reply_markup=_shop_cart_kb(cart)); return
+    cart[pid] = current + 1
+    await q.message.reply_text(f"✅ Added 1 × {prod['name']} to cart.", reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛒 View Cart", callback_data="shopping_cart"), InlineKeyboardButton("➕ Add More", callback_data=f"shop_prod_{pid}")],
+        [InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping")]
+    ]))
+
+async def _cart_change(update, context, delta):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    pid = int(q.data.rsplit("_", 1)[1])
+    cart = context.user_data.setdefault("shopping_cart", {})
+    current = int(cart.get(pid, 0))
+    prod = next((p for p in shopping_products_db if int(p.get("id",0)) == pid), None)
+    if not prod: return
+    stock = int(prod.get("stock",0) or 0)
+    new_qty = current + delta
+    if new_qty <= 0: cart.pop(pid, None)
+    elif new_qty > stock:
+        await q.message.reply_text(f"❌ Only {stock} available."); return
+    else: cart[pid] = new_qty
+    await q.message.reply_text(await _shop_cart_text(q.from_user.id, cart), reply_markup=_shop_cart_kb(cart))
+
+async def cart_plus_cb(update, context): await _cart_change(update, context, 1)
+async def cart_minus_cb(update, context): await _cart_change(update, context, -1)
+
+async def cart_clear_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q=update.callback_query
+    try: await q.answer("Cart cleared")
+    except Exception: pass
+    context.user_data["shopping_cart"] = {}
+    await q.message.reply_text("🗑️ Cart cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+
+
+
 async def shop_change_address_cb(update, context):
     q=update.callback_query
     try: await q.answer()
