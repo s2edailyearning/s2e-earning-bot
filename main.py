@@ -10152,38 +10152,6 @@ def get_user_l1_display(uid):
 def get_user_l2_display(uid):
     return get_l2_users(uid)
 
-def _referral_member_yesterday_earning(referrer_uid, member_uid):
-    """Yesterday's commission earned by this referrer from one specific L1/L2 member."""
-    try:
-        day = str(get_ist_today() - timedelta(days=1))
-        total = 0.0
-        entries = referral_commission_ledger.get(referrer_uid, [])
-        if not entries:
-            entries = referral_commission_ledger.get(str(referrer_uid), [])
-        for e in entries or []:
-            if str(e.get("date", "")) != day:
-                continue
-            try:
-                if int(e.get("source_uid")) != int(member_uid):
-                    continue
-            except Exception:
-                continue
-            try:
-                total += float(e.get("amount", 0) or 0)
-            except Exception:
-                pass
-        return round(total, 2)
-    except Exception:
-        return 0.0
-
-def _referral_member_plan(uid):
-    try:
-        info = _canonical_plan_info(uid)
-        return str(info.get("display") or "Free")
-    except Exception:
-        u = users_db.get(uid, {}) if isinstance(users_db, dict) else {}
-        return str(u.get("plan") or u.get("plan_name") or "Free")
-
 async def user_referrals_menu(update, context):
     q = update.callback_query
     await q.answer()
@@ -10201,27 +10169,31 @@ async def user_referrals_level_cb(update, context):
     uid = q.from_user.id
     if q.data == "user_ref_l1":
         members = get_user_l1_display(uid)
-        title = "🟢 L1 MEMBERS"
+        title = "L1 MEMBERS - Direct Referrals"
     else:
         members = get_user_l2_display(uid)
-        title = "🔵 L2 MEMBERS"
+        title = "L2 MEMBERS - Level 2"
     if not members:
-        await q.message.reply_text(title + "\n\nNo members yet. Share your referral link!")
+        await q.message.reply_text(title + chr(10) + chr(10) + "No members yet. Share your referral link!")
         return
-    lines = [title, ""]
-    for i, member_id in enumerate(members[:50], 1):
+    lines = [title, f"Total: {len(members)} members", ""]
+    for i, member_id in enumerate(members[:20], 1):
         user = users_db.get(member_id, {}) or users_db.get(str(member_id), {})
-        name = str(user.get("name") or user.get("first_name") or "Unknown").strip()[:40]
-        plan_name = _referral_member_plan(member_id)
-        yesterday = _referral_member_yesterday_earning(uid, member_id)
-        lines.append(f"{i}. 👤 {name}")
-        lines.append(f"   💎 Plan: {plan_name}")
-        lines.append(f"   💰 Yesterday Earning: ₹{yesterday:.2f}")
+        name = user.get('name','Unknown')[:15]
+        username = user.get('username','')
+        plan_rec = _get_user_plan_record(member_id)
+        plan_name = plan_rec.get('name', plan_rec.get('plan_name','Free')) if plan_rec else 'Free'
+        joined = str(user.get('joined','') or user.get('reg_date',''))[:10] or 'Unknown'
+        bal = get_balance(member_id)
+        tasks = tasks_db.get(member_id, 0) or tasks_db.get(str(member_id),0)
+        lines.append(f"{i}. {name} ({member_id})")
+        lines.append(f"   @{username} | {plan_name} | Rs{bal:.0f} | Tasks:{tasks} | Joined:{joined}")
         lines.append("")
-    if len(members) > 50:
-        lines.append(f"... and {len(members)-50} more members")
-    await q.message.reply_text("\n".join(lines)[:4000])
-
+    if len(members) > 20:
+        lines.append(f"... and {len(members)-20} more members")
+    lines.append("")
+    lines.append("You earn commission when they complete tasks & buy plans!")
+    await q.message.reply_text(chr(10).join(lines)[:4000])
 # === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
 
 # === PERMANENT REMOVED USER GLOBAL GUARD V2 ===
