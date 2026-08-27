@@ -377,7 +377,6 @@ if _env:
         if x.strip().isdigit():
             _id = int(x.strip())
             if _id not in ADMIN_ID_LIST: ADMIN_ID_LIST.append(_id)
-ADMIN_IDS = ADMIN_ID_LIST
 
 WITHDRAW_OPTIONS = [200, 300, 500, 1000]
 notified_tasks_30sec = set()
@@ -480,32 +479,60 @@ def notification_thread_func():
             now = get_ist_now()
             lead = get_task_notification_seconds()
 
-            # PRODUCT PROMOTION: 7:59 PM IST screenshot reminder. Video-upload notification is sent immediately by product_video_handler.
+            # PRODUCT PROMOTION: notify shortly before the video download window opens.
+            # If the video was uploaded after the deadline but the campaign is still live,
+            # notify members immediately so the new task is not missed.
             for product in list(product_promo_db):
                 try:
-                    if not isinstance(product, dict) or product.get('status') != 'active' or not product.get('video_file_id') or product.get('date') != str(get_ist_today()):
+                    if not isinstance(product, dict) or product.get('status') != 'active' or not product.get('video_file_id'):
                         continue
-                    shot_open = parse_time_str(str(product.get('screenshot_open','20:00'))) or time(20,0)
-                    shot_close = parse_time_str(str(product.get('screenshot_close','22:00'))) or time(22,0)
-                    open_dt = datetime.combine(get_ist_today(), shot_open, tzinfo=IST)
-                    close_dt = datetime.combine(get_ist_today(), shot_close, tzinfo=IST)
-                    if close_dt <= open_dt: close_dt += timedelta(days=1)
+                    if product.get('date') != str(get_ist_today()):
+                        continue
+                    deadline = parse_time_str(str(product.get('download_deadline','')))
+                    close_t = parse_time_str(str(product.get('screenshot_close','')))
+                    if not deadline or not close_t:
+                        continue
+                    now = get_ist_now()
+                    open_dt = datetime.combine(get_ist_today(), deadline, tzinfo=IST)
+                    close_dt = datetime.combine(get_ist_today(), close_t, tzinfo=IST)
+                    if close_dt <= open_dt:
+                        close_dt += timedelta(days=1)
                     diff = (open_dt - now).total_seconds()
-                    if 0 <= diff <= 2:
-                        key=f"product_screenshot_reminder:{get_ist_today()}:{product.get('id')}"
-                        if key not in notified_tasks_30sec:
-                            notified_tasks_30sec.add(key)
-                            async def _send_product_reminder(_p=product):
-                                for raw_uid in list(users_db.keys()):
-                                    try:
-                                        uid_int=int(raw_uid); rec=users_db.get(raw_uid) or users_db.get(str(raw_uid)) or {}
-                                        if uid_int<=0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec): continue
-                                        reward=_product_reward_for_user(_p,uid_int)
-                                        kb=InlineKeyboardMarkup([[InlineKeyboardButton("📸 Open Product Promotion",callback_data="product_promo")]])
-                                        await bot_application.bot.send_message(chat_id=uid_int,text=(f"📸 PRODUCT PROMOTION SCREENSHOT TIME\n\nPlease upload your WhatsApp Status screenshot now.\n\n⏰ Screenshot Upload Time: 8:00 PM – 10:00 PM\n💰 Your reward: ₹{reward}\n\n🚫 After 10:00 PM submissions are closed."),reply_markup=kb)
-                                    except Exception as e: print(f"product reminder failed for {raw_uid}: {e}")
-                            asyncio.run_coroutine_threadsafe(_send_product_reminder(),bot_event_loop)
-                except Exception as e: print(f"product reminder scan error: {e}")
+                    # FIX V50 STRICT: No notifications after download deadline. 11AM daka matrame.
+                    if now > close_dt or now > open_dt:
+                        continue
+                    due_now = (0 <= diff <= lead)
+                    if not due_now:
+                        continue
+                    notify_key = f"product:{get_ist_today()}:{product.get('id')}:{lead}"
+                    if notify_key in notified_tasks_30sec:
+                        continue
+                    notified_tasks_30sec.add(notify_key)
+                    async def send_product_notifications(_p=product, _lead=lead, _late=(diff < 0)):
+                        sent = 0
+                        for uid in list(users_db.keys()):
+                            try:
+                                uid_int = int(uid)
+                                rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+                                if uid_int <= 0 or is_team_uid(uid_int) or is_removed_user(uid_int) or uid_int in banned_users or not _user_is_registered(rec):
+                                    continue
+                                reward = _product_reward_for_user(_p, uid_int)
+                                # V50: Only before deadline notification, always accurate
+                                if _late:
+                                    continue  # Don't send any notification after deadline
+                                else:
+                                    msg = (f"⏰ PRODUCT PROMOTION STARTING IN {_lead} SECONDS!\n\n🎥 {_p.get('title','Product Promotion')}\n"
+                                           f"💰 Reward: ₹{reward}\n"
+                                           f"🕐 Download until: {_p.get('download_deadline','')}\n\nTap the button below when it opens.")
+                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
+                                await bot_application.bot.send_message(chat_id=uid_int, text=msg[:4000], reply_markup=kb)
+                                sent += 1
+                            except Exception as e:
+                                print(f"product notification failed for {uid}: {e}")
+                        print(f"Product notification sent for {sent} users (campaign {_p.get('id')})")
+                    asyncio.run_coroutine_threadsafe(send_product_notifications(), bot_event_loop)
+                except Exception as e:
+                    print(f"Product notification scan error: {e}")
 
             # DAILY TASKS
             for task in get_tasks_for_today():
@@ -709,13 +736,9 @@ async def support_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for p in support_plans_db:
         name = str(p.get("name", "Plan")); price = int(p.get("price", 0))
         duration = int(p.get("duration", 30)); daily = int(p.get("daily_limit", 10))
-        cap = int(p.get("earnings_limit", 0))
-        desc = p.get("desc") or p.get("description") or f"{duration} Days | {daily} tasks/day"
-        # Legacy plan descriptions sometimes contained "Users: N". That
-        # field is no longer part of Support Plans and must never be shown.
-        desc = re.sub(r"(?:\s*\|?\s*)Users\s*:\s*\d+", "", str(desc), flags=re.IGNORECASE)
-        desc = re.sub(r"\s*\|\s*\|", " | ", desc).strip(" |")
-        lines += [f"{name} ₹{price}", str(desc), f"Validity: {duration} days | Daily: {daily} | Earning limit: ₹{cap}", ""]
+        users = int(p.get("users", 1)); cap = int(p.get("earnings_limit", 0))
+        desc = p.get("desc") or p.get("description") or f"{users} User(s) | {duration} Days | {daily} tasks/day"
+        lines += [f"{name} ₹{price}", str(desc), f"Users: {users} | Validity: {duration} days | Daily: {daily} | Earning limit: ₹{cap}", ""]
         buttons.append([InlineKeyboardButton(f"{name} ₹{price}", callback_data=f"buy_support_{int(p['id'])}")])
     lines += [f"💳 Payment UPI: {get_payment_upi()}", "", "Pay manually to the UPI above, then send the payment screenshot. No payment link is required."]
     buttons.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
@@ -745,7 +768,7 @@ async def buy_support_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending_plans[uid] = {"plan_id": pid, "plan": name.lower(), "date": str(get_ist_today()), "price": price}
     context.user_data["awaiting_plan_payment_proof"] = pid
     awaiting_plan_payment_adminless.add(uid)
-    text = (f"💎 {name} ₹{price}\n\nValidity: {duration} days\nDaily Tasks: {daily}\nEarning Limit: ₹{cap}\n\n💳 Payment UPI: {get_payment_upi()}\n\nPay manually to this UPI, then click the button below and send the payment screenshot.\nNo payment link is required.")
+    text = (f"💎 {name} ₹{price}\n\nUsers: {users}\nValidity: {duration} days\nDaily Tasks: {daily}\nEarning Limit: ₹{cap}\n\n💳 Payment UPI: {get_payment_upi()}\n\nPay manually to this UPI, then click the button below and send the payment screenshot.\nNo payment link is required.")
     kb = [[InlineKeyboardButton("📤 I Paid - Send Proof", callback_data=f"plan_proof_id_{pid}")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
     if plan.get("image_file_id"):
         try:
@@ -1018,8 +1041,6 @@ skip_reasons_list = ["Already have account", "Not interested", "Technical issue"
 promo_campaigns_db = []
 promo_campaign_counter = 1
 promo_earnings_db = {}
-# Separate earnings bucket for OWN PRODUCT promotion tasks.
-product_promo_earnings_db = {}
 promo_views_db = {}
 promo_pending = {}
 # Separate OWN PRODUCT promotion system (not part of Daily Tasks)
@@ -1028,17 +1049,6 @@ product_promo_counter = 1
 product_promo_pending = {}
 # {uid: {campaign_id: approved_at}} - prevents duplicate Product Promotion payouts.
 product_promo_approved = {}
-
-# Documents and Shopping module state
-documents_db = []
-document_counter = 1
-shopping_products_db = []
-shopping_product_counter = 1
-shopping_carts_db = {}
-shopping_orders_db = []
-shopping_order_counter = 1
-shopping_monthly_db = {}
-
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -1165,10 +1175,10 @@ def _restore_all_int_keys_after_load():
         "withdraw_requests", "withdraw_history", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
         "task_open_time", "user_task_status", "task_notification_settings_db", "skip_db",
-        "promo_earnings_db", "product_promo_earnings_db", "promo_views_db", "promo_pending",
+        "promo_earnings_db", "promo_views_db", "promo_pending",
         "product_promo_pending", "product_promo_approved", "admin_names_db",
         "pending_plan_purchases", "support_plans_db", "task_images_db",
-        "support_banner_db", "documents_db", "shopping_products_db", "shopping_carts_db", "shopping_orders_db", "shopping_monthly_db",
+        "support_banner_db",
     ]
     for name in dict_names:
         obj = globals().get(name)
@@ -1202,11 +1212,11 @@ def save_data():
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
             "user_task_status", "task_notifications_sent", "task_notification_settings_db", "skip_db",
-            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db", "product_promo_earnings_db",
+            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db",
             "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "support_plan_image_file_id", "pending_plans",
-            "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT", "PRODUCT_PROMO_FIXED_REWARDS", "documents_db", "document_counter", "shopping_products_db", "shopping_product_counter", "shopping_carts_db", "shopping_orders_db", "shopping_order_counter", "shopping_monthly_db",
+            "REFERRAL_PLAN_COMMISSION_PERCENT", "L2_PLAN_COMMISSION_PERCENT", "L1_TASK_COMMISSION_PERCENT", "L2_TASK_COMMISSION_PERCENT",
         ]
         data = {}
         for name in state_names:
@@ -1791,10 +1801,10 @@ def mark_task_completed_with_interval(uid, task_id):
     except Exception as _e:
         print(f"Save after task fail {_e}")
 
+def is_admin(uid): return uid in ADMIN_ID_LIST
 def calculate_age(d): 
     today=get_ist_today()
     return today.year-d.year-((today.month,today.day)<(d.month,d.day))
-
 def is_paid_plan_active(uid):
     """True only when the referrer has an active paid plan at this moment.
     Free members can still earn task/product referral commissions, but never plan-activation commission.
@@ -1821,34 +1831,21 @@ def is_paid_plan_active(uid):
     except Exception:
         return False
 
-def is_admin(uid):
-    try:
-        return int(uid) in ADMIN_ID_LIST
-    except Exception:
-        return False
-
-
 def get_balance(uid):
-    # Only settled referral commissions enter the wallet. Work commissions
-    # are pending until the daily 00:01 IST settlement.
+    # Wallet must use the actual rewards configured by Admin, never a fixed ₹5 per task.
     task_total = sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values())
-    product_total = float(globals().get("product_promo_earnings_db", {}).get(uid, 0) or 0)
-    shop_promo_total = float(promo_earnings_db.get(uid, 0) or 0)
-    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_total, 2)
-
+    return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + float(promo_earnings_db.get(uid,0) or 0), 2)
 
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
-    """Record referral commission. Work commissions settle at 00:01 IST; plan activation stays immediate."""
+    """Credit referral commission INSTANTLY - No pending, direct to wallet."""
     try:
-        referrer_uid = int(referrer_uid)
         amount = float(amount)
     except Exception:
         return 0.0
     if amount <= 0 or not referrer_uid:
         return 0.0
-    ctype = str(commission_type or "")
-    work_types = {"task", "product", "product_promo", "promo", "shop_promo"}
-    is_work = ctype in work_types
+    ctype = str(commission_type)
+    # V68 FIX: ALL commissions settled instantly - no tomorrow wait
     entry = {
         "date": str(get_ist_today()),
         "type": ctype,
@@ -1857,69 +1854,45 @@ def add_referral_commission(referrer_uid, amount, commission_type, level=None, s
         "amount": round(amount, 2),
         "description": description,
         "source_amount": round(float(source_amount), 2) if source_amount is not None else None,
-        "status": "pending" if is_work else "settled",
+        "status": "settled",  # INSTANT - was pending for task before
     }
     referral_commission_ledger.setdefault(referrer_uid, []).append(entry)
-    if is_work:
-        referral_pending_earnings[referrer_uid] = round(float(referral_pending_earnings.get(referrer_uid, 0) or 0) + amount, 2)
-    else:
-        referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    # Always add to settled - instant wallet credit
+    referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+    # Clear any pending for same uid if exists
+    if referrer_uid in referral_pending_earnings:
+        referral_pending_earnings[referrer_uid] = 0
     return amount
 
-
-PRODUCT_PROMO_FIXED_REWARDS = {0: 10, 1: 30, 2: 80, 3: 200, 4: 500}
-
-def _product_reward_for_user(task, uid):
-    try: pid = int(get_user_plan_id(uid))
-    except Exception: pid = 0
-    return int(PRODUCT_PROMO_FIXED_REWARDS.get(pid, 10))
-
 async def settle_previous_day_referrals(context):
-    """At 00:01 IST, settle yesterday's task/product/shop-promo referral commissions."""
+    """Settle yesterday's task/product referral commissions and notify each member."""
     try:
         yesterday = str(get_ist_today() - timedelta(days=1))
-        work_types = {"task", "product", "product_promo", "promo", "shop_promo"}
         totals = {}
-        level_totals = {}
         for ref_uid, entries in list(referral_commission_ledger.items()):
             for e in entries:
-                if str(e.get("date")) != yesterday:
-                    continue
-                if str(e.get("status", "settled")) != "pending":
-                    continue
-                if str(e.get("type")) not in work_types:
+                if str(e.get("date")) != yesterday or str(e.get("status", "settled")) != "pending":
                     continue
                 amount = float(e.get("amount", 0) or 0)
                 if amount <= 0:
                     e["status"] = "settled"
                     continue
-                uid = int(ref_uid)
-                totals[uid] = totals.get(uid, 0.0) + amount
-                level = int(e.get("level", 0) or 0)
-                level_totals.setdefault(uid, {1: 0.0, 2: 0.0})
-                if level in (1, 2):
-                    level_totals[uid][level] += amount
+                totals.setdefault(int(ref_uid), 0.0)
+                totals[int(ref_uid)] += amount
                 e["status"] = "settled"
-
         for uid, amount in totals.items():
             referral_earnings[uid] = round(float(referral_earnings.get(uid, 0) or 0) + amount, 2)
             referral_pending_earnings[uid] = round(max(0.0, float(referral_pending_earnings.get(uid, 0) or 0) - amount), 2)
-            l1 = round(level_totals.get(uid, {}).get(1, 0.0), 2)
-            l2 = round(level_totals.get(uid, {}).get(2, 0.0), 2)
             try:
-                await context.bot.send_message(
-                    chat_id=uid,
-                    text=(
-                        f"📊 YESTERDAY L1/L2 WORK COMMISSION\n\n"
-                        f"Date: {yesterday}\n"
-                        f"🟢 L1 Members Income Commission: ₹{l1:.2f}\n"
-                        f"🔵 L2 Members Income Commission: ₹{l2:.2f}\n"
-                        f"💰 Total Settled: ₹{amount:.2f}\n\n"
-                        f"Only Daily Tasks + Product Promotion + Shop Promotion are included.\n"
-                        f"Plan Activation is NOT included."
-                    ),
-                    reply_markup=main_menu(),
-                )
+                l1 = sum(float(e.get("amount",0) or 0) for e in referral_commission_ledger.get(uid, []) if str(e.get("date")) == yesterday and int(e.get("level",0) or 0) == 1 and str(e.get("type")) in ("task","product","product_promo","promo"))
+                l2 = sum(float(e.get("amount",0) or 0) for e in referral_commission_ledger.get(uid, []) if str(e.get("date")) == yesterday and int(e.get("level",0) or 0) == 2 and str(e.get("type")) in ("task","product","product_promo","promo"))
+                await context.bot.send_message(chat_id=uid, text=(
+                    f"📊 DAILY REFERRAL SETTLEMENT\n\n"
+                    f"Date: {yesterday}\n"
+                    f"🟢 L1 Commission: ₹{l1:.2f}\n"
+                    f"🔵 L2 Commission: ₹{l2:.2f}\n"
+                    f"💰 Settled to Wallet: ₹{amount:.2f}\n\n"
+                    f"Your referral commission has been settled."), reply_markup=main_menu())
             except Exception:
                 pass
         if totals:
@@ -1967,7 +1940,7 @@ def get_effective_referral_levels(source_uid):
             pass
     return result
 
-def record_product_promo_referral_commissions(source_uid, reward, commission_type="product_promo"):
+def record_product_promo_referral_commissions(source_uid, reward):
     try:
         reward = float(reward or 0)
         if reward <= 0:
@@ -1977,7 +1950,7 @@ def record_product_promo_referral_commissions(source_uid, reward, commission_typ
                 pct = float(L1_TASK_COMMISSION_PERCENT)
             else:
                 pct = float(L2_TASK_COMMISSION_PERCENT)
-            add_referral_commission(int(ref_id), reward * pct / 100.0, commission_type, level, source_uid, f"L{level} {commission_type} commission from {source_uid}", source_amount=reward)
+            add_referral_commission(int(ref_id), reward * pct / 100.0, "product_promo", level, source_uid, f"L{level} product promotion commission from {source_uid}", source_amount=reward)
     except Exception as e:
         print(f"product promo referral commission fail: {e}")
 
@@ -2006,8 +1979,7 @@ def get_referral_task_earnings(uid, day=None, level=None):
     return round(total,2)
 
 def get_referral_commission_yesterday(uid, level=None):
-    day = get_ist_today() - timedelta(days=1)
-    return get_referral_work_commission_total(uid, day, level=level)
+    return get_referral_commission_total(uid, get_ist_today() - timedelta(days=1), level=level, commission_type="task")
 
 def get_plan_commission_yesterday(uid):
     return get_referral_commission_total(uid, get_ist_today() - timedelta(days=1), commission_type="plan")
@@ -2220,7 +2192,6 @@ def main_menu():
         [InlineKeyboardButton("💰 Wallet", callback_data="wallet"), InlineKeyboardButton("📅 Daily Task", callback_data="daily")],
         [InlineKeyboardButton("💸 Withdraw", callback_data="withdraw"), InlineKeyboardButton("🏪 Promo Tasks", callback_data="promo_tasks")],
         [InlineKeyboardButton("📢 Product Promotion", callback_data="product_promo")],
-        [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("📚 Documents & Plans", callback_data="documents_plans")],
         [InlineKeyboardButton("📢 Promote My Shop", callback_data="promote_shop"), InlineKeyboardButton("📋 Scheduled Tasks", callback_data="scheduled")],
         [InlineKeyboardButton("💎 Support Plans", callback_data="support_plans"), InlineKeyboardButton("👤 My Details", callback_data="my_details")],
         [InlineKeyboardButton("❌ Missed Tasks", callback_data="missed_tasks"), InlineKeyboardButton("📞 Contact Us", callback_data="contact_us")],
@@ -3057,7 +3028,7 @@ async def admin_product_promo_cb(update: Update, context: ContextTypes.DEFAULT_T
             "Then send the promotion VIDEO to this bot."
         )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🚀 Approve ALL Pending ({pending})", callback_data="bulk_approve_all")],
+        [InlineKeyboardButton(f"🚀 Approve ALL Product Pending ({pending})", callback_data="product_bulk_approve_all")],
         [InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]
     ])
     await q.message.reply_text(msg[:4000], reply_markup=kb)
@@ -3119,7 +3090,7 @@ def get_referral_work_commission_total(uid, day=None, level=None):
     for e in referral_commission_ledger.get(uid, []):
         if str(e.get("date")) != day: continue
         if level is not None and int(e.get("level",0) or 0) != int(level): continue
-        if str(e.get("type")) not in ("task","product","product_promo","promo","shop_promo"): continue
+        if str(e.get("type")) not in ("task","product","product_promo","promo"): continue
         try: total += float(e.get("amount",0) or 0)
         except Exception: pass
     return round(total,2)
@@ -3142,13 +3113,13 @@ async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👥 MY REFERRALS\n\n"
         f"🟢 L1 Members: {len(l1)}\n"
         f"📈 L1 Task/Product Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
-        f"💼 Yesterday L1 Members Income Commission: ₹{l1_yday:.2f}\n\n"
+        f"💼 Yesterday L1 Task/Product Commission: ₹{l1_yday:.2f}\n\n"
         f"🔵 L2 Members: {len(l2)}\n"
         f"📈 L2 Task/Product Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
-        f"💼 Yesterday L2 Members Income Commission: ₹{l2_yday:.2f}\n\n"
+        f"💼 Yesterday L2 Task/Product Commission: ₹{l2_yday:.2f}\n\n"
         f"💎 Plan Activation: L1 {REFERRAL_PLAN_COMMISSION_PERCENT:g}% | L2 {L2_PLAN_COMMISSION_PERCENT:g}%\n"
         f"💰 Yesterday Plan Commission: ₹{plan_yday:.2f}\n\n"
-        f"📅 Today Pending: L1 ₹{l1_today:.2f} | L2 ₹{l2_today:.2f}\n"
+        f"📅 Today: L1 ₹{l1_today:.2f} | L2 ₹{l2_today:.2f}\n"
         f"💵 Total Referral Commission: ₹{float(total_ref):.2f}"
     )
     kb=InlineKeyboardMarkup([
@@ -3194,16 +3165,23 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal=get_balance(uid)
     direct_today=get_tasks(uid)
     direct_amount=get_today_task_earnings(uid)
-    l1_today=get_referral_work_commission_total(uid, get_ist_today(), level=1)
-    l2_today=get_referral_work_commission_total(uid, get_ist_today(), level=2)
+    l1_today=get_referral_commission_total(uid, level=1, commission_type="task")
+    l2_today=get_referral_commission_total(uid, level=2, commission_type="task")
     plan_today=get_referral_commission_total(uid, commission_type="plan")
-    yday = get_ist_today() - timedelta(days=1)
-    l1_yday=get_referral_work_commission_total(uid, yday, level=1)
-    l2_yday=get_referral_work_commission_total(uid, yday, level=2)
     referral_today=round(l1_today+l2_today+plan_today,2)
-    shop_promo_rs=float(promo_earnings_db.get(uid,0) or 0)
-    product_promo_rs=float(product_promo_earnings_db.get(uid,0) or 0)
-    promo_rs=round(shop_promo_rs + product_promo_rs, 2)
+    promo_rs=float(promo_earnings_db.get(uid,0) or 0) + float(globals().get('product_promo_approved', {}).get(uid, 0) if isinstance(globals().get('product_promo_approved', {}).get(uid, 0), (int,float)) else 0)
+    # V36: Product promo earnings are in promo_earnings_db too, but also check product_promo_approved logic
+    try:
+        # Actual product promo total is promo_earnings_db already includes it, but double-check
+        prod_promo = 0
+        # promo_earnings_db contains product promo rewards too
+        promo_rs = float(promo_earnings_db.get(uid,0) or 0)
+        # Add separate product promo if any
+        if isinstance(globals().get('product_promo_approved', {}), dict):
+            # product_promo_approved stores timestamps, not amount, so ignore
+            pass
+    except:
+        promo_rs = float(promo_earnings_db.get(uid,0) or 0)
     info=_canonical_plan_info(uid)
     withdrawn=get_withdrawn_for_cap(uid)
     cap=info["cap"]
@@ -3215,11 +3193,10 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💰 WALLET\n\n"
         f"Balance: ₹{bal:.2f}\n"
         f"Today's Task Earning: ₹{direct_amount:.2f} ({direct_today}/{info['daily']})\n"
-        f"Today's Pending L1 Work Commission: ₹{l1_today:.2f}\n"
-        f"Today's Pending L2 Work Commission: ₹{l2_today:.2f}\n"
-        f"Today's Plan Activation Commission: ₹{plan_today:.2f}\n"        f"Yesterday L1 Members Income Commission: ₹{l1_yday:.2f}\n"
-        f"Yesterday L2 Members Income Commission: ₹{l2_yday:.2f}\n"
-        f"Today's Plan + Pending Work Commission: ₹{referral_today:.2f}\n"
+        f"Today's L1 Task Commission: ₹{l1_today:.2f}\n"
+        f"Today's L2 Task Commission: ₹{l2_today:.2f}\n"
+        f"Today's Plan Activation Commission: ₹{plan_today:.2f}\n"
+        f"Today's Referral Commission: ₹{referral_today:.2f}\n"
         f"Promo + Product Promo: ₹{promo_rs:.2f}\n"
         f"Total: ₹{bal:.2f}\n\n"
         f"📋 Plan: {info['display']}\n"
@@ -3287,39 +3264,19 @@ async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=q.from_user.id
     promos=get_active_product_promo_for_user(uid)
     if not promos:
-        todays=[x for x in product_promo_db if isinstance(x,dict) and x.get('date')==str(get_ist_today()) and x.get('status')=='active' and x.get('video_file_id')]
-        msg="📢 PRODUCT PROMOTION\n\n⏰ Today's Product Promotion time is over.\n\n📅 Wait for the next day's Product Promotion." if todays else "📢 PRODUCT PROMOTION\n\nNo active Product Promotion right now.\n\n📅 Wait for the next day's Product Promotion."
-        await q.message.reply_text(msg,reply_markup=main_menu()); return
-
+        await q.message.reply_text("📢 PRODUCT PROMOTION\n\nNo active product promotion right now.", reply_markup=main_menu())
+        return
     kb=[]
     lines=["📢 PRODUCT PROMOTION\n"]
     for t in promos[:10]:
-        tid=int(t.get('id', -1))
         lines.append(f"🎥 {t.get('title','Product Promotion')}\n{_product_time_text(t)}\n{_product_reward_text(t,uid)}\n")
-
-        # IMPORTANT: once this campaign is submitted/approved, pressing
-        # Product Promotion again must NOT show the upload button again.
-        pending = product_promo_pending.get(uid) or product_promo_pending.get(str(uid))
-        pending_tid = -1
-        if isinstance(pending, dict):
-            try: pending_tid = int(pending.get('promo_id', -1))
-            except Exception: pending_tid = -1
-
-        approved = product_promo_approved.get(uid) or product_promo_approved.get(str(uid)) or {}
-        is_approved = isinstance(approved, dict) and (str(tid) in approved or tid in approved)
-
-        if is_approved:
-            lines.append("✅ Screenshot already APPROVED. Reward has been added to your wallet.\n🚫 No more Product Promotion for today. Please wait for the next campaign.\n")
-        elif pending_tid == tid:
-            lines.append("⏳ Screenshot already submitted. Waiting for Admin approval.\n")
-        else:
-            if t.get('_download_open'):
-                kb.append([InlineKeyboardButton("⬇️ Download Video", callback_data=f"product_download_{tid}")])
-            if t.get('_screenshot_open'):
-                kb.append([InlineKeyboardButton("📸 Submit Screenshot", callback_data=f"product_screenshot_{tid}")])
-            elif not t.get('_download_open'):
-                lines.append("⏳ Screenshot submission will open at the scheduled time.\n")
-
+        tid=t['id']
+        if t.get('_download_open'):
+            kb.append([InlineKeyboardButton("⬇️ Download Video", callback_data=f"product_download_{tid}")])
+        if t.get('_screenshot_open'):
+            kb.append([InlineKeyboardButton("📸 Submit Screenshot", callback_data=f"product_screenshot_{tid}")])
+        elif not t.get('_download_open'):
+            lines.append("⏳ Screenshot submission will open at the scheduled time.\n")
     await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup(kb or [[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
 
 async def product_download_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3466,27 +3423,38 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
         t['video_file_id']=file_id; t['status']='active'
         context.user_data.pop('awaiting_product_video',None)
         save_data()
-        # Product video upload notification: send immediately to all eligible members.
+        # If the upload happens after the download window already opened, send the notification immediately.
         try:
-            for member_uid in list(users_db.keys()):
-                try:
-                    muid=int(member_uid); rec=users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
-                    if muid<=0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
-                        continue
-                    reward=_product_reward_for_user(t,muid)
-                    kb=InlineKeyboardMarkup([[InlineKeyboardButton("⬇️ Download Product Promotion Video", callback_data=f"product_download_{tid}")]])
-                    await context.bot.send_message(chat_id=muid,text=(
-                        f"📢 PRODUCT PROMOTION VIDEO AVAILABLE!\n\n"
-                        f"🎥 {t.get('title','Product Promotion')}\n"
-                        f"💰 Your reward: ₹{reward}\n\n"
-                        f"⬇️ Download the video and post it on your WhatsApp Status.\n"
-                        f"⏰ Video download available until: {t.get('download_deadline','10:00')}\n"
-                        f"📸 Screenshot upload time: {t.get('screenshot_open','20:00')} – {t.get('screenshot_close','22:00')}"
-                    ),reply_markup=kb)
-                except Exception as _ne:
-                    print(f"product upload notification failed for {member_uid}: {_ne}")
+            now = get_ist_now()
+            dl = parse_time_str(str(t.get('download_deadline','')))
+            sc = parse_time_str(str(t.get('screenshot_close','')))
+            if dl and sc:
+                dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
+                sc_dt = datetime.combine(get_ist_today(), sc, tzinfo=IST)
+                if sc_dt <= dl_dt: sc_dt += timedelta(days=1)
+                if now > dl_dt and now <= sc_dt:
+                    key = f"product:{get_ist_today()}:{t.get('id')}:immediate"
+                    if key not in notified_tasks_30sec:
+                        notified_tasks_30sec.add(key)
+                        for member_uid in list(users_db.keys()):
+                            try:
+                                muid = int(member_uid); rec = users_db.get(member_uid) or users_db.get(str(member_uid)) or {}
+                                if muid <= 0 or is_team_uid(muid) or is_removed_user(muid) or muid in banned_users or not _user_is_registered(rec):
+                                    continue
+                                # V50: Only send LIVE if download still open
+                                now_check = get_ist_now()
+                                dl = parse_time_str(str(t.get('download_deadline','')))
+                                if dl:
+                                    dl_dt = datetime.combine(get_ist_today(), dl, tzinfo=IST)
+                                    if now_check > dl_dt:
+                                        continue  # Don't send LIVE after deadline
+                                reward = _product_reward_for_user(t, muid)
+                                kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Complete this task", callback_data="product_promo")]])
+                                await context.bot.send_message(chat_id=muid, text=(f"📢 PRODUCT PROMOTION IS LIVE!\n\n🎥 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n💰 Download until: {t.get('download_deadline','')}\n\nTap below to open the task."), reply_markup=kb)
+                            except Exception as _ne:
+                                print(f"product immediate notification failed for {member_uid}: {_ne}")
         except Exception as _e:
-            print(f"product upload notification outer error: {_e}")
+            print(f"product immediate notification check failed: {_e}")
         await update.message.reply_text(f"✅ Product Promotion {tid} video saved and activated.\nMembers will see it in 📢 Product Promotion, NOT in Daily Task.")
     except Exception as e:
         print(f'product_video_handler error: {e}')
@@ -3518,10 +3486,7 @@ async def product_screenshot_photo_handler(update: Update, context: ContextTypes
                 [InlineKeyboardButton(f"✅ Approve ₹{reward}", callback_data=f"product_approve_{uid}_{tid}"), InlineKeyboardButton("❌ Reject", callback_data=f"product_reject_{uid}_{tid}")],
                 [InlineKeyboardButton("🚀 Approve ALL Product Pending", callback_data="product_bulk_approve_all")]
             ])
-            sent_product_msg = await context.bot.send_photo(chat_id=chan,photo=file_id,caption=(f"📢 PRODUCT PROMOTION SCREENSHOT\n👤 {users_db.get(uid,{}).get('name','Unknown')}\n🆔 {uid}\n📋 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n📅 {get_ist_today()}"),reply_markup=kb)
-            product_promo_pending[uid]['admin_channel_id'] = chan
-            product_promo_pending[uid]['admin_message_id'] = sent_product_msg.message_id
-            save_data()
+            await context.bot.send_photo(chat_id=chan,photo=file_id,caption=(f"📢 PRODUCT PROMOTION SCREENSHOT\n👤 {users_db.get(uid,{}).get('name','Unknown')}\n🆔 {uid}\n📋 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n📅 {get_ist_today()}"),reply_markup=kb)
     except Exception as e:
         print(f'product_screenshot_photo_handler error: {e}')
 
@@ -3540,14 +3505,10 @@ async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         save_data()
         await q.message.reply_text("⚠️ This Product Promotion was already approved. No duplicate amount was added.")
         return
-    product_promo_earnings_db[uid]=round(float(product_promo_earnings_db.get(uid,0) or 0)+reward, 2)
+    promo_earnings_db[uid]=round(float(promo_earnings_db.get(uid,0) or 0)+reward, 2)
     record_product_promo_referral_commissions(uid, reward)
     approved_map[str(tid)] = str(get_ist_now())
     product_promo_pending.pop(uid, None)
-    await _mark_admin_submission_status(
-        context, sub.get('admin_channel_id'), sub.get('admin_message_id'),
-        "✅ APPROVED", uid, "Product Promotion", reward, f"📋 Product {tid}"
-    )
     save_data()
     await q.message.reply_text(f"✅ Product promotion approved: User {uid} +₹{reward}\nApproved: 1\nRemaining pending: {len(product_promo_pending)}")
     try: await context.bot.send_message(chat_id=uid,text=f"✅ Product Promotion Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
@@ -3582,13 +3543,9 @@ async def product_bulk_approve_cb(update: Update, context: ContextTypes.DEFAULT_
                 product_promo_pending.pop(key,None)
                 continue
             reward=int(sub.get('reward',0) or 0)
-            product_promo_earnings_db[uid]=round(float(product_promo_earnings_db.get(uid,0) or 0)+reward,2)
+            promo_earnings_db[uid]=round(float(promo_earnings_db.get(uid,0) or 0)+reward,2)
             record_product_promo_referral_commissions(uid, reward)
             approved_map[str(tid)]=str(get_ist_now())
-            await _mark_admin_submission_status(
-                context, sub.get('admin_channel_id'), sub.get('admin_message_id'),
-                "✅ APPROVED", uid, "Product Promotion", reward, f"📋 Product {tid}"
-            )
             product_promo_pending.pop(key,None)
             approved_count += 1
             approved_users.append(f"{uid} (₹{reward})")
@@ -4090,13 +4047,8 @@ async def get_promo_views_count(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(f"✅ Submitted!\n\nCampaign {campaign_id}: {campaign['shop_name']} - {campaign['title']}\nViews: {views}\nEarning: Rs{earning} (Rs{campaign['per_view_member_earning']} per 100 views)\nStatus: Pending admin verification\n\nAdmin will verify screenshot!", reply_markup=main_menu())
     for admin_id in ADMIN_ID_LIST:
         try:
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ Approve Rs{earning} for {views} views", callback_data=f"promo_approve_{uid}_{campaign_id}_{views}"), InlineKeyboardButton("❌ Reject", callback_data=f"promo_reject_{uid}_{campaign_id}")],
-                [InlineKeyboardButton("🚀 Approve ALL Pending", callback_data="bulk_approve_all")],
-            ])
-            sent_promo_msg = await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"🏪 NEW PROMO SUBMISSION!\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nCampaign {campaign_id}: {campaign['shop_name']} Views: {views} Earning: Rs{earning}", reply_markup=kb)
-            promo_pending.setdefault(uid, submission).setdefault('admin_messages', []).append({'chat_id': admin_id, 'message_id': sent_promo_msg.message_id})
-            save_data()
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Approve Rs{earning} for {views} views", callback_data=f"promo_approve_{uid}_{campaign_id}_{views}"), InlineKeyboardButton("❌ Reject", callback_data=f"promo_reject_{uid}_{campaign_id}")]])
+            await context.bot.send_photo(chat_id=admin_id, photo=file_id, caption=f"🏪 NEW PROMO SUBMISSION!\nUser {users_db.get(uid,{}).get('name')} ID {uid}\nCampaign {campaign_id}: {campaign['shop_name']} Views: {views} Earning: Rs{earning}", reply_markup=kb)
         except: pass
 
         # === CHANNEL METHOD - Forward to Screenshot Channel ===
@@ -5337,36 +5289,6 @@ async def admin_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid in warnings_db: warnings_db[uid]['count']=0
     await q.message.reply_text(f"✅ Unbanned {uid}")
 
-async def _mark_admin_submission_status(context, channel_id, message_id, status, uid, kind, reward=None, extra=""):
-    """Update an admin-channel screenshot card after approval/rejection.
-
-    Telegram photo messages use captions, so the original card is rewritten
-    with a clear final status and all inline buttons are removed.
-    """
-    if not channel_id or not message_id:
-        return False
-    try:
-        lines = [f"{status}", f"👤 User ID: {uid}", f"📂 Type: {kind}"]
-        if extra:
-            lines.append(str(extra))
-        if reward is not None:
-            lines.append(f"💰 Reward: ₹{float(reward):g}")
-        lines.append(f"🕐 Updated: {get_ist_now().strftime('%H:%M:%S')} IST")
-        caption = "\n".join(lines)
-        await context.bot.edit_message_caption(
-            chat_id=channel_id, message_id=message_id, caption=caption, reply_markup=None
-        )
-        return True
-    except Exception as e:
-        try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=channel_id, message_id=message_id, reply_markup=None
-            )
-        except Exception:
-            pass
-        print(f"admin submission status update failed {kind}/{uid}/{message_id}: {e}")
-        return False
-
 async def promo_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
@@ -5375,18 +5297,11 @@ async def promo_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     campaign = get_promo_campaign(campaign_id)
     if not campaign: return
     earning = int(views * campaign['per_view_member_earning'] / 100)
-    promo_earnings_db[uid]=round(float(promo_earnings_db.get(uid,0) or 0)+earning, 2)
+    promo_earnings_db[uid]=promo_earnings_db.get(uid,0)+earning
     campaign['total_earnings_distributed']+=earning
-    record_product_promo_referral_commissions(uid, earning, "shop_promo")
-    cards = list((promo_pending.get(uid) or {}).get('admin_messages', []) or [])
+    record_product_promo_referral_commissions(uid, earning)
     if uid in promo_pending:
         del promo_pending[uid]
-    for card in cards:
-        await _mark_admin_submission_status(
-            context, card.get('chat_id'), card.get('message_id'),
-            "✅ APPROVED", uid, "Shop Promotion", earning,
-            f"📢 Campaign {campaign_id} / {views} views"
-        )
     await q.message.reply_text(f"✅ Approved Promo {uid} Campaign {campaign_id} Views {views} Earn Rs{earning}")
     try:
         await context.bot.send_message(chat_id=uid, text=f"✅ Promo Approved!\nCampaign {campaign_id} {campaign['shop_name']}\nViews: {views}\nEarn: Rs{earning}\nBalance: Rs{get_balance(uid)}", reply_markup=main_menu())
@@ -5780,10 +5695,10 @@ awaiting_plan_payment_adminless = set()
 def force_update_plans_to_new():
     global support_plans_db
     new_plans = [
-        {"id": 1, "name": "Starter", "price": 499, "validity_days": 60, "duration": 60, "daily_task_limit": 5, "daily_limit": 5, "daily_earning_min": 30, "daily_earning_max": 60, "total_earning_cap": 900, "earnings_limit": 900, "desc": "₹499 | 60 DAYS | 5 TASKS/DAY | ₹30-₹60/DAY | MAX ₹900"},
-        {"id": 2, "name": "Pro", "price": 1999, "validity_days": 60, "duration": 60, "daily_task_limit": 10, "daily_limit": 10, "daily_earning_min": 50, "daily_earning_max": 80, "total_earning_cap": 4400, "earnings_limit": 4400, "desc": "₹1999 | 60 DAYS | 10 TASKS/DAY | ₹50-₹80/DAY | MAX ₹4400 | TEAM COMMISSION"},
-        {"id": 3, "name": "Elite", "price": 4999, "validity_days": 60, "duration": 60, "daily_task_limit": 15, "daily_limit": 15, "daily_earning_min": 200, "daily_earning_max": 400, "total_earning_cap": 15000, "earnings_limit": 15000, "desc": "₹4999 | 60 DAYS | 15 TASKS/DAY | ₹200-₹400/DAY | MAX ₹15000"},
-        {"id": 4, "name": "VIP", "price": 9999, "validity_days": 60, "duration": 60, "daily_task_limit": 20, "daily_limit": 20, "daily_earning_min": 500, "daily_earning_max": 700, "total_earning_cap": 35000, "earnings_limit": 35000, "desc": "₹9999 | 60 DAYS | 20 TASKS/DAY | ₹500-₹700/DAY | MAX ₹35000"},
+        {"id": 1, "name": "Starter", "price": 499, "validity_days": 60, "duration": 60, "daily_task_limit": 5, "daily_limit": 5, "daily_earning_min": 30, "daily_earning_max": 60, "total_earning_cap": 900, "earnings_limit": 900, "users": 1, "desc": "₹499 | 60 DAYS | 5 TASKS/DAY | ₹30-₹60/DAY | MAX ₹900"},
+        {"id": 2, "name": "Pro", "price": 1999, "validity_days": 60, "duration": 60, "daily_task_limit": 10, "daily_limit": 10, "daily_earning_min": 50, "daily_earning_max": 80, "total_earning_cap": 4400, "earnings_limit": 4400, "users": 2, "desc": "₹1999 | 60 DAYS | 10 TASKS/DAY | ₹50-₹80/DAY | MAX ₹4400 | TEAM COMMISSION"},
+        {"id": 3, "name": "Elite", "price": 4999, "validity_days": 60, "duration": 60, "daily_task_limit": 15, "daily_limit": 15, "daily_earning_min": 200, "daily_earning_max": 400, "total_earning_cap": 15000, "earnings_limit": 15000, "users": 4, "desc": "₹4999 | 60 DAYS | 15 TASKS/DAY | ₹200-₹400/DAY | MAX ₹15000"},
+        {"id": 4, "name": "VIP", "price": 9999, "validity_days": 60, "duration": 60, "daily_task_limit": 20, "daily_limit": 20, "daily_earning_min": 500, "daily_earning_max": 700, "total_earning_cap": 35000, "earnings_limit": 35000, "users": 6, "desc": "₹9999 | 60 DAYS | 20 TASKS/DAY | ₹500-₹700/DAY | MAX ₹35000"},
     ]
     support_plans_db = new_plans
     try:
@@ -5824,10 +5739,7 @@ def normalize_support_plans():
         if not base.get("desc") and base.get("description"): base["desc"] = base["description"]
         base.setdefault("duration", 30)
         base.setdefault("daily_limit", 10 if pid == 1 else 20 if pid == 2 else 30)
-        base.pop("users", None)
-        if base.get("desc"):
-            base["desc"] = re.sub(r"(?:\s*\|?\s*)Users\s*:\s*\d+", "", str(base["desc"]), flags=re.IGNORECASE)
-            base["desc"] = re.sub(r"\s*\|\s*\|", " | ", base["desc"]).strip(" |")
+        base.setdefault("users", 1 if pid == 1 else 2 if pid == 2 else 4)
         base.setdefault("earnings_limit", 500 if pid == 1 else 1000 if pid == 2 else 3000)
         cleaned.append(base); seen.add(pid)
     for pid in (1,2,3):
@@ -6387,55 +6299,23 @@ async def get_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         uid = int(context.args[0])
         bal = get_balance(uid)
-        task_total = round(sum(float(v or 0) for v in (daily_task_earnings.get(uid, {}) or {}).values()), 2)
-        shop_promo = round(float(promo_earnings_db.get(uid, 0) or 0), 2)
-        product_promo = round(float(product_promo_earnings_db.get(uid, 0) or 0), 2)
-        bonus = round(float(bonus_balance.get(uid, 0) or 0), 2)
-        referral_settled = round(float(referral_earnings.get(uid, 0) or 0), 2)
-        referral_pending = round(float(referral_pending_earnings.get(uid, 0) or 0), 2)
-        tasks_count = int(tasks_db.get(uid, 0) or 0)
-        today = str(get_ist_today())
-        yesterday = str(get_ist_today() - timedelta(days=1))
-        work_types = {"task", "product", "product_promo", "promo", "shop_promo"}
-        entries = referral_commission_ledger.get(uid, []) or []
-        today_l1_pending = round(sum(float(e.get('amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('status'))=='pending' and int(e.get('level',0) or 0)==1 and str(e.get('type')) in work_types), 2)
-        today_l2_pending = round(sum(float(e.get('amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('status'))=='pending' and int(e.get('level',0) or 0)==2 and str(e.get('type')) in work_types), 2)
-        yesterday_l1 = round(sum(float(e.get('amount',0) or 0) for e in entries if str(e.get('date'))==yesterday and str(e.get('status','settled'))=='settled' and int(e.get('level',0) or 0)==1 and str(e.get('type')) in work_types), 2)
-        yesterday_l2 = round(sum(float(e.get('amount',0) or 0) for e in entries if str(e.get('date'))==yesterday and str(e.get('status','settled'))=='settled' and int(e.get('level',0) or 0)==2 and str(e.get('type')) in work_types), 2)
-        yesterday_l1_base = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==yesterday and str(e.get('status','settled'))=='settled' and int(e.get('level',0) or 0)==1 and str(e.get('type')) in work_types), 2)
-        yesterday_l2_base = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==yesterday and str(e.get('status','settled'))=='settled' and int(e.get('level',0) or 0)==2 and str(e.get('type')) in work_types), 2)
-        today_work = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('type')) in work_types and str(e.get('status'))=='pending'), 2)
-        today_task_work = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('type'))=='task' and str(e.get('status'))=='pending'), 2)
-        today_product_work = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('type'))=='product_promo' and str(e.get('status'))=='pending'), 2)
-        today_shop_work = round(sum(float(e.get('source_amount',0) or 0) for e in entries if str(e.get('date'))==today and str(e.get('type'))=='shop_promo' and str(e.get('status'))=='pending'), 2)
-        plan_activation_total = round(sum(float(e.get('amount',0) or 0) for e in entries if str(e.get('type'))=='plan'), 2)
+        ref_earn = referral_earnings.get(uid, 0) or referral_earnings.get(str(uid), 0) or 0
+        promo = promo_earnings_db.get(uid, 0) or promo_earnings_db.get(str(uid), 0) or 0
+        tasks = tasks_db.get(uid, 0) or tasks_db.get(str(uid), 0) or 0
+        # V69: Actual task earnings = total - referral - promo (no bonus)
+        total_task_actual = max(0, bal - ref_earn - promo)
         rec = users_db.get(uid) or users_db.get(str(uid)) or {}
         name = rec.get('name', 'Unknown')
         l1, l2 = get_referral_chain(uid)
-        msg = (
-            f"WALLET FOR {name} ({uid})\n\n"
-            f"💰 Total Balance: ₹{bal:.2f}\n\n"
-            f"📋 Daily Task Earnings: ₹{task_total:.2f} ({tasks_count} tasks)\n"
-            f"🏪 Shop Promotion Earnings: ₹{shop_promo:.2f}\n"
-            f"📢 Product Promotion Earnings: ₹{product_promo:.2f}\n"
-            f"💎 Bonus: ₹{bonus:.2f}\n"
-            f"🔗 Referral Settled: ₹{referral_settled:.2f}\n"
-            f"💎 Plan Activation Commission: ₹{plan_activation_total:.2f}\n"
-            f"⏳ Referral Work Pending Today: ₹{referral_pending:.2f}\n\n"
-            f"📅 TODAY WORK USED FOR REFERRAL: ₹{today_work:.2f}\n"
-            f"  Daily Task: ₹{today_task_work:.2f}\n"
-            f"  Product Promotion: ₹{today_product_work:.2f}\n"
-            f"  Shop Promotion: ₹{today_shop_work:.2f}\n"
-            f"🕛 Today Pending L1: ₹{today_l1_pending:.2f}\n"
-            f"🕛 Today Pending L2: ₹{today_l2_pending:.2f}\n\n"
-            f"🌙 Yesterday L1 Members Work Income: ₹{yesterday_l1_base:.2f} → Commission ₹{yesterday_l1:.2f} (2%)\n"
-            f"🌙 Yesterday L2 Members Work Income: ₹{yesterday_l2_base:.2f} → Commission ₹{yesterday_l2:.2f} (0.5%)\n"
-            f"(Daily Tasks + Product Promotion + Shop Promotion only; Plan Activation excluded)\n\n"
-            f"👥 Referrals: L1={len(l1)} L2={len(l2)}\n"
-            f"📋 L1 IDs: {l1[:10]}\n"
-            f"📋 L2 IDs: {l2[:10]}\n\n"
-            f"Referral Parent: {referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'}"
-        )
+        msg = f"WALLET FOR {name} ({uid})\n\n"
+        msg += f"💰 Total Balance: Rs{bal:.2f}\n"
+        msg += f"  - Task Earnings: Rs{total_task_actual:.2f} ({tasks} tasks x FIXED amount only)\n"
+        msg += f"  - Referral Earnings (Instant): Rs{ref_earn:.2f}\n"
+        msg += f"  - Promo: Rs{promo:.2f}\n\n"
+        msg += f"👥 Referrals: L1={len(l1)} L2={len(l2)}\n"
+        msg += f"📋 L1 IDs: {l1[:5]}\n"
+        msg += f"📋 L2 IDs: {l2[:5]}\n\n"
+        msg += f"Referral Parent: {referral_map.get(uid) or referral_map.get(str(uid)) or 'None (Direct)'}"
         await update.message.reply_text(msg[:4000])
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
@@ -6628,111 +6508,130 @@ async def user_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Unified Approve ALL Pending for Daily + Product + Shop Promotion.
+    """Approve ALL Daily Task screenshots and update every admin card to APPROVED.
 
-    One button approves every currently pending screenshot in all three work
-    systems. Each original admin card is changed to APPROVED and the final
-    report shows separate counts for Daily, Product and Shop Promotion.
+    V69 FIX:
+    - Credits each pending task exactly once.
+    - Marks user_task_status as completed.
+    - Pays referral task commission.
+    - Removes Approve/Reject buttons from every approved channel message.
+    - Changes each pending screenshot caption to an explicit APPROVED status.
     """
     q = update.callback_query
     try:
-        await q.answer("Processing ALL pending approvals…")
+        await q.answer("Processing Daily Task bulk approval…")
     except Exception:
         pass
     if not is_admin(q.from_user.id):
         return
 
-    daily_approved = 0
-    product_approved = 0
-    shop_approved = 0
-    daily_details, product_details, shop_details = [], [], []
+    approved_count = 0
+    details = []
+    today = str(get_ist_today())
 
-    async def mark_card(channel_id, message_id, kind, uid, reward, label=""):
+    async def mark_admin_card_approved(channel_id, message_id, uid, task_number, reward):
+        """Change an old pending screenshot card into a final APPROVED card."""
         if not channel_id or not message_id:
             return
         try:
-            caption = (
-                f"✅ APPROVED\n"
+            text = (
+                f"\n\n✅ APPROVED\n"
                 f"👤 User ID: {uid}\n"
-                f"📂 Type: {kind}\n"
-                f"📋 {label}\n"
-                f"💰 Reward: ₹{float(reward):g}\n"
+                f"📋 Task: {task_number}\n"
+                f"💰 Reward: ₹{reward:g} credited\n"
                 f"🕐 Approved: {get_ist_now().strftime('%H:%M:%S')} IST"
             )
-            await context.bot.edit_message_caption(
-                chat_id=channel_id,
-                message_id=message_id,
-                caption=caption,
-                reply_markup=None,
-            )
-        except Exception as e:
+            # Read the existing caption where possible, then append a single status block.
             try:
-                await context.bot.edit_message_reply_markup(
-                    chat_id=channel_id, message_id=message_id, reply_markup=None
+                # Bot API does not need a separate fetch; q.message is only available for
+                # the clicked card. For other cards, use a concise final caption.
+                await context.bot.edit_message_caption(
+                    chat_id=channel_id,
+                    message_id=message_id,
+                    caption=f"📸 TASK SCREENSHOT\n👤 User ID: {uid}\n📋 Task: {task_number}\n💰 Reward: ₹{reward:g}{text}",
+                    reply_markup=None,
                 )
             except Exception:
-                print(f"bulk card status update failed {kind}/{uid}/{message_id}: {e}")
+                try:
+                    await context.bot.edit_message_reply_markup(
+                        chat_id=channel_id, message_id=message_id, reply_markup=None
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"bulk status card update failed {uid}/{message_id}: {e}")
 
-    # 1) DAILY TASKS
-    today = str(get_ist_today())
+    # FIRST: approve pending_daily entries. Capture admin message ids BEFORE deleting them.
     for key, sub in list(pending_daily.items()):
         try:
-            uid = int(sub.get('uid', key) or key)
-            task = sub.get('task', {}) or {}
+            uid = int(key)
+            if not isinstance(sub, dict):
+                continue
+            task = sub.get('task', {}) if isinstance(sub.get('task', {}), dict) else {}
             task_id = task.get('id')
-            reward = float(get_task_reward_for_user(task, uid))
-            task_number = task.get('task_number', task_id or '?')
-            task_day = str(sub.get('date') or today)
+            task_number = task.get('task_number', '?')
+            reward = float(task.get('reward', 0) or 0)
             admin_channel_id = sub.get('admin_channel_id')
             admin_message_id = sub.get('admin_message_id')
 
-            # Idempotency: if the task was already completed, just clear stale pending data.
-            status_obj = user_task_status.setdefault(uid, {})
-            existing = status_obj.get(task_id) if task_id is not None else None
-            existing_status = existing.get('status') if isinstance(existing, dict) else existing
-            if existing_status == 'completed':
-                pending_daily.pop(key, None)
-                pending_daily.pop(str(key), None)
-                await mark_card(admin_channel_id, admin_message_id, "Daily Task", uid, reward, f"Task {task_number}")
-                continue
-
             tasks_db[uid] = tasks_db.get(uid, 0) + 1
             daily_task_count.setdefault(uid, {})
-            daily_task_count[uid][task_day] = daily_task_count[uid].get(task_day, 0) + 1
-            add_today_task_earning(uid, reward, task_day)
+            daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+            daily_task_earnings.setdefault(uid, {})
+            daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
+
             if task_id is not None:
-                status_obj[task_id] = {
-                    'status': 'completed', 'completed_at': get_ist_now(),
-                    'reward': reward, 'approved_at': get_ist_now(),
-                    'admin_channel_id': admin_channel_id, 'admin_message_id': admin_message_id,
+                user_task_status.setdefault(uid, {})
+                user_task_status[uid][task_id] = {
+                    'status': 'completed',
+                    'completed_at': get_ist_now(),
+                    'reward': reward,
+                    'approved_at': get_ist_now(),
                 }
+                if admin_channel_id and admin_message_id:
+                    user_task_status[uid][task_id]['admin_channel_id'] = admin_channel_id
+                    user_task_status[uid][task_id]['admin_message_id'] = admin_message_id
+                if uid in missed_tasks_db:
+                    try:
+                        if isinstance(missed_tasks_db[uid], dict):
+                            missed_tasks_db[uid] = {}
+                        else:
+                            missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(task_id)]
+                    except Exception:
+                        pass
             else:
-                for tid, sdata in list(status_obj.items()):
+                for tid, sdata in list(user_task_status.get(uid, {}).items()):
                     if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
-                        status_obj[tid] = {
+                        user_task_status[uid][tid] = {
                             'status': 'completed', 'completed_at': get_ist_now(),
                             'reward': reward, 'approved_at': get_ist_now(),
-                            'admin_channel_id': admin_channel_id, 'admin_message_id': admin_message_id,
+                            'admin_channel_id': admin_channel_id, 'admin_message_id': admin_message_id
                         }
                         break
+
             record_task_referral_commissions(uid, reward)
             pending_daily.pop(key, None)
             pending_daily.pop(str(key), None)
-            daily_approved += 1
-            daily_details.append(f"{uid} (T{task_number} ₹{reward:g})")
-            await mark_card(admin_channel_id, admin_message_id, "Daily Task", uid, reward, f"Task {task_number}")
+            approved_count += 1
+            details.append(f"{uid} (T{task_number} ₹{reward:g})")
+
+            await mark_admin_card_approved(admin_channel_id, admin_message_id, uid, task_number, reward)
+
             try:
-                await context.bot.send_message(
-                    chat_id=uid,
-                    text=f"✅ Daily Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}",
-                    reply_markup=main_menu(),
-                )
+                remaining = get_tasks_for_today()
+                remaining_count = len([t for t in remaining if user_task_status.get(uid, {}).get(t.get('id'), {}).get('status') != 'completed'])
+                if remaining_count > 0:
+                    msg_user = f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}\n\n⏳ Remaining tasks today: {remaining_count}\nGo to /menu -> Daily Task for next!"
+                else:
+                    msg_user = f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}\n\n🎉 All tasks completed today! No more tasks! Great job!"
+                await context.bot.send_message(chat_id=uid, text=msg_user, reply_markup=main_menu())
             except Exception:
                 pass
         except Exception as e:
-            print(f"unified daily bulk approval error {key}: {e}")
+            print(f"daily bulk approval error {key}: {e}")
+            import traceback; traceback.print_exc()
 
-    # Also catch pending_verification records that do not have pending_daily rows.
+    # SECOND: approve pending_verification entries not represented in pending_daily.
     for uid, status_dict in list(user_task_status.items()):
         if not isinstance(status_dict, dict):
             continue
@@ -6740,98 +6639,57 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if not isinstance(sdata, dict) or sdata.get('status') != 'pending_verification':
                 continue
             try:
-                task = next((t for t in get_tasks_for_today() if int(t.get('id', -1)) == int(tid)), None)
+                task = next((t for t in get_tasks_for_today() if int(t.get('id',-1)) == int(tid)), None)
                 if not task:
-                    task = next((t for t in scheduled_tasks_db if int(t.get('id', -1)) == int(tid)), None)
-                reward = float(get_task_reward_for_user(task, int(uid)) if task else 5.0)
+                    task = next((t for t in scheduled_tasks_db if int(t.get('id',-1)) == int(tid)), None)
+                reward = float(task.get('reward', 0) or 0) if task else 5.0
                 task_number = task.get('task_number', tid) if task else tid
-                status_dict[tid] = {'status':'completed','completed_at':get_ist_now(),'reward':reward,'approved_at':get_ist_now()}
-                tasks_db[int(uid)] = tasks_db.get(int(uid), 0) + 1
-                daily_task_count.setdefault(int(uid), {})
-                daily_task_count[int(uid)][today] = daily_task_count[int(uid)].get(today, 0) + 1
-                add_today_task_earning(int(uid), reward, today)
-                record_task_referral_commissions(int(uid), reward)
-                daily_approved += 1
-                daily_details.append(f"{uid} (T{task_number} ₹{reward:g})")
+                admin_channel_id = sdata.get('admin_channel_id')
+                admin_message_id = sdata.get('admin_message_id')
+
+                tasks_db[uid] = tasks_db.get(uid, 0) + 1
+                daily_task_count.setdefault(uid, {})
+                daily_task_count[uid][today] = daily_task_count[uid].get(today, 0) + 1
+                daily_task_earnings.setdefault(uid, {})
+                daily_task_earnings[uid][today] = round(float(daily_task_earnings[uid].get(today, 0) or 0) + reward, 2)
+                user_task_status[uid][tid] = {
+                    'status': 'completed', 'completed_at': get_ist_now(),
+                    'reward': reward, 'approved_at': get_ist_now(),
+                    'admin_channel_id': admin_channel_id, 'admin_message_id': admin_message_id
+                }
+                if uid in missed_tasks_db:
+                    try:
+                        if isinstance(missed_tasks_db[uid], dict):
+                            missed_tasks_db[uid] = {}
+                        else:
+                            missed_tasks_db[uid] = [t for t in missed_tasks_db[uid] if int(t.get('id',-1)) != int(tid)]
+                    except Exception:
+                        pass
+                record_task_referral_commissions(uid, reward)
+                approved_count += 1
+                details.append(f"{uid} (T{task_number} ₹{reward:g})")
+                await mark_admin_card_approved(admin_channel_id, admin_message_id, uid, task_number, reward)
                 try:
-                    await context.bot.send_message(chat_id=int(uid), text=f"✅ Daily Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(int(uid))}", reply_markup=main_menu())
+                    await context.bot.send_message(chat_id=uid, text=f"✅ Task Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
                 except Exception:
                     pass
             except Exception as e:
-                print(f"unified pending_verification approval error {uid}/{tid}: {e}")
-
-    # 2) OWN PRODUCT PROMOTION
-    for key, sub in list(product_promo_pending.items()):
-        try:
-            uid = int(sub.get('uid', key) or key)
-            tid = int(sub.get('promo_id', -1))
-            if tid < 0:
-                continue
-            approved_map = product_promo_approved.setdefault(uid, {})
-            if str(tid) in approved_map or tid in approved_map:
-                product_promo_pending.pop(key, None)
-                await mark_card(sub.get('admin_channel_id'), sub.get('admin_message_id'), "Product Promotion", uid, sub.get('reward',0), f"Product {tid}")
-                continue
-            reward = float(sub.get('reward', 0) or 0)
-            product_promo_earnings_db[uid] = round(float(product_promo_earnings_db.get(uid, 0) or 0) + reward, 2)
-            record_product_promo_referral_commissions(uid, reward, "product_promo")
-            approved_map[str(tid)] = str(get_ist_now())
-            product_promo_pending.pop(key, None)
-            product_approved += 1
-            product_details.append(f"{uid} (₹{reward:g})")
-            await mark_card(sub.get('admin_channel_id'), sub.get('admin_message_id'), "Product Promotion", uid, reward, f"Product {tid}")
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Product Promotion Approved! +₹{reward:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"unified product bulk approval error {key}: {e}")
-
-    # 3) SHOP / PROMOTE-MY-SHOP PROMOTION
-    for key, sub in list(promo_pending.items()):
-        try:
-            uid = int(sub.get('uid', key) or key)
-            campaign_id = int(sub.get('campaign_id', -1))
-            views = int(sub.get('views', 0) or 0)
-            campaign = get_promo_campaign(campaign_id)
-            if not campaign:
-                continue
-            earning = int(sub.get('earning', int(views * campaign['per_view_member_earning'] / 100)))
-            promo_earnings_db[uid] = round(float(promo_earnings_db.get(uid, 0) or 0) + earning, 2)
-            campaign['total_earnings_distributed'] = campaign.get('total_earnings_distributed', 0) + earning
-            record_product_promo_referral_commissions(uid, earning, "shop_promo")
-            promo_pending.pop(key, None)
-            shop_approved += 1
-            shop_details.append(f"{uid} (₹{earning:g})")
-            for card in list(sub.get('admin_messages', []) or []):
-                await mark_card(card.get('chat_id'), card.get('message_id'), "Shop Promotion", uid, earning, f"Campaign {campaign_id} / {views} views")
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Shop Promotion Approved! +₹{earning:g}\nBalance: ₹{get_balance(uid)}", reply_markup=main_menu())
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"unified shop bulk approval error {key}: {e}")
+                print(f"pending_verification bulk approval error {uid} {tid}: {e}")
 
     save_data()
-    remaining_daily = len(pending_daily)
-    remaining_product = len(product_promo_pending)
-    remaining_shop = len(promo_pending)
-    def fmt(items):
-        if not items:
-            return "None"
-        out = "\n".join(items[:15])
-        return out + (f"\n...and {len(items)-15} more" if len(items) > 15 else "")
+    detail_text = "\n".join(details[:15])
+    if len(details) > 15:
+        detail_text += f"\n...and {len(details)-15} more"
+    remaining_pending = 0
+    for uid, status_dict in user_task_status.items():
+        if isinstance(status_dict, dict):
+            for sdata in status_dict.values():
+                if isinstance(sdata, dict) and sdata.get('status') == 'pending_verification':
+                    remaining_pending += 1
 
     await q.message.reply_text(
-        "✅ APPROVE ALL PENDING — BULK APPROVAL DONE\n\n"
-        f"📋 Daily Tasks Approved: {daily_approved}\n{fmt(daily_details)}\n\n"
-        f"📢 Product Promotion Approved: {product_approved}\n{fmt(product_details)}\n\n"
-        f"🏪 Shop Promotion Approved: {shop_approved}\n{fmt(shop_details)}\n\n"
-        f"📊 TOTAL APPROVED: {daily_approved + product_approved + shop_approved}\n\n"
-        f"Remaining Daily Pending: {remaining_daily}\n"
-        f"Remaining Product Pending: {remaining_product}\n"
-        f"Remaining Shop Promotion Pending: {remaining_shop}",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]]),
+        f"✅ DAILY TASK BULK APPROVAL DONE\n\nApproved: {approved_count}\n{detail_text or 'No pending Daily Task submissions.'}\n\nRemaining pending_daily: {len(pending_daily)}\nRemaining pending_verification: {remaining_pending}",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]])
     )
 
 # === CHANNEL METHOD + BULK APPROVE V28 ===
@@ -7752,9 +7610,6 @@ async def add_task_5plans_cmd(update, context):
             'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
             'audience': audience,
             'description': description,
-            'next_time': close_time,
-            'next_time_obj': ct,
-            'window_minutes': int((datetime.combine(get_ist_today(), ct) - datetime.combine(get_ist_today(), ot)).total_seconds() / 60),
             'task_number': len([t for t in scheduled_tasks_db if t['date']==today])+1
         }
         scheduled_tasks_db.append(task)
@@ -8282,206 +8137,6 @@ async def bulk_task_image_handler(update, context):
 
 
 
-# ===== DOCUMENTS & SHOPPING MODULE =====
-def _monthly_approved_withdrawals(uid):
-    """Return only this calendar month's approved withdrawal total."""
-    uid=int(uid)
-    month=get_ist_now().strftime('%Y-%m')
-    total=0.0
-    for item in (withdraw_history.get(uid) or withdraw_history.get(str(uid)) or []):
-        if not isinstance(item, dict) or str(item.get('status','')).lower() != 'approved':
-            continue
-        stamp=str(item.get('approved_at') or item.get('date') or '')
-        if stamp[:7] != month:
-            continue
-        try:
-            total += float(item.get('amount', 0) or 0)
-        except Exception:
-            pass
-    return round(total, 2)
-
-def _shopping_cycle(uid):
-    """Monthly shopping ledger: target is always 20% of this month's approved withdrawals.
-
-    The main wallet is never deducted. Only verified shopping spend is tracked here.
-    When the calendar month changes, a fresh shopping cycle starts at zero.
-    """
-    uid=int(uid); month=get_ist_now().strftime('%Y-%m')
-    rec=shopping_monthly_db.get(uid) or shopping_monthly_db.get(str(uid))
-    if not isinstance(rec,dict) or rec.get('month')!=month:
-        rec={'month':month,'target':0.0,'spent':0.0,'completed':False}
-        shopping_monthly_db[uid]=rec
-    # Do not freeze the target after completion: later withdrawals in the same
-    # month can increase the required 20% target.
-    rec['target']=round(_monthly_approved_withdrawals(uid)*0.20,2)
-    rec['completed']=bool(rec['target'] > 0 and float(rec.get('spent',0) or 0) >= rec['target'])
-    return rec
-
-async def documents_plans_cb(update, context):
-    q=update.callback_query; await q.answer(); info=_canonical_plan_info(q.from_user.id)
-    lines=["📚 DOCUMENTS & PLANS","",f"💎 Current Plan: {info.get('display','Not activated')}",f"📅 Valid till: {info.get('expiry','-')}",""]
-    if documents_db:
-        lines.append("📂 AVAILABLE FILES")
-        for d in documents_db[-30:]:
-            kind = d.get('kind','document').upper()
-            lines.append(f"{d['id']}. {d['title']} [{kind}]")
-            if d.get('description'): lines.append(f"   {d['description']}")
-    else:
-        lines.append("📄 No documents added yet.")
-    kb=[]
-    for d in documents_db[-20:]:
-        kb.append([InlineKeyboardButton(f"📥 {d['title'][:35]}", callback_data=f"document_open_{d['id']}")])
-    kb += [[InlineKeyboardButton("💎 Support Plans",callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
-    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
-
-async def document_open_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id
-    try: did=int(q.data.rsplit('_',1)[1])
-    except: return
-    d=next((x for x in documents_db if int(x.get('id',-1))==did),None)
-    if not d:
-        await q.message.reply_text("❌ Document not found.", reply_markup=main_menu()); return
-    try:
-        fid=d.get('file_id')
-        if fid:
-            kind=d.get('kind','document')
-            if kind=='photo':
-                await context.bot.send_photo(chat_id=uid, photo=fid, caption=d.get('description') or d.get('title',''))
-            else:
-                await context.bot.send_document(chat_id=uid, document=fid, caption=d.get('description') or d.get('title',''))
-        elif d.get('url'):
-            await q.message.reply_text(f"📄 {d.get('title','Document')}\n\n{d.get('description','')}\n\n🔗 {d['url']}", reply_markup=main_menu())
-        else:
-            await q.message.reply_text("❌ This document has no file or link.", reply_markup=main_menu())
-    except Exception as e:
-        await q.message.reply_text(f"❌ Could not send file: {e}", reply_markup=main_menu())
-
-async def document_file_upload_handler(update, context):
-    uid=update.effective_user.id
-    if not is_admin(uid) or not context.user_data.get('awaiting_document_upload'):
-        return
-    msg=update.message
-    if not msg or (not msg.document and not msg.photo):
-        return
-    title=context.user_data.get('document_title') or (msg.caption or '').strip() or 'Document'
-    description=context.user_data.get('document_description','')
-    if msg.document:
-        file_id=msg.document.file_id; kind='document'; mime=msg.document.mime_type or ''
-    else:
-        file_id=msg.photo[-1].file_id; kind='photo'; mime='image'
-    global document_counter
-    d={'id':document_counter,'title':title[:150],'description':description[:1000],'file_id':file_id,'kind':kind,'mime_type':mime,'created_at':str(get_ist_now())}
-    documents_db.append(d); document_counter+=1
-    context.user_data.pop('awaiting_document_upload',None); context.user_data.pop('document_title',None); context.user_data.pop('document_description',None)
-    save_data()
-    await msg.reply_text(f"✅ File saved in Documents & Plans!\n\n🆔 ID: {d['id']}\n📄 {d['title']}\n📦 Type: {kind.upper()}\n\nUsers can open it anytime from 📚 Documents & Plans.")
-
-async def shopping_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cycle=_shopping_cycle(uid); cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    lines=["🛒 SHOPPING","",f"📅 Month: {cycle['month']}",f"🎯 Monthly shopping target (20% of approved withdrawals): ₹{cycle['target']:.2f}",f"🛍️ Verified purchases: ₹{cycle['spent']:.2f}",f"📌 Remaining: ₹{max(0,cycle['target']-cycle['spent']):.2f}",""]
-    if cycle.get('completed'): lines.append("✅ Monthly shopping target completed. Next month starts fresh.")
-    kb=[]
-    for pdt in shopping_products_db[-15:]:
-        lines.append(f"🛍️ {pdt['id']}. {pdt['name']} — ₹{float(pdt['price']):.2f}")
-        if pdt.get('description'): lines.append(f"   {pdt['description']}")
-        kb.append([InlineKeyboardButton(f"🛒 Add {pdt['name'][:25]}",callback_data=f"shop_add_{pdt['id']}")])
-    if not shopping_products_db: lines.append("No products available right now.")
-    kb += [[InlineKeyboardButton(f"🧺 Cart ({len(cart)})",callback_data="shop_cart")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
-    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
-
-async def shop_add_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id
-    try: pid=int(q.data.rsplit('_',1)[1])
-    except: return
-    pdt=next((x for x in shopping_products_db if int(x.get('id',-1))==pid),None)
-    if not pdt: await q.message.reply_text("❌ Product not found.",reply_markup=main_menu()); return
-    shopping_carts_db.setdefault(uid,[]).append({'product_id':pid,'name':pdt['name'],'price':float(pdt['price']),'qty':1}); save_data()
-    await q.message.reply_text(f"✅ Added: {pdt['name']} — ₹{float(pdt['price']):.2f}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧺 View Cart",callback_data="shop_cart")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")]]))
-
-async def shop_cart_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
-    total=sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart)
-    lines=["🧺 YOUR CART",""]+[f"• {x['name']} × {x.get('qty',1)} = ₹{float(x['price'])*int(x.get('qty',1)):.2f}" for x in cart]+["",f"💰 Total: ₹{total:.2f}"]
-    await q.message.reply_text("\n".join(lines),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Submit Purchase",callback_data="shop_checkout")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]))
-
-async def shop_checkout_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
-    global shopping_order_counter
-    total=round(sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart),2)
-    order={'id':shopping_order_counter,'uid':uid,'items':cart,'total':total,'status':'pending_verification','created_at':str(get_ist_now())}; shopping_orders_db.append(order); shopping_order_counter+=1; shopping_carts_db.pop(uid,None); shopping_carts_db.pop(str(uid),None); save_data()
-    await q.message.reply_text(f"✅ Purchase request #{order['id']} submitted.\n\n💰 Amount: ₹{total:.2f}\n⏳ Waiting for purchase verification.\n\n💰 Your main wallet balance is unchanged.",reply_markup=main_menu())
-    for aid in list(ADMIN_IDS):
-        try: await context.bot.send_message(chat_id=aid,text=f"🛒 SHOP ORDER #{order['id']}\nUser: {uid}\nAmount: ₹{total:.2f}\nApprove: /approve_shop_order {order['id']}")
-        except: pass
-
-async def add_document_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    raw=update.message.text.replace('/add_document','',1).strip()
-    if raw:
-        parts=[x.strip() for x in raw.split('|')]
-        # Backward-compatible link mode: /add_document TITLE | URL | DESCRIPTION
-        if len(parts)>=2 and parts[1].startswith(('http://','https://')):
-            global document_counter
-            d={'id':document_counter,'title':parts[0],'url':parts[1],'description':parts[2] if len(parts)>2 else '','kind':'link'}
-            documents_db.append(d); document_counter+=1; save_data(); await update.message.reply_text(f"✅ Document link added: {d['id']}"); return
-        title=parts[0]; description=parts[1] if len(parts)>1 else ''
-    else:
-        title='Document'; description=''
-    context.user_data['awaiting_document_upload']=True
-    context.user_data['document_title']=title
-    context.user_data['document_description']=description
-    await update.message.reply_text("📤 Now send the PDF / PPT / PPTX / DOC / DOCX file or an image.\n\nThe uploaded file will be stored by Telegram file_id and users can open it anytime from 📚 Documents & Plans.")
-
-async def list_documents_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text("📚 Documents & Files:\n\n"+("\n".join(f"{d['id']}. {d['title']} | {d.get('kind','document').upper()}" for d in documents_db) if documents_db else "No documents."))
-
-async def remove_document_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: did=int(context.args[0])
-    except: await update.message.reply_text("Usage: /remove_document ID"); return
-    documents_db[:]=[d for d in documents_db if int(d.get('id',-1))!=did]; save_data(); await update.message.reply_text(f"✅ Document {did} removed.")
-
-async def add_shop_product_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    global shopping_product_counter
-    parts=[x.strip() for x in update.message.text.replace('/add_shop_product','',1).strip().split('|')]
-    if len(parts)<2: await update.message.reply_text("Usage: /add_shop_product NAME | PRICE | LINK | DESCRIPTION"); return
-    try: price=float(parts[1])
-    except: await update.message.reply_text("❌ Price must be a number."); return
-    pdt={'id':shopping_product_counter,'name':parts[0],'price':price,'link':parts[2] if len(parts)>2 else '','description':parts[3] if len(parts)>3 else ''}; shopping_products_db.append(pdt); shopping_product_counter+=1; save_data(); await update.message.reply_text(f"✅ Product added: {pdt['id']} | ₹{price:.2f}")
-
-async def list_shop_products_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text("🛍️ Products:\n\n"+("\n".join(f"{p['id']}. {p['name']} — ₹{float(p['price']):.2f} | {p.get('link','')}" for p in shopping_products_db) if shopping_products_db else "No products."))
-
-async def remove_shop_product_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: pid=int(context.args[0])
-    except: await update.message.reply_text("Usage: /remove_shop_product ID"); return
-    shopping_products_db[:]=[p for p in shopping_products_db if int(p.get('id',-1))!=pid]; save_data(); await update.message.reply_text(f"✅ Product {pid} removed.")
-
-async def shop_orders_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    pending=[o for o in shopping_orders_db if o.get('status')=='pending_verification']
-    await update.message.reply_text("🛒 Pending Orders:\n\n"+("\n".join(f"#{o['id']} User {o['uid']} ₹{float(o['total']):.2f} → /approve_shop_order {o['id']}" for o in pending) if pending else "No pending orders."))
-
-async def approve_shop_order_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: oid=int(context.args[0])
-    except: await update.message.reply_text("Usage: /approve_shop_order ID"); return
-    order=next((o for o in shopping_orders_db if int(o.get('id',-1))==oid),None)
-    if not order or order.get('status')!='pending_verification': await update.message.reply_text("❌ Order not found or already processed."); return
-    uid=int(order['uid']); cycle=_shopping_cycle(uid); cycle['spent']=round(float(cycle.get('spent',0))+float(order.get('total',0)),2); cycle['target']=round(_monthly_approved_withdrawals(uid)*0.20,2); cycle['completed']=bool(cycle['target'] > 0 and cycle['spent'] >= cycle['target']); order['status']='approved'; order['approved_at']=str(get_ist_now()); save_data()
-    await update.message.reply_text(f"✅ Order #{oid} approved.\n🎯 Target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\nCompleted: {'YES' if cycle['completed'] else 'NO'}")
-    try: await context.bot.send_message(chat_id=uid,text=f"🛒 Purchase verified: ₹{float(order['total']):.2f}\n🎯 Monthly target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\n{'✅ Monthly target completed. Next month starts fresh.' if cycle['completed'] else '📌 Continue shopping to complete this month’s target.'}",reply_markup=main_menu())
-    except: pass
-
-
-
-
 def main():
     # V4.6 FIX: Start Flask FIRST, before anything else
     try:
@@ -8861,11 +8516,6 @@ def main():
                     except:
                         pass
 
-            # Direct Documents & Plans file upload handler. It runs before the
-            # existing task/product image handlers, but only consumes messages when
-            # the admin explicitly started /add_document upload mode.
-            app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, document_file_upload_handler), group=-3)
-
             #  Add simple handlers with high priority - No ConversationHandler!
             app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, product_video_handler), group=0)
             app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, product_screenshot_photo_handler), group=0)
@@ -8916,14 +8566,6 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
-            app.add_handler(CommandHandler("add_document", add_document_cmd))
-            app.add_handler(CommandHandler("list_documents", list_documents_cmd))
-            app.add_handler(CommandHandler("remove_document", remove_document_cmd))
-            app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
-            app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
-            app.add_handler(CommandHandler("remove_shop_product", remove_shop_product_cmd))
-            app.add_handler(CommandHandler("shop_orders", shop_orders_cmd))
-            app.add_handler(CommandHandler("approve_shop_order", approve_shop_order_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("scheduled_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("list_scheduled_tasks", list_scheduled_tasks_cmd))
@@ -9006,12 +8648,6 @@ def main():
             app.add_handler(CallbackQueryHandler(product_approve_cb, pattern=r"^product_approve_\d+_\d+$"))
             app.add_handler(CallbackQueryHandler(product_reject_cb, pattern=r"^product_reject_\d+_\d+$"))
             app.add_handler(CallbackQueryHandler(product_bulk_approve_cb, pattern=r"^product_bulk_approve_all$"))
-            app.add_handler(CallbackQueryHandler(shopping_cb, pattern=r"^shopping$"))
-            app.add_handler(CallbackQueryHandler(documents_plans_cb, pattern=r"^documents_plans$"))
-            app.add_handler(CallbackQueryHandler(document_open_cb, pattern=r"^document_open_\d+$"))
-            app.add_handler(CallbackQueryHandler(shop_add_cb, pattern=r"^shop_add_\d+$"))
-            app.add_handler(CallbackQueryHandler(shop_cart_cb, pattern=r"^shop_cart$"))
-            app.add_handler(CallbackQueryHandler(shop_checkout_cb, pattern=r"^shop_checkout$"))
             app.add_handler(CallbackQueryHandler(promote_shop_cb, pattern="^promote_shop$"))
             app.add_handler(CallbackQueryHandler(skip_reason_cb, pattern="^skip_reason_"))
             app.add_handler(CallbackQueryHandler(admin_view_pending_cb, pattern="^admin_view_pending$"))
@@ -9030,7 +8666,7 @@ def main():
             app.add_handler(CallbackQueryHandler(update_details_cb, pattern="^update_details$"))
             try:
                 app.job_queue.run_daily(check_plan_expiry_job, time=time(hour=3, minute=30), name="expiry_check")
-                app.job_queue.run_daily(settle_previous_day_referrals, time=time(hour=0, minute=1, tzinfo=IST), name="referral_daily_settlement")
+                app.job_queue.run_daily(settle_previous_day_referrals, time=time(hour=0, minute=5), name="referral_daily_settlement")
             except Exception as _e:
                 print(f"expiry job schedule fail {_e}")
             app.add_handler(CommandHandler("remove_user", remove_user_cmd))
@@ -9532,7 +9168,6 @@ async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT
         result += "\n\nSome users may have blocked the bot or deleted their chat."
     await msg.reply_text(result)
 # === END CONTROLLED BROADCAST SYSTEM ===
-
 
 if __name__ == "__main__":
     main()
