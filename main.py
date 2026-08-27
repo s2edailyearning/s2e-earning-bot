@@ -10643,7 +10643,6 @@ def main():
             app.add_handler(CallbackQueryHandler(admin_view_shopping_cb, pattern=r"^admin_view_shopping$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_view_docs_cb, pattern=r"^admin_view_docs$"), group=-2)
             app.add_handler(CallbackQueryHandler(document_open_cb, pattern=r"^document_open_\d+$"), group=-2)
-            app.add_handler(CallbackQueryHandler(user_referrals_level_cb, pattern=r"^user_ref_l[12]$"), group=-2)
             app.add_handler(MessageHandler((filters.Document.ALL | filters.PHOTO) & filters.ChatType.PRIVATE, admin_document_upload_handler), group=-6)
 
             app.add_handler(CallbackQueryHandler(daily_open_cb, pattern=r"^daily_open_-?\d+$"))
