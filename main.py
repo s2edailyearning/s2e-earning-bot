@@ -3245,42 +3245,76 @@ async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try:
-        await q.answer()
+        await q.answer("🛒 Opening Shopping...")
     except:
         pass
-    uid = q.from_user.id
-    if not is_admin(uid):
-        return
-    msg = (
-        "🛒 SHOPPING ADMIN PANEL\n\n"
-        f"Total Promo Campaigns: {len(promo_campaigns_db)}\n"
-        f"Product Pending: {len(product_promo_pending)}\n\n"
-        "Commands:\n"
-        "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
-        "/list_promos\n"
-    )
-    await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+    try:
+        uid = q.from_user.id
+        print(f"admin_view_shopping_cb called by {uid} is_admin={is_admin(uid)}")
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Not admin!", reply_markup=admin_panel_keyboard())
+            return
+        msg = (
+            "🛒 SHOPPING ADMIN PANEL\n\n"
+            f"Total Promo Campaigns: {len(promo_campaigns_db)}\n"
+            f"Shop Products: {len(shopping_products_db)}\n"
+            f"Categories: {', '.join(get_shopping_categories())}\n"
+            f"Product Pending: {len(product_promo_pending)}\n\n"
+            "Commands:\n"
+            "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
+            "/add_category <name>\n"
+            "/add_shop_product category|name|price|desc|image|stock\n"
+            "/list_promos\n"
+            "/list_shop_products\n"
+        )
+        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+    except Exception as e:
+        print(f"admin_view_shopping_cb error {e}")
+        import traceback; traceback.print_exc()
+        try:
+            await context.bot.send_message(chat_id=q.from_user.id, text=f"Error in shopping admin: {e}")
+        except:
+            pass
+
+
 
 async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try:
-        await q.answer()
+        await q.answer("📚 Opening Documents...")
     except:
         pass
-    uid = q.from_user.id
-    if not is_admin(uid):
-        return
-    total_docs = len(support_plans_db) if 'support_plans_db' in globals() else 0
-    msg = (
-        "📚 DOCUMENTS & PLANS ADMIN\n\n"
-        f"Total Plans/Docs: {total_docs}\n\n"
-        "Commands:\n"
-        "/add_support_plan <type> <price> <desc>\n"
-        "/list_plans\n"
-        "/upload_doc - send doc with caption\n\n"
-        "Users see these in Documents & Plans menu."
-    )
-    await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+    try:
+        uid = q.from_user.id
+        print(f"admin_view_docs_cb called by {uid}")
+        if not is_admin(uid):
+            await q.message.reply_text("❌ Not admin!", reply_markup=admin_panel_keyboard())
+            return
+        total_docs = len(support_plans_db) if 'support_plans_db' in globals() else 0
+        msg = (
+            "📚 DOCUMENTS & PLANS ADMIN\n\n"
+            f"Total Plans/Docs: {total_docs}\n"
+            f"Shop Categories: {len(shopping_categories_db)}\n"
+            f"Shop Products: {len(shopping_products_db)}\n\n"
+            "Commands:\n"
+            "/add_support_plan <type> <price> <desc>\n"
+            "/list_plans\n"
+            "/add_category <name>\n"
+            "/add_shop_product category|name|price|desc|image|stock\n"
+            "/upload_doc - send doc with caption\n\n"
+            "How to upload doc:\n"
+            "Just send a document (PDF) with caption, bot will save as support plan\n"
+            "Users see these in Documents & Plans menu."
+        )
+        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+    except Exception as e:
+        print(f"admin_view_docs_cb error {e}")
+        import traceback; traceback.print_exc()
+        try:
+            await context.bot.send_message(chat_id=q.from_user.id, text=f"Error in docs admin: {e}")
+        except:
+            pass
+
 
 
 async def add_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
