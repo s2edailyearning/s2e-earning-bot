@@ -3363,55 +3363,6 @@ def _shopping_stats(uid, on_date=None):
     }
 
 
-def _shopping_requirement_locked(uid):
-    """Return True when the user's current-cycle purchase target is not met.
-
-    A user with no approved withdrawal has a ₹0 target and remains unlocked.
-    Admins are always allowed through.
-    """
-    try:
-        if is_admin(int(uid)):
-            return False
-    except Exception:
-        pass
-    st = _shopping_stats(uid)
-    return bool(st["required"] > 0 and not st["complete"])
-
-
-def _shopping_lock_text(uid):
-    st = _shopping_stats(uid)
-    return (
-        "🔒 PURCHASE REQUIRED\n\n"
-        f"💸 Current-cycle Approved Withdrawals: ₹{st['withdrawn']:g}\n"
-        f"🎯 Required Purchase (20%): ₹{st['required']:g}\n"
-        f"🛒 Completed Purchase: ₹{st['purchased']:g}\n"
-        f"📊 Progress: ₹{st['purchased']:g}/₹{st['required']:g}\n"
-        f"⏳ Remaining Purchase: ₹{st['pending']:g}\n\n"
-        "❌ Please complete the remaining purchase amount to unlock this feature.\n\n"
-        "🛍️ You can purchase products from Shopping.\n"
-        "Once the required purchase is completed, access will be unlocked automatically."
-    )
-
-
-async def _require_shopping_completion(update, uid):
-    """Block restricted user features until the current-cycle target is met."""
-    if not _shopping_requirement_locked(uid):
-        return False
-    text = _shopping_lock_text(uid)
-    try:
-        await update.callback_query.message.reply_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🛍️ Shopping / Complete Purchase", callback_data="shopping")],
-                [InlineKeyboardButton("📊 Shopping Progress", callback_data="shopping_progress")],
-                [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")],
-            ])
-        )
-    except Exception:
-        pass
-    return True
-
-
 def _shopping_progress_text(uid):
     st = _shopping_stats(uid)
     start = st["cycle_start"].strftime("%d/%m/%Y")
@@ -3477,8 +3428,7 @@ def _admin_shopping_summary_text():
         f"✅ Complete: {complete}\n"
         f"⏳ Pending: {pending}\n"
         f"ℹ️ No withdrawal yet: {no_withdrawal}\n\n"
-        "📌 Each user's cycle starts on their joining date and resets on the next monthly anniversary.\n"
-        "📌 Complete = Purchased ≥ Required; Pending = Withdrawal exists but target is not met; No Withdrawal = ₹0 approved withdrawal in this cycle."
+        "📌 Each user's cycle starts on their joining date and resets on the next monthly anniversary."
     )
 
 
@@ -3950,7 +3900,6 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
         )
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
-            [InlineKeyboardButton("🔎 Check Particular User", callback_data="admin_shop_user")],
             [InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_shop_pending")],
             [InlineKeyboardButton("🎉 Delivered Orders", callback_data="admin_shop_delivered")],
             [InlineKeyboardButton("📦 Shop Orders", callback_data="admin_shop_orders")],
@@ -3970,112 +3919,10 @@ async def admin_shop_progress_cb(update, context):
     try: await q.answer()
     except Exception: pass
     if not is_admin(q.from_user.id): return
-    await q.message.reply_text(
-        _admin_shopping_summary_text(),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔎 Check Particular User", callback_data="admin_shop_user")],
-            [InlineKeyboardButton("⏳ Pending Users", callback_data="admin_shop_progress_pending"),
-             InlineKeyboardButton("✅ Completed Users", callback_data="admin_shop_progress_complete")],
-            [InlineKeyboardButton("ℹ️ No Withdrawal", callback_data="admin_shop_progress_nowd")],
-            [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
-        ])
-    )
-
-
-def _admin_shopping_user_detail_text(uid):
-    st = _shopping_stats(uid, get_ist_today())
-    rec = users_db.get(uid) or users_db.get(str(uid)) or {}
-    name = rec.get("name") or rec.get("first_name") or rec.get("username") or "User"
-    username = rec.get("username")
-    user_line = f"👤 {name}" + (f" (@{username})" if username else "")
-    if st["no_withdrawal"]:
-        status = "ℹ️ NO WITHDRAWAL"
-    elif st["complete"]:
-        status = "✅ COMPLETE"
-    else:
-        status = "⏳ PENDING"
-    return (
-        "🛍️ SHOPPING PROGRESS — USER\n\n"
-        f"{user_line}\n"
-        f"🆔 ID: {uid}\n\n"
-        f"📅 Cycle: {st['cycle_start'].strftime('%d/%m/%Y')} → {st['cycle_end'].strftime('%d/%m/%Y')}\n\n"
-        f"💸 Approved Withdrawals: ₹{st['withdrawn']:g}\n"
-        f"🎯 Required Purchase (20%): ₹{st['required']:g}\n"
-        f"🛒 Delivered Purchase: ₹{st['purchased']:g}\n"
-        f"📊 Progress: ₹{st['purchased']:g}/₹{st['required']:g}\n"
-        f"⏳ Remaining: ₹{st['pending']:g}\n\n"
-        f"{status}"
-    )
-
-
-async def admin_shop_user_cb(update, context):
-    q=update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    if not is_admin(q.from_user.id): return
-    context.user_data["awaiting_shopping_user_id"] = True
-    await q.message.reply_text(
-        "🔎 CHECK PARTICULAR SHOPPING USER\n\n"
-        "Send the user's Telegram ID.\n"
-        "Example: 8864748814\n\n"
-        "You can also use /shopping_user <user_id>."
-    )
-
-
-async def shopping_user_text_handler(update, context):
-    """Receive a Telegram ID after Admin taps Check Particular User."""
-    if not context.user_data.get("awaiting_shopping_user_id"):
-        return
-    if not is_admin(update.effective_user.id):
-        context.user_data.pop("awaiting_shopping_user_id", None)
-        return
-    raw = str(update.message.text or "").strip()
-    try:
-        uid = int(raw)
-    except Exception:
-        await update.message.reply_text("❌ Invalid user ID. Send the numeric Telegram ID, for example 8864748814.")
-        raise ApplicationHandlerStop
-    if uid not in users_db and str(uid) not in users_db:
-        await update.message.reply_text(f"❌ User {uid} not found in users database. Send another user ID.")
-        raise ApplicationHandlerStop
-    context.user_data.pop("awaiting_shopping_user_id", None)
-    await update.message.reply_text(
-        _admin_shopping_user_detail_text(uid),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
-            [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
-        ])
-    )
-    raise ApplicationHandlerStop
-
-
-async def shopping_user_cmd(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /shopping_user <user_id>\nExample: /shopping_user 8864748814")
-        return
-    try:
-        uid = int(context.args[0])
-    except Exception:
-        await update.message.reply_text("❌ Invalid user ID. Use the numeric Telegram ID.")
-        return
-    if uid not in users_db and str(uid) not in users_db:
-        await update.message.reply_text(f"❌ User {uid} not found in users database.")
-        return
-    await update.message.reply_text(
-        _admin_shopping_user_detail_text(uid),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
-            [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
-        ])
-    )
-
-
-def _admin_filtered_user_list(status_filter):
     today = get_ist_today()
+    lines=[_admin_shopping_summary_text(), "", "👥 USER-WISE CURRENT-CYCLE STATUS", ""]
     uids=set()
-    for uid in users_db.keys():
+    for uid in list(users_db.keys()):
         try: uids.add(int(uid))
         except Exception: pass
     for o in shop_orders_db:
@@ -4084,54 +3931,28 @@ def _admin_filtered_user_list(status_filter):
     for uid in withdraw_history.keys():
         try: uids.add(int(uid))
         except Exception: pass
-    rows=[]
-    for uid in sorted(uids, reverse=True):
+
+    for uid in sorted(uids, reverse=True)[:30]:
         st=_shopping_stats(uid, today)
-        if status_filter == "pending" and not (not st["no_withdrawal"] and not st["complete"]): continue
-        if status_filter == "complete" and not st["complete"]: continue
-        if status_filter == "nowd" and not st["no_withdrawal"]: continue
         rec=users_db.get(uid) or users_db.get(str(uid)) or {}
-        name=rec.get("name") or rec.get("first_name") or rec.get("username") or "User"
-        rows.append((uid,name,st))
-    return rows
-
-
-async def admin_shop_filtered_cb(update, context, status_filter):
-    q=update.callback_query
-    try: await q.answer()
-    except Exception: pass
-    if not is_admin(q.from_user.id): return
-    rows=_admin_filtered_user_list(status_filter)
-    title={"pending":"⏳ PENDING USERS","complete":"✅ COMPLETED USERS","nowd":"ℹ️ NO WITHDRAWAL USERS"}[status_filter]
-    if not rows:
-        text=f"🛍️ {title}\n\nNo users in this category for the current cycle."
-    else:
-        lines=[f"🛍️ {title}", ""]
-        for uid,name,st in rows[:50]:
-            lines.append(
-                f"👤 {name} | ID {uid}\n"
-                f"💸 Withdraw ₹{st['withdrawn']:g} | 🎯 Required ₹{st['required']:g}\n"
-                f"🛒 Purchased ₹{st['purchased']:g}/₹{st['required']:g} | ⏳ Remaining ₹{st['pending']:g}\n"
-            )
-        if len(rows)>50: lines.append(f"...and {len(rows)-50} more")
-        text="\n".join(lines)
-    await q.message.reply_text(text[:4000], reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔎 Check User", callback_data="admin_shop_user")],
-        [InlineKeyboardButton("📊 Summary", callback_data="admin_shop_progress")],
+        name=rec.get("name") or rec.get("first_name") or "User"
+        if st["no_withdrawal"]:
+            status="ℹ️ NO WITHDRAWAL"
+        elif st["complete"]:
+            status="✅ COMPLETE"
+        else:
+            status="⏳ PENDING"
+        cycle=f"{st['cycle_start'].strftime('%d/%m/%Y')}→{st['cycle_end'].strftime('%d/%m/%Y')}"
+        lines.append(
+            f"👤 {name} | ID {uid}\n"
+            f"📅 Cycle: {cycle}\n"
+            f"{status} | Withdraw ₹{st['withdrawn']:g} | Required ₹{st['required']:g}\n"
+            f"🛒 Purchased ₹{st['purchased']:g}/₹{st['required']:g} | Pending ₹{st['pending']:g}\n"
+        )
+    await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_shop_pending"), InlineKeyboardButton("🎉 Delivered", callback_data="admin_shop_delivered")],
         [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
     ]))
-
-
-async def admin_shop_progress_pending_cb(update, context):
-    return await admin_shop_filtered_cb(update, context, "pending")
-
-
-async def admin_shop_progress_complete_cb(update, context):
-    return await admin_shop_filtered_cb(update, context, "complete")
-
-
-async def admin_shop_progress_nowd_cb(update, context):
-    return await admin_shop_filtered_cb(update, context, "nowd")
 
 
 async def admin_shop_pending_cb(update, context):
@@ -4517,8 +4338,6 @@ async def wallet_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid = q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     active_campaigns = get_active_promo_campaigns()
     if not active_campaigns:
         msg = "🏪 Promo Tasks Ante Yemiti?\n\nNuvvu adigina idea ye - Local shops promotion!\n\n🏪 Shop owners ki customers kavali - Vallaki yela promote cheyalo talidu\n📱 Mana members (nuvvu) valla shop poster ni WhatsApp Status lo pedtaru\n👀 Nee status ni 200 mandi chustaru - Views vastayi\n💰 Nuvvu Rs10 per 100 views earn chestavu! 200 views = Rs20!\n\nExample:\nKavali Fashions shop Diwali Sale 50% Off poster istundi\nNuvvu status lo pedtav - Nee friends 250 mandi chustaru\nNuvvu screenshot upload cheste Rs25 vastundi wallet lo!\n\nIppudu active campaigns levu - Admin add chestadu!\nShop owners contact @s2edayincome"
@@ -4539,8 +4358,6 @@ async def promo_tasks_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def promo_join_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid = q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     try:
         campaign_id = int(q.data.split("_")[-1])
     except:
@@ -4571,8 +4388,6 @@ async def promote_shop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     promos=get_active_product_promo_for_user(uid)
     if not promos:
         await q.message.reply_text("📢 PRODUCT PROMOTION\n\nNo active product promotion right now.", reply_markup=main_menu())
@@ -4612,8 +4427,6 @@ async def product_promo_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def product_download_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     try: tid=int(q.data.split('_')[-1])
     except: return
     t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
@@ -4637,8 +4450,6 @@ async def product_download_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def product_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     try: tid=int(q.data.split('_')[-1])
     except: return
     t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
@@ -4908,8 +4719,6 @@ async def product_bulk_approve_cb(update: Update, context: ContextTypes.DEFAULT_
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    if await _require_shopping_completion(update, uid):
-        return
     today_tasks=get_tasks_for_today()
     if not today_tasks:
         await q.message.reply_text(f"📋 SCHEDULED TASKS — {get_ist_today()}\n\nNo tasks scheduled today. Admin will add tasks when needed.", reply_markup=main_menu())
@@ -4957,8 +4766,6 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         q=update.callback_query; await q.answer()
         uid=q.from_user.id
-        if await _require_shopping_completion(update, uid):
-            return
         # Track missed tasks when user opens daily task
         track_missed_tasks_for_user(uid)
         if uid in banned_users:
@@ -7332,10 +7139,6 @@ async def promo_tasks_cb_fixed(update: Update, context: ContextTypes.DEFAULT_TYP
             except:
                 pass
         uid = update.effective_user.id
-        if await _require_shopping_completion(update, uid):
-            return
-        if await _require_shopping_completion(update, uid):
-            return
         # English version - no Telugu
         txt = """PROMO TASKS - Earn by Sharing!
 
@@ -10023,8 +9826,6 @@ def main():
             app.add_handler(TypeHandler(Update, broadcast_message_router), group=-90)
             app.add_handler(CommandHandler("menu", menu))
             app.add_handler(CommandHandler("admin", admin_panel))
-            app.add_handler(CommandHandler("shopping_user", shopping_user_cmd))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, shopping_user_text_handler), group=-3)
             app.add_handler(CommandHandler("pending", pending_cmd))
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
@@ -10070,8 +9871,6 @@ def main():
             async def daily_open_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 q=update.callback_query; await q.answer()
                 uid=q.from_user.id
-                if await _require_shopping_completion(update, uid):
-                    return
                 try: tid=int(q.data.replace("daily_open_","",1))
                 except Exception: return
                 task=next((t for t in get_tasks_for_today() if int(t.get('id',-1))==tid),None)
@@ -10119,10 +9918,6 @@ def main():
             app.add_handler(CallbackQueryHandler(shop_purchases_cb, pattern=r"^shop_purchases$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_shop_orders_cb, pattern=r"^admin_shop_orders$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_shop_progress_cb, pattern=r"^admin_shop_progress$"), group=-2)
-            app.add_handler(CallbackQueryHandler(admin_shop_user_cb, pattern=r"^admin_shop_user$"), group=-2)
-            app.add_handler(CallbackQueryHandler(admin_shop_progress_pending_cb, pattern=r"^admin_shop_progress_pending$"), group=-2)
-            app.add_handler(CallbackQueryHandler(admin_shop_progress_complete_cb, pattern=r"^admin_shop_progress_complete$"), group=-2)
-            app.add_handler(CallbackQueryHandler(admin_shop_progress_nowd_cb, pattern=r"^admin_shop_progress_nowd$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_shop_pending_cb, pattern=r"^admin_shop_pending$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_shop_delivered_cb, pattern=r"^admin_shop_delivered$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_confirm_cb, pattern=r"^shop_order_confirm_\d+$"), group=-2)
@@ -10357,6 +10152,38 @@ def get_user_l1_display(uid):
 def get_user_l2_display(uid):
     return get_l2_users(uid)
 
+def _referral_member_yesterday_earning(referrer_uid, member_uid):
+    """Yesterday's commission earned by this referrer from one specific L1/L2 member."""
+    try:
+        day = str(get_ist_today() - timedelta(days=1))
+        total = 0.0
+        entries = referral_commission_ledger.get(referrer_uid, [])
+        if not entries:
+            entries = referral_commission_ledger.get(str(referrer_uid), [])
+        for e in entries or []:
+            if str(e.get("date", "")) != day:
+                continue
+            try:
+                if int(e.get("source_uid")) != int(member_uid):
+                    continue
+            except Exception:
+                continue
+            try:
+                total += float(e.get("amount", 0) or 0)
+            except Exception:
+                pass
+        return round(total, 2)
+    except Exception:
+        return 0.0
+
+def _referral_member_plan(uid):
+    try:
+        info = _canonical_plan_info(uid)
+        return str(info.get("display") or "Free")
+    except Exception:
+        u = users_db.get(uid, {}) if isinstance(users_db, dict) else {}
+        return str(u.get("plan") or u.get("plan_name") or "Free")
+
 async def user_referrals_menu(update, context):
     q = update.callback_query
     await q.answer()
@@ -10374,31 +10201,27 @@ async def user_referrals_level_cb(update, context):
     uid = q.from_user.id
     if q.data == "user_ref_l1":
         members = get_user_l1_display(uid)
-        title = "L1 MEMBERS - Direct Referrals"
+        title = "🟢 L1 MEMBERS"
     else:
         members = get_user_l2_display(uid)
-        title = "L2 MEMBERS - Level 2"
+        title = "🔵 L2 MEMBERS"
     if not members:
-        await q.message.reply_text(title + chr(10) + chr(10) + "No members yet. Share your referral link!")
+        await q.message.reply_text(title + "\n\nNo members yet. Share your referral link!")
         return
-    lines = [title, f"Total: {len(members)} members", ""]
-    for i, member_id in enumerate(members[:20], 1):
+    lines = [title, ""]
+    for i, member_id in enumerate(members[:50], 1):
         user = users_db.get(member_id, {}) or users_db.get(str(member_id), {})
-        name = user.get('name','Unknown')[:15]
-        username = user.get('username','')
-        plan_rec = _get_user_plan_record(member_id)
-        plan_name = plan_rec.get('name', plan_rec.get('plan_name','Free')) if plan_rec else 'Free'
-        joined = str(user.get('joined','') or user.get('reg_date',''))[:10] or 'Unknown'
-        bal = get_balance(member_id)
-        tasks = tasks_db.get(member_id, 0) or tasks_db.get(str(member_id),0)
-        lines.append(f"{i}. {name} ({member_id})")
-        lines.append(f"   @{username} | {plan_name} | Rs{bal:.0f} | Tasks:{tasks} | Joined:{joined}")
+        name = str(user.get("name") or user.get("first_name") or "Unknown").strip()[:40]
+        plan_name = _referral_member_plan(member_id)
+        yesterday = _referral_member_yesterday_earning(uid, member_id)
+        lines.append(f"{i}. 👤 {name}")
+        lines.append(f"   💎 Plan: {plan_name}")
+        lines.append(f"   💰 Yesterday Earning: ₹{yesterday:.2f}")
         lines.append("")
-    if len(members) > 20:
-        lines.append(f"... and {len(members)-20} more members")
-    lines.append("")
-    lines.append("You earn commission when they complete tasks & buy plans!")
-    await q.message.reply_text(chr(10).join(lines)[:4000])
+    if len(members) > 50:
+        lines.append(f"... and {len(members)-50} more members")
+    await q.message.reply_text("\n".join(lines)[:4000])
+
 # === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
 
 # === PERMANENT REMOVED USER GLOBAL GUARD V2 ===
