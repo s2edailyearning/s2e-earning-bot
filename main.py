@@ -8282,6 +8282,206 @@ async def bulk_task_image_handler(update, context):
 
 
 
+# ===== DOCUMENTS & SHOPPING MODULE =====
+def _monthly_approved_withdrawals(uid):
+    """Return only this calendar month's approved withdrawal total."""
+    uid=int(uid)
+    month=get_ist_now().strftime('%Y-%m')
+    total=0.0
+    for item in (withdraw_history.get(uid) or withdraw_history.get(str(uid)) or []):
+        if not isinstance(item, dict) or str(item.get('status','')).lower() != 'approved':
+            continue
+        stamp=str(item.get('approved_at') or item.get('date') or '')
+        if stamp[:7] != month:
+            continue
+        try:
+            total += float(item.get('amount', 0) or 0)
+        except Exception:
+            pass
+    return round(total, 2)
+
+def _shopping_cycle(uid):
+    """Monthly shopping ledger: target is always 20% of this month's approved withdrawals.
+
+    The main wallet is never deducted. Only verified shopping spend is tracked here.
+    When the calendar month changes, a fresh shopping cycle starts at zero.
+    """
+    uid=int(uid); month=get_ist_now().strftime('%Y-%m')
+    rec=shopping_monthly_db.get(uid) or shopping_monthly_db.get(str(uid))
+    if not isinstance(rec,dict) or rec.get('month')!=month:
+        rec={'month':month,'target':0.0,'spent':0.0,'completed':False}
+        shopping_monthly_db[uid]=rec
+    # Do not freeze the target after completion: later withdrawals in the same
+    # month can increase the required 20% target.
+    rec['target']=round(_monthly_approved_withdrawals(uid)*0.20,2)
+    rec['completed']=bool(rec['target'] > 0 and float(rec.get('spent',0) or 0) >= rec['target'])
+    return rec
+
+async def documents_plans_cb(update, context):
+    q=update.callback_query; await q.answer(); info=_canonical_plan_info(q.from_user.id)
+    lines=["📚 DOCUMENTS & PLANS","",f"💎 Current Plan: {info.get('display','Not activated')}",f"📅 Valid till: {info.get('expiry','-')}",""]
+    if documents_db:
+        lines.append("📂 AVAILABLE FILES")
+        for d in documents_db[-30:]:
+            kind = d.get('kind','document').upper()
+            lines.append(f"{d['id']}. {d['title']} [{kind}]")
+            if d.get('description'): lines.append(f"   {d['description']}")
+    else:
+        lines.append("📄 No documents added yet.")
+    kb=[]
+    for d in documents_db[-20:]:
+        kb.append([InlineKeyboardButton(f"📥 {d['title'][:35]}", callback_data=f"document_open_{d['id']}")])
+    kb += [[InlineKeyboardButton("💎 Support Plans",callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
+    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
+
+async def document_open_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    try: did=int(q.data.rsplit('_',1)[1])
+    except: return
+    d=next((x for x in documents_db if int(x.get('id',-1))==did),None)
+    if not d:
+        await q.message.reply_text("❌ Document not found.", reply_markup=main_menu()); return
+    try:
+        fid=d.get('file_id')
+        if fid:
+            kind=d.get('kind','document')
+            if kind=='photo':
+                await context.bot.send_photo(chat_id=uid, photo=fid, caption=d.get('description') or d.get('title',''))
+            else:
+                await context.bot.send_document(chat_id=uid, document=fid, caption=d.get('description') or d.get('title',''))
+        elif d.get('url'):
+            await q.message.reply_text(f"📄 {d.get('title','Document')}\n\n{d.get('description','')}\n\n🔗 {d['url']}", reply_markup=main_menu())
+        else:
+            await q.message.reply_text("❌ This document has no file or link.", reply_markup=main_menu())
+    except Exception as e:
+        await q.message.reply_text(f"❌ Could not send file: {e}", reply_markup=main_menu())
+
+async def document_file_upload_handler(update, context):
+    uid=update.effective_user.id
+    if not is_admin(uid) or not context.user_data.get('awaiting_document_upload'):
+        return
+    msg=update.message
+    if not msg or (not msg.document and not msg.photo):
+        return
+    title=context.user_data.get('document_title') or (msg.caption or '').strip() or 'Document'
+    description=context.user_data.get('document_description','')
+    if msg.document:
+        file_id=msg.document.file_id; kind='document'; mime=msg.document.mime_type or ''
+    else:
+        file_id=msg.photo[-1].file_id; kind='photo'; mime='image'
+    global document_counter
+    d={'id':document_counter,'title':title[:150],'description':description[:1000],'file_id':file_id,'kind':kind,'mime_type':mime,'created_at':str(get_ist_now())}
+    documents_db.append(d); document_counter+=1
+    context.user_data.pop('awaiting_document_upload',None); context.user_data.pop('document_title',None); context.user_data.pop('document_description',None)
+    save_data()
+    await msg.reply_text(f"✅ File saved in Documents & Plans!\n\n🆔 ID: {d['id']}\n📄 {d['title']}\n📦 Type: {kind.upper()}\n\nUsers can open it anytime from 📚 Documents & Plans.")
+
+async def shopping_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cycle=_shopping_cycle(uid); cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    lines=["🛒 SHOPPING","",f"📅 Month: {cycle['month']}",f"🎯 Monthly shopping target (20% of approved withdrawals): ₹{cycle['target']:.2f}",f"🛍️ Verified purchases: ₹{cycle['spent']:.2f}",f"📌 Remaining: ₹{max(0,cycle['target']-cycle['spent']):.2f}",""]
+    if cycle.get('completed'): lines.append("✅ Monthly shopping target completed. Next month starts fresh.")
+    kb=[]
+    for pdt in shopping_products_db[-15:]:
+        lines.append(f"🛍️ {pdt['id']}. {pdt['name']} — ₹{float(pdt['price']):.2f}")
+        if pdt.get('description'): lines.append(f"   {pdt['description']}")
+        kb.append([InlineKeyboardButton(f"🛒 Add {pdt['name'][:25]}",callback_data=f"shop_add_{pdt['id']}")])
+    if not shopping_products_db: lines.append("No products available right now.")
+    kb += [[InlineKeyboardButton(f"🧺 Cart ({len(cart)})",callback_data="shop_cart")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
+    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
+
+async def shop_add_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id
+    try: pid=int(q.data.rsplit('_',1)[1])
+    except: return
+    pdt=next((x for x in shopping_products_db if int(x.get('id',-1))==pid),None)
+    if not pdt: await q.message.reply_text("❌ Product not found.",reply_markup=main_menu()); return
+    shopping_carts_db.setdefault(uid,[]).append({'product_id':pid,'name':pdt['name'],'price':float(pdt['price']),'qty':1}); save_data()
+    await q.message.reply_text(f"✅ Added: {pdt['name']} — ₹{float(pdt['price']):.2f}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧺 View Cart",callback_data="shop_cart")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")]]))
+
+async def shop_cart_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
+    total=sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart)
+    lines=["🧺 YOUR CART",""]+[f"• {x['name']} × {x.get('qty',1)} = ₹{float(x['price'])*int(x.get('qty',1)):.2f}" for x in cart]+["",f"💰 Total: ₹{total:.2f}"]
+    await q.message.reply_text("\n".join(lines),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Submit Purchase",callback_data="shop_checkout")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]))
+
+async def shop_checkout_cb(update, context):
+    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
+    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
+    global shopping_order_counter
+    total=round(sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart),2)
+    order={'id':shopping_order_counter,'uid':uid,'items':cart,'total':total,'status':'pending_verification','created_at':str(get_ist_now())}; shopping_orders_db.append(order); shopping_order_counter+=1; shopping_carts_db.pop(uid,None); shopping_carts_db.pop(str(uid),None); save_data()
+    await q.message.reply_text(f"✅ Purchase request #{order['id']} submitted.\n\n💰 Amount: ₹{total:.2f}\n⏳ Waiting for purchase verification.\n\n💰 Your main wallet balance is unchanged.",reply_markup=main_menu())
+    for aid in list(ADMIN_IDS):
+        try: await context.bot.send_message(chat_id=aid,text=f"🛒 SHOP ORDER #{order['id']}\nUser: {uid}\nAmount: ₹{total:.2f}\nApprove: /approve_shop_order {order['id']}")
+        except: pass
+
+async def add_document_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    raw=update.message.text.replace('/add_document','',1).strip()
+    if raw:
+        parts=[x.strip() for x in raw.split('|')]
+        # Backward-compatible link mode: /add_document TITLE | URL | DESCRIPTION
+        if len(parts)>=2 and parts[1].startswith(('http://','https://')):
+            global document_counter
+            d={'id':document_counter,'title':parts[0],'url':parts[1],'description':parts[2] if len(parts)>2 else '','kind':'link'}
+            documents_db.append(d); document_counter+=1; save_data(); await update.message.reply_text(f"✅ Document link added: {d['id']}"); return
+        title=parts[0]; description=parts[1] if len(parts)>1 else ''
+    else:
+        title='Document'; description=''
+    context.user_data['awaiting_document_upload']=True
+    context.user_data['document_title']=title
+    context.user_data['document_description']=description
+    await update.message.reply_text("📤 Now send the PDF / PPT / PPTX / DOC / DOCX file or an image.\n\nThe uploaded file will be stored by Telegram file_id and users can open it anytime from 📚 Documents & Plans.")
+
+async def list_documents_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text("📚 Documents & Files:\n\n"+("\n".join(f"{d['id']}. {d['title']} | {d.get('kind','document').upper()}" for d in documents_db) if documents_db else "No documents."))
+
+async def remove_document_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: did=int(context.args[0])
+    except: await update.message.reply_text("Usage: /remove_document ID"); return
+    documents_db[:]=[d for d in documents_db if int(d.get('id',-1))!=did]; save_data(); await update.message.reply_text(f"✅ Document {did} removed.")
+
+async def add_shop_product_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    global shopping_product_counter
+    parts=[x.strip() for x in update.message.text.replace('/add_shop_product','',1).strip().split('|')]
+    if len(parts)<2: await update.message.reply_text("Usage: /add_shop_product NAME | PRICE | LINK | DESCRIPTION"); return
+    try: price=float(parts[1])
+    except: await update.message.reply_text("❌ Price must be a number."); return
+    pdt={'id':shopping_product_counter,'name':parts[0],'price':price,'link':parts[2] if len(parts)>2 else '','description':parts[3] if len(parts)>3 else ''}; shopping_products_db.append(pdt); shopping_product_counter+=1; save_data(); await update.message.reply_text(f"✅ Product added: {pdt['id']} | ₹{price:.2f}")
+
+async def list_shop_products_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text("🛍️ Products:\n\n"+("\n".join(f"{p['id']}. {p['name']} — ₹{float(p['price']):.2f} | {p.get('link','')}" for p in shopping_products_db) if shopping_products_db else "No products."))
+
+async def remove_shop_product_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: pid=int(context.args[0])
+    except: await update.message.reply_text("Usage: /remove_shop_product ID"); return
+    shopping_products_db[:]=[p for p in shopping_products_db if int(p.get('id',-1))!=pid]; save_data(); await update.message.reply_text(f"✅ Product {pid} removed.")
+
+async def shop_orders_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    pending=[o for o in shopping_orders_db if o.get('status')=='pending_verification']
+    await update.message.reply_text("🛒 Pending Orders:\n\n"+("\n".join(f"#{o['id']} User {o['uid']} ₹{float(o['total']):.2f} → /approve_shop_order {o['id']}" for o in pending) if pending else "No pending orders."))
+
+async def approve_shop_order_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    try: oid=int(context.args[0])
+    except: await update.message.reply_text("Usage: /approve_shop_order ID"); return
+    order=next((o for o in shopping_orders_db if int(o.get('id',-1))==oid),None)
+    if not order or order.get('status')!='pending_verification': await update.message.reply_text("❌ Order not found or already processed."); return
+    uid=int(order['uid']); cycle=_shopping_cycle(uid); cycle['spent']=round(float(cycle.get('spent',0))+float(order.get('total',0)),2); cycle['target']=round(_monthly_approved_withdrawals(uid)*0.20,2); cycle['completed']=bool(cycle['target'] > 0 and cycle['spent'] >= cycle['target']); order['status']='approved'; order['approved_at']=str(get_ist_now()); save_data()
+    await update.message.reply_text(f"✅ Order #{oid} approved.\n🎯 Target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\nCompleted: {'YES' if cycle['completed'] else 'NO'}")
+    try: await context.bot.send_message(chat_id=uid,text=f"🛒 Purchase verified: ₹{float(order['total']):.2f}\n🎯 Monthly target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\n{'✅ Monthly target completed. Next month starts fresh.' if cycle['completed'] else '📌 Continue shopping to complete this month’s target.'}",reply_markup=main_menu())
+    except: pass
+
+
+
+
 def main():
     # V4.6 FIX: Start Flask FIRST, before anything else
     try:
@@ -9332,178 +9532,6 @@ async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT
         result += "\n\nSome users may have blocked the bot or deleted their chat."
     await msg.reply_text(result)
 # === END CONTROLLED BROADCAST SYSTEM ===
-
-
-# ===== DOCUMENTS & SHOPPING MODULE =====
-def _shopping_cycle(uid):
-    uid=int(uid); month=get_ist_now().strftime('%Y-%m')
-    rec=shopping_monthly_db.get(uid) or shopping_monthly_db.get(str(uid))
-    if not isinstance(rec,dict) or rec.get('month')!=month:
-        rec={'month':month,'target':0.0,'spent':0.0,'completed':False}; shopping_monthly_db[uid]=rec
-    if not rec.get('completed'): rec['target']=round(get_withdrawn_for_cap(uid)*0.20,2)
-    return rec
-
-async def documents_plans_cb(update, context):
-    q=update.callback_query; await q.answer(); info=_canonical_plan_info(q.from_user.id)
-    lines=["📚 DOCUMENTS & PLANS","",f"💎 Current Plan: {info.get('display','Not activated')}",f"📅 Valid till: {info.get('expiry','-')}",""]
-    if documents_db:
-        lines.append("📂 AVAILABLE FILES")
-        for d in documents_db[-30:]:
-            kind = d.get('kind','document').upper()
-            lines.append(f"{d['id']}. {d['title']} [{kind}]")
-            if d.get('description'): lines.append(f"   {d['description']}")
-    else:
-        lines.append("📄 No documents added yet.")
-    kb=[]
-    for d in documents_db[-20:]:
-        kb.append([InlineKeyboardButton(f"📥 {d['title'][:35]}", callback_data=f"document_open_{d['id']}")])
-    kb += [[InlineKeyboardButton("💎 Support Plans",callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
-    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
-
-async def document_open_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id
-    try: did=int(q.data.rsplit('_',1)[1])
-    except: return
-    d=next((x for x in documents_db if int(x.get('id',-1))==did),None)
-    if not d:
-        await q.message.reply_text("❌ Document not found.", reply_markup=main_menu()); return
-    try:
-        fid=d.get('file_id')
-        if fid:
-            kind=d.get('kind','document')
-            if kind=='photo':
-                await context.bot.send_photo(chat_id=uid, photo=fid, caption=d.get('description') or d.get('title',''))
-            else:
-                await context.bot.send_document(chat_id=uid, document=fid, caption=d.get('description') or d.get('title',''))
-        elif d.get('url'):
-            await q.message.reply_text(f"📄 {d.get('title','Document')}\n\n{d.get('description','')}\n\n🔗 {d['url']}", reply_markup=main_menu())
-        else:
-            await q.message.reply_text("❌ This document has no file or link.", reply_markup=main_menu())
-    except Exception as e:
-        await q.message.reply_text(f"❌ Could not send file: {e}", reply_markup=main_menu())
-
-async def document_file_upload_handler(update, context):
-    uid=update.effective_user.id
-    if not is_admin(uid) or not context.user_data.get('awaiting_document_upload'):
-        return
-    msg=update.message
-    if not msg or (not msg.document and not msg.photo):
-        return
-    title=context.user_data.get('document_title') or (msg.caption or '').strip() or 'Document'
-    description=context.user_data.get('document_description','')
-    if msg.document:
-        file_id=msg.document.file_id; kind='document'; mime=msg.document.mime_type or ''
-    else:
-        file_id=msg.photo[-1].file_id; kind='photo'; mime='image'
-    global document_counter
-    d={'id':document_counter,'title':title[:150],'description':description[:1000],'file_id':file_id,'kind':kind,'mime_type':mime,'created_at':str(get_ist_now())}
-    documents_db.append(d); document_counter+=1
-    context.user_data.pop('awaiting_document_upload',None); context.user_data.pop('document_title',None); context.user_data.pop('document_description',None)
-    save_data()
-    await msg.reply_text(f"✅ File saved in Documents & Plans!\n\n🆔 ID: {d['id']}\n📄 {d['title']}\n📦 Type: {kind.upper()}\n\nUsers can open it anytime from 📚 Documents & Plans.")
-
-async def shopping_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cycle=_shopping_cycle(uid); cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    lines=["🛒 SHOPPING","",f"📅 Month: {cycle['month']}",f"🎯 Monthly shopping target (20% of approved withdrawals): ₹{cycle['target']:.2f}",f"🛍️ Verified purchases: ₹{cycle['spent']:.2f}",f"📌 Remaining: ₹{max(0,cycle['target']-cycle['spent']):.2f}",""]
-    if cycle.get('completed'): lines.append("✅ Monthly shopping target completed. Next month starts fresh.")
-    kb=[]
-    for pdt in shopping_products_db[-15:]:
-        lines.append(f"🛍️ {pdt['id']}. {pdt['name']} — ₹{float(pdt['price']):.2f}")
-        if pdt.get('description'): lines.append(f"   {pdt['description']}")
-        kb.append([InlineKeyboardButton(f"🛒 Add {pdt['name'][:25]}",callback_data=f"shop_add_{pdt['id']}")])
-    if not shopping_products_db: lines.append("No products available right now.")
-    kb += [[InlineKeyboardButton(f"🧺 Cart ({len(cart)})",callback_data="shop_cart")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]
-    await q.message.reply_text("\n".join(lines)[:4000],reply_markup=InlineKeyboardMarkup(kb))
-
-async def shop_add_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id
-    try: pid=int(q.data.rsplit('_',1)[1])
-    except: return
-    pdt=next((x for x in shopping_products_db if int(x.get('id',-1))==pid),None)
-    if not pdt: await q.message.reply_text("❌ Product not found.",reply_markup=main_menu()); return
-    shopping_carts_db.setdefault(uid,[]).append({'product_id':pid,'name':pdt['name'],'price':float(pdt['price']),'qty':1}); save_data()
-    await q.message.reply_text(f"✅ Added: {pdt['name']} — ₹{float(pdt['price']):.2f}",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧺 View Cart",callback_data="shop_cart")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")]]))
-
-async def shop_cart_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
-    total=sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart)
-    lines=["🧺 YOUR CART",""]+[f"• {x['name']} × {x.get('qty',1)} = ₹{float(x['price'])*int(x.get('qty',1)):.2f}" for x in cart]+["",f"💰 Total: ₹{total:.2f}"]
-    await q.message.reply_text("\n".join(lines),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Submit Purchase",callback_data="shop_checkout")],[InlineKeyboardButton("🛒 Continue Shopping",callback_data="shopping")],[InlineKeyboardButton("🏠 Menu",callback_data="back_menu")]]))
-
-async def shop_checkout_cb(update, context):
-    q=update.callback_query; await q.answer(); uid=q.from_user.id; cart=shopping_carts_db.get(uid) or shopping_carts_db.get(str(uid)) or []
-    if not cart: await q.message.reply_text("🧺 Cart is empty.",reply_markup=main_menu()); return
-    global shopping_order_counter
-    total=round(sum(float(x.get('price',0))*int(x.get('qty',1)) for x in cart),2)
-    order={'id':shopping_order_counter,'uid':uid,'items':cart,'total':total,'status':'pending_verification','created_at':str(get_ist_now())}; shopping_orders_db.append(order); shopping_order_counter+=1; shopping_carts_db.pop(uid,None); shopping_carts_db.pop(str(uid),None); save_data()
-    await q.message.reply_text(f"✅ Purchase request #{order['id']} submitted.\n\n💰 Amount: ₹{total:.2f}\n⏳ Waiting for purchase verification.\n\n💰 Your main wallet balance is unchanged.",reply_markup=main_menu())
-    for aid in list(ADMIN_IDS):
-        try: await context.bot.send_message(chat_id=aid,text=f"🛒 SHOP ORDER #{order['id']}\nUser: {uid}\nAmount: ₹{total:.2f}\nApprove: /approve_shop_order {order['id']}")
-        except: pass
-
-async def add_document_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    raw=update.message.text.replace('/add_document','',1).strip()
-    if raw:
-        parts=[x.strip() for x in raw.split('|')]
-        # Backward-compatible link mode: /add_document TITLE | URL | DESCRIPTION
-        if len(parts)>=2 and parts[1].startswith(('http://','https://')):
-            global document_counter
-            d={'id':document_counter,'title':parts[0],'url':parts[1],'description':parts[2] if len(parts)>2 else '','kind':'link'}
-            documents_db.append(d); document_counter+=1; save_data(); await update.message.reply_text(f"✅ Document link added: {d['id']}"); return
-        title=parts[0]; description=parts[1] if len(parts)>1 else ''
-    else:
-        title='Document'; description=''
-    context.user_data['awaiting_document_upload']=True
-    context.user_data['document_title']=title
-    context.user_data['document_description']=description
-    await update.message.reply_text("📤 Now send the PDF / PPT / PPTX / DOC / DOCX file or an image.\n\nThe uploaded file will be stored by Telegram file_id and users can open it anytime from 📚 Documents & Plans.")
-
-async def list_documents_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text("📚 Documents & Files:\n\n"+("\n".join(f"{d['id']}. {d['title']} | {d.get('kind','document').upper()}" for d in documents_db) if documents_db else "No documents."))
-
-async def remove_document_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: did=int(context.args[0])
-    except: await update.message.reply_text("Usage: /remove_document ID"); return
-    documents_db[:]=[d for d in documents_db if int(d.get('id',-1))!=did]; save_data(); await update.message.reply_text(f"✅ Document {did} removed.")
-
-async def add_shop_product_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    global shopping_product_counter
-    parts=[x.strip() for x in update.message.text.replace('/add_shop_product','',1).strip().split('|')]
-    if len(parts)<2: await update.message.reply_text("Usage: /add_shop_product NAME | PRICE | LINK | DESCRIPTION"); return
-    try: price=float(parts[1])
-    except: await update.message.reply_text("❌ Price must be a number."); return
-    pdt={'id':shopping_product_counter,'name':parts[0],'price':price,'link':parts[2] if len(parts)>2 else '','description':parts[3] if len(parts)>3 else ''}; shopping_products_db.append(pdt); shopping_product_counter+=1; save_data(); await update.message.reply_text(f"✅ Product added: {pdt['id']} | ₹{price:.2f}")
-
-async def list_shop_products_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text("🛍️ Products:\n\n"+("\n".join(f"{p['id']}. {p['name']} — ₹{float(p['price']):.2f} | {p.get('link','')}" for p in shopping_products_db) if shopping_products_db else "No products."))
-
-async def remove_shop_product_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: pid=int(context.args[0])
-    except: await update.message.reply_text("Usage: /remove_shop_product ID"); return
-    shopping_products_db[:]=[p for p in shopping_products_db if int(p.get('id',-1))!=pid]; save_data(); await update.message.reply_text(f"✅ Product {pid} removed.")
-
-async def shop_orders_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    pending=[o for o in shopping_orders_db if o.get('status')=='pending_verification']
-    await update.message.reply_text("🛒 Pending Orders:\n\n"+("\n".join(f"#{o['id']} User {o['uid']} ₹{float(o['total']):.2f} → /approve_shop_order {o['id']}" for o in pending) if pending else "No pending orders."))
-
-async def approve_shop_order_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    try: oid=int(context.args[0])
-    except: await update.message.reply_text("Usage: /approve_shop_order ID"); return
-    order=next((o for o in shopping_orders_db if int(o.get('id',-1))==oid),None)
-    if not order or order.get('status')!='pending_verification': await update.message.reply_text("❌ Order not found or already processed."); return
-    uid=int(order['uid']); cycle=_shopping_cycle(uid); cycle['spent']=round(float(cycle.get('spent',0))+float(order.get('total',0)),2); cycle['target']=round(max(float(cycle.get('target',0)),get_withdrawn_for_cap(uid)*0.20),2); cycle['completed']=cycle['target']>0 and cycle['spent']>=cycle['target']; order['status']='approved'; order['approved_at']=str(get_ist_now()); save_data()
-    await update.message.reply_text(f"✅ Order #{oid} approved.\n🎯 Target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\nCompleted: {'YES' if cycle['completed'] else 'NO'}")
-    try: await context.bot.send_message(chat_id=uid,text=f"🛒 Purchase verified: ₹{float(order['total']):.2f}\n🎯 Monthly target: ₹{cycle['target']:.2f}\n🛍️ Verified purchases: ₹{cycle['spent']:.2f}\n{'✅ Monthly target completed. Next month starts fresh.' if cycle['completed'] else '📌 Continue shopping to complete this month’s target.'}",reply_markup=main_menu())
-    except: pass
 
 
 if __name__ == "__main__":
