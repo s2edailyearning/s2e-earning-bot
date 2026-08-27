@@ -874,6 +874,19 @@ async def admin_approve_plan_cb(update: Update, context: ContextTypes.DEFAULT_TY
             "expiry": str(expiry),
         }
 
+        # Keep a permanent revenue/activation history. This is separate from
+        # the referral commission ledger: it records the actual support-plan
+        # activation amount received from the member.
+        support_plan_activation_ledger.append({
+            "uid": int(uid),
+            "name": str((users_db.get(uid) or users_db.get(str(uid)) or {}).get("name", f"ID {uid}")),
+            "plan_id": int(plan.get("id", 0) or 0),
+            "plan_name": name,
+            "amount": float(price),
+            "activated_at": str(get_ist_now()),
+            "date": str(get_ist_today()),
+        })
+
         # Plan activation commission is immediate for both Free and paid referrers.
         # L1/L2 relationship alone determines eligibility; there is no paid-plan gate.
         for ref_id, level in get_effective_referral_levels(uid):
@@ -991,6 +1004,9 @@ banned_users = set()
 warnings_db = {}
 pending_daily = {}
 user_plans = {}
+# Historical record of every admin-approved paid support-plan activation.
+# Each entry stores the member, plan, amount received, activation date/time.
+support_plan_activation_ledger = []
 pending_plans = {}
 referral_map = {}
 # When a referrer is removed, direct children can be re-parented while preserving
@@ -1205,7 +1221,7 @@ def save_data():
         from datetime import datetime, timezone
         state_names = [
             "users_db", "deleted_users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
-            "banned_users", "warnings_db", "pending_daily", "user_plans",
+            "banned_users", "warnings_db", "pending_daily", "user_plans", "support_plan_activation_ledger",
             "pending_plans", "referral_map", "referral_level_overrides", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
@@ -2421,6 +2437,7 @@ async def send_member_details_to_channel(context, uid, event="REGISTERED"):
             f"⚧ Gender: {user.get('gender') or 'N/A'}\n"
             f"🎂 DOB/Age: {user.get('dob') or 'N/A'} / {user.get('age') or 'N/A'}\n"
             f"📱 Mobile: {user.get('mobile') or 'N/A'}\n"
+            f"📲 Telegram Number: {user.get('telegram_phone') or 'Not shared'}{' ✅ Verified' if user.get('telegram_phone_verified') else ''}\n"
             f"💳 UPI: {user.get('upi') or 'N/A'}\n"
             f"📍 Pincode: {user.get('pincode') or 'N/A'}\n"
             f"💼 Profession: {user.get('profession') or 'N/A'}\n"
@@ -3154,8 +3171,12 @@ def get_referral_work_commission_total(uid, day=None, level=None):
     return round(total,2)
 
 async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    uid=q.from_user.id
+    """User referral summary. L1/L2 are opened separately so the summary
+    stays short and each member can be checked by name, plan and yesterday
+    earning without exposing Telegram IDs to the user."""
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
     l1, l2 = get_referral_chain(uid)
     today = get_ist_today()
     yday = today - timedelta(days=1)
@@ -3163,24 +3184,25 @@ async def my_ref_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     l2_today = get_referral_work_commission_total(uid, today, level=2)
     l1_yday = get_referral_work_commission_total(uid, yday, level=1)
     l2_yday = get_referral_work_commission_total(uid, yday, level=2)
-    l1_task_yday = get_referral_task_earnings(uid, yday, level=1)
-    l2_task_yday = get_referral_task_earnings(uid, yday, level=2)
     plan_yday = get_plan_commission_yesterday(uid)
     total_ref = referral_earnings.get(uid, 0)
-    msg=(
+    msg = (
         "👥 MY REFERRALS\n\n"
         f"🟢 L1 Members: {len(l1)}\n"
+        f"🔵 L2 Members: {len(l2)}\n\n"
         f"📈 L1 Task/Product Commission: {L1_TASK_COMMISSION_PERCENT:g}%\n"
-        f"💼 Yesterday L1 Task/Product Commission: ₹{l1_yday:.2f}\n\n"
-        f"🔵 L2 Members: {len(l2)}\n"
+        f"💼 Yesterday L1 Commission: ₹{l1_yday:.2f}\n\n"
         f"📈 L2 Task/Product Commission: {L2_TASK_COMMISSION_PERCENT:g}%\n"
-        f"💼 Yesterday L2 Task/Product Commission: ₹{l2_yday:.2f}\n\n"
+        f"💼 Yesterday L2 Commission: ₹{l2_yday:.2f}\n\n"
         f"💎 Plan Activation: L1 {REFERRAL_PLAN_COMMISSION_PERCENT:g}% | L2 {L2_PLAN_COMMISSION_PERCENT:g}%\n"
         f"💰 Yesterday Plan Commission: ₹{plan_yday:.2f}\n\n"
-        f"📅 Today: L1 ₹{l1_today:.2f} | L2 ₹{l2_today:.2f}\n"
-        f"💵 Total Referral Commission: ₹{float(total_ref):.2f}"
+        f"📅 Today Pending: L1 ₹{l1_today:.2f} | L2 ₹{l2_today:.2f}\n"
+        f"💵 Total Referral Commission: ₹{float(total_ref):.2f}\n\n"
+        "Tap L1 or L2 to see member Name | Plan | Yesterday Earning."
     )
-    kb=InlineKeyboardMarkup([
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🟢 L1 ({len(l1)})", callback_data="user_ref_l1"),
+         InlineKeyboardButton(f"🔵 L2 ({len(l2)})", callback_data="user_ref_l2")],
         [InlineKeyboardButton("🔗 Refer & Earn", callback_data="refer_earn")],
         [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
     ])
@@ -6128,6 +6150,8 @@ async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"👤 {name}\n"
                 f"🆔 ID: {uid}\n"
                 f"🔹 Username: {username or 'Not set'}\n"
+                f"📱 Telegram Number: {data.get('telegram_phone') or data.get('mobile') or 'Not shared'}"
+                f"{' ✅ Verified' if data.get('telegram_phone_verified') else ''}\n"
                 f"💎 Plan: {plan_name}\n"
                 f"📅 Joined: {join_date}\n"
                 f"📌 Status: Active / Registered\n"
@@ -6447,22 +6471,102 @@ async def add_missing_commission_cmd(update: Update, context: ContextTypes.DEFAU
 
 
 
+async def support_activations_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin report: actual support-plan activations and amount received.
+
+    Usage:
+      /support_activations              -> all recorded activations
+      /support_activations today
+      /support_activations yesterday
+      /support_activations YYYY-MM-DD
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    raw = str(context.args[0]).strip().lower() if context.args else "all"
+    target_date = None
+    if raw != "all":
+        try:
+            if raw == "today":
+                target_date = get_ist_today()
+            elif raw == "yesterday":
+                target_date = get_ist_today() - timedelta(days=1)
+            else:
+                target_date = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid date. Use today, yesterday, YYYY-MM-DD, or leave empty for all.\n"
+                "Example: /support_activations 2026-08-27"
+            )
+            return
+
+    records = []
+    for rec in (support_plan_activation_ledger or []):
+        if not isinstance(rec, dict):
+            continue
+        day = str(rec.get("date") or str(rec.get("activated_at", ""))[:10])[:10]
+        if target_date is not None and day != str(target_date):
+            continue
+        records.append(rec)
+
+    # Newest first.
+    records.sort(key=lambda x: str(x.get("activated_at", x.get("date", ""))), reverse=True)
+    total = 0.0
+    for rec in records:
+        try:
+            total += float(rec.get("amount", 0) or 0)
+        except Exception:
+            pass
+
+    title = "SUPPORT PLAN ACTIVATIONS"
+    if target_date is not None:
+        title += f" — {target_date}"
+    msg = (
+        f"💎 {title}\n\n"
+        f"👥 Activated Users: {len(records)}\n"
+        f"💰 Support Plan Amount Received: ₹{total:.2f}\n"
+    )
+
+    if records:
+        msg += "\n📋 USER-WISE LIST:\n"
+        for i, rec in enumerate(records, 1):
+            uid = rec.get("uid", "-")
+            name = str(rec.get("name") or f"ID {uid}")
+            plan_name = str(rec.get("plan_name") or "Plan")
+            try:
+                amount = float(rec.get("amount", 0) or 0)
+            except Exception:
+                amount = 0.0
+            day = str(rec.get("date") or str(rec.get("activated_at", ""))[:10])[:10]
+            msg += f"{i}. {name} | ID {uid}\n   💎 {plan_name} | ₹{amount:.2f} | {day}\n"
+            if len(msg) > 3600:
+                msg += "…more users omitted. Use /support_activations YYYY-MM-DD for a date-specific list."
+                break
+    else:
+        msg += "\nℹ️ No support-plan activation records found for this period."
+
+    await update.message.reply_text(msg[:4000])
+
+
 async def plan_commission_date_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin report: show plan-activation commissions received on a specific date.
-    Supports: /plan_commission today | yesterday | YYYY-MM-DD
+    """Admin report for plan activations on a specific IST date.
+
+    /plan_commission today
+    /plan_commission yesterday
+    /plan_commission YYYY-MM-DD
+
+    The activation count comes from actual user_plans records, so users with
+    no referrer are still counted. L1/L2 commission totals come from the
+    referral ledger and are shown separately.
     """
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
         await update.message.reply_text(
             "Usage: /plan_commission <date>\n"
-            "Examples:\n"
-            "/plan_commission today\n"
-            "/plan_commission yesterday\n"
-            "/plan_commission 2026-08-26"
+            "Examples: /plan_commission today | yesterday | 2026-08-26"
         )
         return
-
     raw = str(context.args[0]).strip().lower()
     try:
         if raw == "today":
@@ -6472,22 +6576,36 @@ async def plan_commission_date_cmd(update: Update, context: ContextTypes.DEFAULT
         else:
             target_date = datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError:
-        await update.message.reply_text(
-            "❌ Invalid date. Use today, yesterday, or YYYY-MM-DD.\n"
-            "Example: /plan_commission 2026-08-26"
-        )
+        await update.message.reply_text("❌ Invalid date. Use today, yesterday, or YYYY-MM-DD.")
         return
 
     day = str(target_date)
-    total = 0.0
+
+    # 1) Count real activations from the user's activated plan snapshot.
+    activations = {}
+    for raw_uid, plan in (user_plans or {}).items():
+        if not isinstance(plan, dict):
+            continue
+        activation_date = str(plan.get("date") or plan.get("activated_date") or str(plan.get("activated_at", ""))[:10])[:10]
+        if activation_date != day:
+            continue
+        try:
+            uid = int(raw_uid)
+        except Exception:
+            continue
+        user = users_db.get(uid) or users_db.get(str(uid)) or {}
+        name = str(user.get("name") or f"ID {uid}")
+        plan_name = str(plan.get("plan_name") or plan.get("name") or plan.get("plan") or "Plan")
+        try:
+            price = float(plan.get("price", 0) or 0)
+        except Exception:
+            price = 0.0
+        activations[str(uid)] = {"name": name, "plan_name": plan_name, "plan": price, "l1": 0.0, "l2": 0.0}
+
+    # 2) Overlay the referral commissions recorded for that activation date.
     l1_total = 0.0
     l2_total = 0.0
-    activation_count = 0
-    rows = []
-
-    # The referral ledger stores every plan-activation commission with its date,
-    # level, source user and source plan amount. Read it without changing any data.
-    for ref_uid, entries in (referral_commission_ledger or {}).items():
+    for _ref_uid, entries in (referral_commission_ledger or {}).items():
         for e in entries or []:
             if str(e.get("date", "")) != day or str(e.get("type", "")) != "plan":
                 continue
@@ -6497,44 +6615,55 @@ async def plan_commission_date_cmd(update: Update, context: ContextTypes.DEFAULT
                 amount = 0.0
             if amount <= 0:
                 continue
-            level = int(e.get("level", 0) or 0)
-            src_uid = e.get("source_uid", "-")
-            source_amount = e.get("source_amount")
             try:
-                source_amount_text = f"₹{float(source_amount):.2f}" if source_amount is not None else "-"
+                level = int(e.get("level", 0) or 0)
             except Exception:
-                source_amount_text = "-"
-
-            total += amount
+                level = 0
+            src_uid = str(e.get("source_uid", "-") or "-")
+            try:
+                source_amount = float(e.get("source_amount", 0) or 0)
+            except Exception:
+                source_amount = 0.0
+            if src_uid not in activations:
+                try:
+                    src_int = int(src_uid)
+                    rec = users_db.get(src_int) or users_db.get(src_uid) or {}
+                except Exception:
+                    rec = users_db.get(src_uid) or {}
+                activations[src_uid] = {
+                    "name": str(rec.get("name") or f"ID {src_uid}"),
+                    "plan_name": _referral_member_plan_display(int(src_uid)) if src_uid.lstrip("-").isdigit() else "Plan",
+                    "plan": source_amount, "l1": 0.0, "l2": 0.0
+                }
+            elif source_amount > 0 and not activations[src_uid].get("plan"):
+                activations[src_uid]["plan"] = source_amount
             if level == 1:
+                activations[src_uid]["l1"] += amount
                 l1_total += amount
             elif level == 2:
+                activations[src_uid]["l2"] += amount
                 l2_total += amount
-            activation_count += 1
-            rows.append((str(ref_uid), level, str(src_uid), amount, source_amount_text))
 
+    total_commission = round(l1_total + l2_total, 2)
     msg = (
-        f"💎 PLAN ACTIVATION COMMISSION — {day}\n\n"
-        f"📌 Activations/commission entries: {activation_count}\n"
+        f"💎 PLAN ACTIVATIONS — {day}\n\n"
+        f"📌 Unique Plan Activations: {len(activations)}\n"
         f"🟢 L1 Commission: ₹{l1_total:.2f}\n"
         f"🔵 L2 Commission: ₹{l2_total:.2f}\n"
-        f"💰 Total Commission: ₹{total:.2f}\n"
+        f"💰 Total Referral Plan Commission: ₹{total_commission:.2f}\n"
     )
-
-    if rows:
-        msg += "\n👥 DETAILS:\n"
-        # Most recent entries first; cap the message so Telegram limits are respected.
-        for ref_uid, level, src_uid, amount, source_amount_text in reversed(rows):
+    if activations:
+        msg += "\n👥 ACTIVATED USERS:\n"
+        for i, (_src_uid, row) in enumerate(sorted(activations.items()), 1):
             msg += (
-                f"• Receiver {ref_uid} | L{level} | Source {src_uid} | "
-                f"Plan {source_amount_text} | +₹{amount:.2f}\n"
+                f"{i}. {row['name']} | {row['plan_name']} | "
+                f"Plan ₹{row['plan']:.2f} | L1 ₹{row['l1']:.2f} | L2 ₹{row['l2']:.2f}\n"
             )
             if len(msg) > 3600:
-                msg += "…more entries omitted. Use /ledger <user_id> for a user's full ledger.\n"
+                msg += "…more activations omitted.\n"
                 break
     else:
-        msg += "\nℹ️ No plan-activation commission was recorded on this date."
-
+        msg += "\nℹ️ No plan activations were recorded on this date."
     await update.message.reply_text(msg[:4000])
 
 
@@ -8817,6 +8946,7 @@ def main():
             app.add_handler(CommandHandler("add_balance", add_balance_cmd))
             app.add_handler(CommandHandler("get_balance", get_balance_cmd))
             app.add_handler(CommandHandler("ledger", ledger_cmd))
+            app.add_handler(CommandHandler("support_activations", support_activations_cmd))
             app.add_handler(CommandHandler("plan_commission", plan_commission_date_cmd))
             app.add_handler(CommandHandler("add_plan_commission", add_missing_commission_cmd))
             app.add_handler(CommandHandler("test_referral", test_referral_cmd))
@@ -8961,37 +9091,67 @@ async def user_referrals_menu(update, context):
         ])
     )
 
+def _referral_member_plan_display(member_id):
+    """Return a stable, human-readable current plan for referral display."""
+    rec = _get_user_plan_record(member_id)
+    if not rec:
+        return "Free / No Plan"
+    name = str(rec.get("plan_name") or rec.get("name") or rec.get("plan") or "Free / No Plan").strip()
+    price = rec.get("price") or rec.get("plan_price") or 0
+    try:
+        price = float(price or 0)
+    except Exception:
+        price = 0
+    if name.lower() in ("free", "no plan", "free / no plan") and price >= 9999:
+        return f"VIP ₹{int(price)}"
+    if price > 0 and "₹" not in name and name.lower() not in ("free", "no plan", "free / no plan"):
+        return f"{name} ₹{int(price)}"
+    return name
+
+def _referral_member_yesterday_earning(member_id):
+    """Member's own yesterday task earning. This is not referral commission."""
+    yday = str(get_ist_today() - timedelta(days=1))
+    try:
+        return round(float((daily_task_earnings.get(member_id) or {}).get(yday, 0) or 0), 2)
+    except Exception:
+        try:
+            return round(float((daily_task_earnings.get(str(member_id)) or {}).get(yday, 0) or 0), 2)
+        except Exception:
+            return 0.0
+
 async def user_referrals_level_cb(update, context):
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
     if q.data == "user_ref_l1":
         members = get_user_l1_display(uid)
-        title = "L1 MEMBERS - Direct Referrals"
+        title = "🟢 L1 MEMBERS - Direct Referrals"
     else:
         members = get_user_l2_display(uid)
-        title = "L2 MEMBERS - Level 2"
+        title = "🔵 L2 MEMBERS - Level 2 Referrals"
     if not members:
-        await q.message.reply_text(title + chr(10) + chr(10) + "No members yet. Share your referral link!")
+        await q.message.reply_text(title + chr(10) + chr(10) + "No members yet. Share your referral link!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Referrals", callback_data="my_ref")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
         return
     lines = [title, f"Total: {len(members)} members", ""]
-    for i, member_id in enumerate(members[:20], 1):
+    for i, member_id in enumerate(members[:30], 1):
         user = users_db.get(member_id, {}) or users_db.get(str(member_id), {})
-        name = user.get('name','Unknown')[:15]
-        username = user.get('username','')
-        plan_rec = _get_user_plan_record(member_id)
-        plan_name = plan_rec.get('name', plan_rec.get('plan_name','Free')) if plan_rec else 'Free'
-        joined = str(user.get('joined','') or user.get('reg_date',''))[:10] or 'Unknown'
-        bal = get_balance(member_id)
-        tasks = tasks_db.get(member_id, 0) or tasks_db.get(str(member_id),0)
-        lines.append(f"{i}. {name} ({member_id})")
-        lines.append(f"   @{username} | {plan_name} | Rs{bal:.0f} | Tasks:{tasks} | Joined:{joined}")
+        name = str(user.get("name") or "Unknown").strip()
+        plan_name = _referral_member_plan_display(member_id)
+        yday_earning = _referral_member_yesterday_earning(member_id)
+        # Intentionally show only Name + Plan + Yesterday Earning to the user.
+        lines.append(f"{i}. 👤 {name}")
+        lines.append(f"   💎 Plan: {plan_name}")
+        lines.append(f"   💰 Yesterday Earning: ₹{yday_earning:.2f}")
         lines.append("")
-    if len(members) > 20:
-        lines.append(f"... and {len(members)-20} more members")
-    lines.append("")
-    lines.append("You earn commission when they complete tasks & buy plans!")
-    await q.message.reply_text(chr(10).join(lines)[:4000])
+    if len(members) > 30:
+        lines.append(f"... and {len(members)-30} more members")
+    lines.append("📌 Yesterday Earning is the member's own task earning, not your commission.")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🟢 L1", callback_data="user_ref_l1"), InlineKeyboardButton("🔵 L2", callback_data="user_ref_l2")],
+        [InlineKeyboardButton("⬅️ Back to Referrals", callback_data="my_ref")],
+        [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+    ])
+    await q.message.reply_text(chr(10).join(lines)[:4000], reply_markup=kb)
 # === END L1/L2 30 LIMIT + USER PANEL REFERRALS ===
 
 # === PERMANENT REMOVED USER GLOBAL GUARD V2 ===
