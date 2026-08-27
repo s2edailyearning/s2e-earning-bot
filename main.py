@@ -4202,6 +4202,136 @@ async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
+async def edit_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: edit an existing shopping product by ID.
+
+    Usage:
+      /edit_shop_product ID|category|name|price|description|stock
+    All fields after ID are optional; leave a field blank to keep its current value.
+    """
+    if not is_admin(update.effective_user.id):
+        return
+    raw = update.message.text.replace("/edit_shop_product", "", 1).strip()
+    if not raw:
+        await update.message.reply_text(
+            "✏️ EDIT SHOP PRODUCT\n\n"
+            "Usage:\n"
+            "/edit_shop_product ID|category|name|price|description|stock\n\n"
+            "Example:\n"
+            "/edit_shop_product 1|Trending Products|H2O Lluck Water Bottle 800ML|70|BPA Free, Leak Proof|5\n\n"
+            "Leave any field blank to keep the old value."
+        )
+        return
+    try:
+        parts = raw.split("|")
+        pid = int(parts[0].strip())
+        prod = next((p for p in shopping_products_db if int(p.get("id", 0)) == pid), None)
+        if not prod:
+            await update.message.reply_text(f"❌ Product ID {pid} not found. Use /list_shop_products")
+            return
+
+        old_category = str(prod.get("category", "")).strip()
+        changed = []
+
+        def field(index, key):
+            return parts[index].strip() if len(parts) > index else ""
+
+        new_category = field(1, "category")
+        new_name = field(2, "name")
+        new_price = field(3, "price")
+        new_desc = field(4, "description")
+        new_stock = field(5, "stock")
+
+        if new_category:
+            if not any(str(c.get("name", "")).strip().lower() == new_category.lower() for c in shopping_categories_db):
+                add_shopping_category(new_category)
+            if old_category.lower() != new_category.lower():
+                prod["category"] = new_category
+                changed.append(f"Category: {old_category} → {new_category}")
+
+        if new_name:
+            if str(prod.get("name", "")) != new_name:
+                prod["name"] = new_name
+                changed.append(f"Name: {new_name}")
+
+        if new_price:
+            try:
+                price_num = float(new_price)
+                if price_num < 0:
+                    raise ValueError
+                price_value = int(price_num) if price_num.is_integer() else price_num
+                if prod.get("price") != price_value:
+                    prod["price"] = price_value
+                    changed.append(f"Price: ₹{price_value:g}")
+            except Exception:
+                await update.message.reply_text("❌ Price must be a valid number. Example: 70")
+                return
+
+        if new_desc:
+            prod["desc"] = new_desc
+            changed.append("Description updated")
+
+        if new_stock:
+            try:
+                stock_value = int(new_stock)
+                if stock_value < 0:
+                    raise ValueError
+                if int(prod.get("stock", 0) or 0) != stock_value:
+                    prod["stock"] = stock_value
+                    changed.append(f"Stock: {stock_value}")
+            except Exception:
+                await update.message.reply_text("❌ Stock must be a non-negative whole number. Example: 5")
+                return
+
+        save_data()
+        if not changed:
+            changed.append("No changes made")
+        await update.message.reply_text(
+            f"✅ PRODUCT UPDATED\n\n"
+            f"ID: {prod['id']}\n"
+            f"Category: {prod.get('category', '')}\n"
+            f"Product: {prod.get('name', '')}\n"
+            f"Price: ₹{float(prod.get('price', 0)):g}\n"
+            f"Stock: {prod.get('stock', 0)}\n"
+            f"Image: {'✅ Set' if prod.get('image') else '❌ Not set'}\n\n"
+            + "\n".join(f"• {x}" for x in changed)
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Edit error: {e}")
+
+
+async def delete_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: permanently remove a shopping product from the active catalog."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "🗑️ DELETE SHOP PRODUCT\n\n"
+            "Usage: /delete_shop_product <product_id>\n"
+            "Example: /delete_shop_product 1\n\n"
+            "This removes the product from the active Shopping catalog. Existing order history is not changed."
+        )
+        return
+    try:
+        pid = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Product ID must be a number. Example: /delete_shop_product 1")
+        return
+    index = next((i for i, p in enumerate(shopping_products_db) if int(p.get("id", 0)) == pid), None)
+    if index is None:
+        await update.message.reply_text(f"❌ Product ID {pid} not found. Use /list_shop_products")
+        return
+    prod = shopping_products_db.pop(index)
+    save_data()
+    await update.message.reply_text(
+        f"🗑️ Product Deleted\n\n"
+        f"ID: {pid}\n"
+        f"Product: {prod.get('name', 'Product')}\n"
+        f"Category: {prod.get('category', '')}\n\n"
+        "It is now removed from Shopping. Existing order history remains unchanged."
+    )
+
+
 async def set_shop_product_image_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin command: select an existing shop product, then send its photo."""
     if not is_admin(update.effective_user.id):
@@ -4247,10 +4377,13 @@ async def shop_product_image_photo_handler(update: Update, context: ContextTypes
         prod["image"] = photo_file_id
         save_data()
         context.user_data.pop("awaiting_shop_product_image", None)
+        # Do not touch set_image_task_id/task_images_db here. This upload belongs only
+        # to the Shopping product and must never become a Daily Task poster.
         await update.message.reply_text(
-            f"✅ Product image saved!\n"
+            f"✅ PRODUCT IMAGE UPDATED!\n"
             f"ID: {prod['id']}\n"
-            f"Product: {prod['name']}"
+            f"Product: {prod['name']}\n"
+            f"Category: {prod.get('category', '')}"
         )
     except Exception as e:
         print(f"shop_product_image_photo_handler error: {e}")
@@ -4260,11 +4393,19 @@ async def list_shop_products_cmd(update: Update, context: ContextTypes.DEFAULT_T
     if not is_admin(update.effective_user.id):
         return
     if not shopping_products_db:
-        await update.message.reply_text("No shop products yet!")
+        await update.message.reply_text("🛒 No shop products yet!")
         return
     msg = f"🛒 SHOP PRODUCTS - {len(shopping_products_db)} items\n\n"
-    for p in shopping_products_db[-20:]:
-        msg += f"ID {p['id']}: {p['category']} - {p['name']} Rs{p['price']} Stock {p['stock']}\n"
+    for p in shopping_products_db:
+        msg += (
+            f"🆔 ID: {p.get('id')}\n"
+            f"📂 Category: {p.get('category', '')}\n"
+            f"📦 Product: {p.get('name', '')}\n"
+            f"💰 Price: ₹{float(p.get('price', 0)):g}\n"
+            f"📊 Stock: {p.get('stock', 0)}\n"
+            f"🖼️ Image: {'✅ Set' if p.get('image') else '❌ Not set'}\n"
+            f"📝 {str(p.get('desc', ''))[:120]}\n\n"
+        )
     await update.message.reply_text(msg[:4000])
 
 
@@ -9795,8 +9936,10 @@ def main():
                     if context.user_data.get('awaiting_daily_screenshot'):
                         return
                     # Product-image upload has priority over task-poster handling.
-                    # Never let an admin product photo fall through to the task handler.
+                    # Handle it here as a second safety net so a product photo can NEVER
+                    # fall through and be saved as a Daily Task image.
                     if context.user_data.get('awaiting_shop_product_image'):
+                        await shop_product_image_photo_handler(update, context)
                         return
                     if not is_admin(uid):
                         return
@@ -10203,6 +10346,9 @@ def main():
             app.add_handler(CommandHandler("add_category", add_category_cmd))
             app.add_handler(CommandHandler("edit_category", edit_category_cmd))
             app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
+            app.add_handler(CommandHandler("edit_shop_product", edit_shop_product_cmd))
+            app.add_handler(CommandHandler("delete_shop_product", delete_shop_product_cmd))
+            app.add_handler(CommandHandler("remove_shop_product", delete_shop_product_cmd))
             app.add_handler(CommandHandler("set_shop_product_image", set_shop_product_image_cmd))
             app.add_handler(CommandHandler("set_orders_channel", set_orders_channel_cmd))
             app.add_handler(CommandHandler("set_shop_payment_link", set_shop_payment_link_cmd))
