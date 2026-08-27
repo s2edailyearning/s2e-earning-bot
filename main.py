@@ -1,4 +1,4 @@
-print("S2E BOT V70 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS - 2026-08-27 15:00 IST")
+print("S2E BOT V71 FINAL - SHOP CART + CHECKOUT + COD/UPI + ORDERS + 20% SHOPPING PROGRESS - 2026-08-27")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -1066,6 +1066,8 @@ shop_orders_db = []  # [{id, uid, items, total, address, payment, status, create
 shop_order_counter = 1
 shop_purchases_db = {}  # uid -> confirmed/delivered purchase history
 shop_addresses_db = {}  # uid -> saved delivery address
+# Shopping credit: 20% of an order is credited only after the order is DELIVERED.
+SHOPPING_CREDIT_PERCENT = 20.0
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -3197,6 +3199,105 @@ def _shop_cart_kb(cart):
     rows.append([InlineKeyboardButton("🛍️ Continue Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
     return InlineKeyboardMarkup(rows)
 
+def _shop_credit_for_order(order):
+    """Return the 20% Shopping Credit for one delivered order only."""
+    if not isinstance(order, dict) or str(order.get("status", "")).lower() != "delivered":
+        return 0.0
+    try:
+        return round(float(order.get("total", 0) or 0) * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+    except Exception:
+        return 0.0
+
+
+def _shopping_stats(uid):
+    """Calculate shopping progress from the real order ledger; no duplicate credit rows."""
+    uid = int(uid)
+    orders = [o for o in shop_orders_db if int(o.get("uid", -1)) == uid]
+    delivered = [o for o in orders if str(o.get("status", "")).lower() == "delivered"]
+    active = [o for o in orders if str(o.get("status", "")).lower() in (
+        "pending_admin_confirmation", "confirmed", "dispatched"
+    )]
+    rejected = [o for o in orders if str(o.get("status", "")).lower() == "rejected"]
+    delivered_total = round(sum(float(o.get("total", 0) or 0) for o in delivered), 2)
+    credit = round(delivered_total * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+    pending_value = round(sum(float(o.get("total", 0) or 0) for o in active), 2)
+    return {
+        "orders": orders,
+        "delivered": delivered,
+        "active": active,
+        "rejected": rejected,
+        "delivered_total": delivered_total,
+        "credit": credit,
+        "pending_value": pending_value,
+    }
+
+
+def _shopping_progress_text(uid):
+    st = _shopping_stats(uid)
+    delivered_count = len(st["delivered"])
+    active_count = len(st["active"])
+    text = (
+        "🛍️ SHOPPING BALANCE & PROGRESS\n\n"
+        f"💰 Shopping Balance (20% Credit): ₹{st['credit']:g}\n"
+        f"📦 Delivered Purchase Value: ₹{st['delivered_total']:g}\n"
+        f"🎯 Credit Rate: {SHOPPING_CREDIT_PERCENT:g}%\n\n"
+        f"✅ Delivered Orders: {delivered_count}\n"
+        f"⏳ Pending/Active Orders: {active_count}\n"
+    )
+    if st["delivered"]:
+        text += "\n📊 20% CREDIT STATUS\n"
+        for order in st["delivered"][-10:][::-1]:
+            credit = _shop_credit_for_order(order)
+            text += f"✅ Order #{order.get('id')} — ₹{float(order.get('total',0)):g} → +₹{credit:g} (20%)\n"
+        text += "\n🎉 Delivered orders are counted as COMPLETED.\n"
+    else:
+        text += "\n⏳ No delivered order yet. 20% credit will be added when Admin marks an order DELIVERED.\n"
+    if st["active"]:
+        text += f"\n⏳ Pending order value: ₹{st['pending_value']:g}\n"
+    return text[:4000]
+
+
+def _admin_shopping_summary_text():
+    orders = list(shop_orders_db)
+    pending = [o for o in orders if o.get("status") == "pending_admin_confirmation"]
+    confirmed = [o for o in orders if o.get("status") == "confirmed"]
+    dispatched = [o for o in orders if o.get("status") == "dispatched"]
+    delivered = [o for o in orders if o.get("status") == "delivered"]
+    active_uids = set()
+    for o in orders:
+        try:
+            active_uids.add(int(o.get("uid")))
+        except Exception:
+            pass
+    delivered_total = round(sum(float(o.get("total", 0) or 0) for o in delivered), 2)
+    credit_total = round(delivered_total * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+    return (
+        "🛍️ SHOPPING PROGRESS ADMIN\n\n"
+        f"👥 Shopping Users: {len(active_uids)}\n"
+        f"📦 Total Orders: {len(orders)}\n"
+        f"⏳ Pending Confirmation: {len(pending)}\n"
+        f"✅ Confirmed: {len(confirmed)}\n"
+        f"🚚 Dispatched: {len(dispatched)}\n"
+        f"🎉 Delivered: {len(delivered)}\n\n"
+        f"💰 Delivered Sales: ₹{delivered_total:g}\n"
+        f"🛍️ Total 20% Shopping Credit: ₹{credit_total:g}\n\n"
+        "20% credit is counted only after DELIVERED status."
+    )
+
+
+async def shopping_progress_cb(update, context):
+    q = update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    await q.message.reply_text(
+        _shopping_progress_text(q.from_user.id),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")],
+            [InlineKeyboardButton("🛒 Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")],
+        ])
+    )
+
+
 async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try: await q.answer()
@@ -3213,8 +3314,10 @@ async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cart = context.user_data.get("shopping_cart", {})
         count = sum(int(v) for v in cart.values()) if isinstance(cart, dict) else 0
         kb.append([InlineKeyboardButton(f"🛒 Cart ({count})", callback_data="shopping_cart")])
+        kb.append([InlineKeyboardButton("🛍️ Shopping Balance / 20% Progress", callback_data="shopping_progress")])
+        kb.append([InlineKeyboardButton("📦 My Purchases", callback_data="shop_purchases")])
         kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
-        await q.message.reply_text("🛒 SHOPPING\n\nSelect a category:", reply_markup=InlineKeyboardMarkup(kb))
+        await q.message.reply_text("🛒 SHOPPING\n\nSelect a category or check your Shopping Balance:", reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
         print(f"shopping_cb error {e}")
         await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
@@ -3588,12 +3691,29 @@ async def shop_purchases_cb(update, context):
     purchases=shop_purchases_db.get(uid,[])
     if not purchases:
         await q.message.reply_text("📦 MY PURCHASES\n\nNo confirmed purchases yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])); return
-    lines=["📦 MY PURCHASES\n"]
+    st = _shopping_stats(uid)
+    lines=[
+        "📦 MY PURCHASES",
+        "",
+        f"🛍️ Shopping Balance (20% delivered credit): ₹{st['credit']:g}",
+        f"🎉 Delivered purchase value: ₹{st['delivered_total']:g}",
+        "",
+    ]
     for p in purchases[-15:][::-1]:
-        lines.append(f"Order #{p.get('order_id')} — ₹{float(p.get('total',0)):g} — {str(p.get('status','')).upper()}")
+        status = str(p.get('status','')).upper()
+        lines.append(f"Order #{p.get('order_id')} — ₹{float(p.get('total',0)):g} — {status}")
         for it in p.get("items",[]): lines.append(f"  • {it.get('name')} × {it.get('qty')}")
+        if status == "DELIVERED":
+            credit = round(float(p.get('total',0) or 0) * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+            lines.append(f"  🛍️ 20% Credit: +₹{credit:g}")
         lines.append(f"  📅 {p.get('date','')}\n")
-    await q.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Shopping", callback_data="shopping")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]))
+    await q.message.reply_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛍️ Shopping Balance / 20% Progress", callback_data="shopping_progress")],
+            [InlineKeyboardButton("🛍️ Shopping", callback_data="shopping"), InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+        ])
+    )
 
 
 async def admin_shop_orders_cb(update, context):
@@ -3646,11 +3766,10 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
     q = update.callback_query
     try:
         await q.answer("🛒 Opening Shopping...")
-    except:
+    except Exception:
         pass
     try:
         uid = q.from_user.id
-        print(f"admin_view_shopping_cb called by {uid} is_admin={is_admin(uid)}")
         if not is_admin(uid):
             await q.message.reply_text("❌ Not admin!", reply_markup=admin_panel_keyboard())
             return
@@ -3660,6 +3779,8 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
             f"Shop Products: {len(shopping_products_db)}\n"
             f"Categories: {', '.join(get_shopping_categories())}\n"
             f"Product Pending: {len(product_promo_pending)}\n\n"
+            "Shopping order system: COD active | UPI: Update Soon\n"
+            "20% Shopping Credit: added only after DELIVERED\n\n"
             "Commands:\n"
             "/add_promo shop|owner|phone|place|category|title|desc|poster|offer|target|price\n"
             "/add_category <name>\n"
@@ -3667,15 +3788,84 @@ async def admin_view_shopping_cb(update: Update, context: ContextTypes.DEFAULT_T
             "/list_promos\n"
             "/list_shop_products\n"
         )
-        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📦 Shop Orders", callback_data="admin_shop_orders")],[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
+            [InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_shop_pending")],
+            [InlineKeyboardButton("🎉 Delivered Orders", callback_data="admin_shop_delivered")],
+            [InlineKeyboardButton("📦 Shop Orders", callback_data="admin_shop_orders")],
+            [InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")],
+        ])
+        await context.bot.send_message(chat_id=uid, text=msg[:4000], reply_markup=kb)
     except Exception as e:
-        print(f"admin_view_shopping_cb error {e}")
-        import traceback; traceback.print_exc()
+        print(f"admin_view_shopping_cb error: {e}")
         try:
             await context.bot.send_message(chat_id=q.from_user.id, text=f"Error in shopping admin: {e}")
         except:
             pass
 
+
+async def admin_shop_progress_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    if not is_admin(q.from_user.id): return
+    lines=[_admin_shopping_summary_text(), "", "👥 USER-WISE STATUS", ""]
+    uids=set()
+    for o in shop_orders_db:
+        try: uids.add(int(o.get("uid")))
+        except Exception: pass
+    for uid in sorted(uids, reverse=True)[:30]:
+        st=_shopping_stats(uid)
+        rec=users_db.get(uid) or users_db.get(str(uid)) or {}
+        name=rec.get("name") or rec.get("first_name") or "User"
+        pending=len(st["active"])
+        status="⏳ PENDING" if pending else ("✅ COMPLETE" if st["delivered"] else "— NO DELIVERY")
+        lines.append(f"👤 {name} | ID {uid}\n{status} | Delivered ₹{st['delivered_total']:g} | 20% Credit ₹{st['credit']:g} | Pending {pending}\n")
+    await q.message.reply_text("\n".join(lines)[:4000], reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏳ Pending Orders", callback_data="admin_shop_pending"), InlineKeyboardButton("🎉 Delivered", callback_data="admin_shop_delivered")],
+        [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
+    ]))
+
+
+async def admin_shop_pending_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    if not is_admin(q.from_user.id): return
+    pending=[o for o in shop_orders_db if o.get("status") in ("pending_admin_confirmation","confirmed","dispatched")]
+    if not pending:
+        text="⏳ PENDING SHOPPING ORDERS\n\nNo pending/active orders."
+    else:
+        chunks=["⏳ PENDING / ACTIVE SHOPPING ORDERS\n"]
+        for o in pending[-30:][::-1]:
+            chunks.append(_shop_order_text(o))
+            chunks.append("")
+        text="\n".join(chunks)
+    await q.message.reply_text(text[:4000], reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
+        [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
+    ]))
+
+
+async def admin_shop_delivered_cb(update, context):
+    q=update.callback_query
+    try: await q.answer()
+    except Exception: pass
+    if not is_admin(q.from_user.id): return
+    delivered=[o for o in shop_orders_db if o.get("status")=="delivered"]
+    if not delivered:
+        text="🎉 DELIVERED SHOPPING ORDERS\n\nNo delivered orders yet."
+    else:
+        chunks=["🎉 DELIVERED SHOPPING ORDERS\n"]
+        for o in delivered[-30:][::-1]:
+            credit=_shop_credit_for_order(o)
+            chunks.append(_shop_order_text(o)+f"\n\n🛍️ 20% Shopping Credit: +₹{credit:g}")
+            chunks.append("")
+        text="\n".join(chunks)
+    await q.message.reply_text(text[:4000], reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Shopping Progress", callback_data="admin_shop_progress")],
+        [InlineKeyboardButton("⬅️ Shopping Admin", callback_data="admin_view_shopping")],
+    ]))
 
 
 async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -9585,6 +9775,7 @@ def main():
                 await q.message.reply_text(text, reply_markup=kb)
             # V68: Shopping + Documents handlers (user and admin)
             app.add_handler(CallbackQueryHandler(shopping_cb, pattern=r"^shopping$"), group=-2)
+            app.add_handler(CallbackQueryHandler(shopping_progress_cb, pattern=r"^shopping_progress$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_category_cb, pattern=r"^shop_cat_.+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_product_cb, pattern=r"^shop_prod_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shopping_cart_cb, pattern=r"^shopping_cart$"), group=-2)
@@ -9598,6 +9789,9 @@ def main():
             app.add_handler(CallbackQueryHandler(shop_pay_cod_cb, pattern=r"^shop_pay_cod$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_purchases_cb, pattern=r"^shop_purchases$"), group=-2)
             app.add_handler(CallbackQueryHandler(admin_shop_orders_cb, pattern=r"^admin_shop_orders$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_shop_progress_cb, pattern=r"^admin_shop_progress$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_shop_pending_cb, pattern=r"^admin_shop_pending$"), group=-2)
+            app.add_handler(CallbackQueryHandler(admin_shop_delivered_cb, pattern=r"^admin_shop_delivered$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_confirm_cb, pattern=r"^shop_order_confirm_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_reject_cb, pattern=r"^shop_order_reject_\d+$"), group=-2)
             app.add_handler(CallbackQueryHandler(shop_order_dispatch_cb, pattern=r"^shop_order_dispatch_\d+$"), group=-2)
@@ -10154,10 +10348,6 @@ async def broadcast_message_router(update: Update, context: ContextTypes.DEFAULT
     await msg.reply_text(result)
 # === END CONTROLLED BROADCAST SYSTEM ===
 
-if __name__ == "__main__":
-    main()
-
-
 # ===== V19 FINAL FORCE SUPABASE - OVERRIDE ALL =====
 try:
     # Force Supabase as DATA_FILE if client was created successfully in V18
@@ -10182,3 +10372,6 @@ try:
 except:
     print("🔥🔥🔥 FINAL V19 - Supabase FORCED 🔥🔥🔥")
 # ===== END V19 =====
+
+if __name__ == "__main__":
+    main()
