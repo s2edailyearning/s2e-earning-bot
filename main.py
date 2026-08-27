@@ -1055,6 +1055,10 @@ product_promo_counter = 1
 product_promo_pending = {}
 # {uid: {campaign_id: approved_at}} - prevents duplicate Product Promotion payouts.
 product_promo_approved = {}
+shopping_categories_db = []  # [{"id":1, "name":"Electronics"}]
+shopping_products_db = []  # [{"id":1, "category":"Electronics", "name":"Mobile", "price":10000, "desc":"...", "image":"link", "stock":10}]
+shopping_products_counter = 1
+shopping_categories_counter = 1
 task_images_db = {}  # task_id -> file_id for poster - NEW FOR YOUR IMAGE
 support_banner_db = {}  # Support Plans banner image: {'file_id': '...'}
 
@@ -1218,7 +1222,7 @@ def save_data():
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
             "user_task_status", "task_notifications_sent", "task_notification_settings_db", "skip_db",
-            "promo_campaigns_db", "promo_campaign_counter", "promo_earnings_db", "product_promo_earnings_db",
+            "promo_campaigns_db", "promo_campaign_counter", "shopping_categories_db", "shopping_products_db", "shopping_products_counter", "shopping_categories_counter", "promo_earnings_db", "product_promo_earnings_db",
             "promo_views_db", "promo_pending", "product_promo_db", "product_promo_counter", "product_promo_pending", "product_promo_approved", "task_images_db", "support_banner_db", "team_accounts_db", "TEAM_MEMBER_DETAILS_CHANNEL",
             "admin_names_db", "support_plans_db", "pending_plan_purchases",
             "support_plan_image_file_id", "pending_plans",
@@ -1488,6 +1492,48 @@ def _product_reward_for_user(task, uid):
         if 'all' in rewards:
             return int(rewards['all'])
     return int(task.get('reward', 0) if isinstance(task, dict) else 0)
+
+
+def get_shopping_categories():
+    if not shopping_categories_db:
+        # default categories
+        return ["Electronics", "Clothing", "Food", "Gadgets", "Others"]
+    return [c.get("name") for c in shopping_categories_db]
+
+def get_products_by_category(category):
+    return [p for p in shopping_products_db if p.get("category","").lower() == category.lower()]
+
+def add_shopping_category(name):
+    global shopping_categories_counter
+    name = name.strip()
+    if not name:
+        return None
+    # check duplicate
+    for c in shopping_categories_db:
+        if c.get("name","").lower() == name.lower():
+            return c
+    cat = {"id": shopping_categories_counter, "name": name}
+    shopping_categories_db.append(cat)
+    shopping_categories_counter += 1
+    save_data()
+    return cat
+
+def add_shopping_product(category, name, price, desc, image_link="", stock=100):
+    global shopping_products_counter
+    prod = {
+        "id": shopping_products_counter,
+        "category": category.strip(),
+        "name": name.strip(),
+        "price": int(price) if str(price).isdigit() else float(price),
+        "desc": desc.strip(),
+        "image": image_link.strip(),
+        "stock": int(stock) if str(stock).isdigit() else 100,
+        "created_at": str(get_ist_today())
+    }
+    shopping_products_db.append(prod)
+    shopping_products_counter += 1
+    save_data()
+    return prod
 
 def get_active_product_promo_for_user(uid):
     """Return only the newest live Product Promotion for today.
@@ -3107,18 +3153,82 @@ async def shopping_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
     try:
-        uid = q.from_user.id
-        active_campaigns = get_active_promo_campaigns()
-        if not active_campaigns:
-            await q.message.reply_text("🛒 Shopping - No active campaigns now!", reply_markup=main_menu())
+        cats = get_shopping_categories()
+        if not shopping_products_db and not cats:
+            await q.message.reply_text("🛒 Shopping - No products yet! Admin will add soon.", reply_markup=main_menu())
             return
-        msg = f"🛒 SHOPPING - {len(active_campaigns)} active offers!\n\n"
-        for c in active_campaigns[:5]:
-            msg += f"🏪 {c.get('shop_name','Shop')} - {c.get('title','Offer')} - {c.get('place','')}\n"
-        await q.message.reply_text(msg[:4000], reply_markup=main_menu())
+        # Show categories
+        kb = []
+        for cat in cats:
+            count = len(get_products_by_category(cat))
+            kb.append([InlineKeyboardButton(f"📦 {cat} ({count})", callback_data=f"shop_cat_{cat}")])
+        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+        await q.message.reply_text("🛒 SHOPPING - Select Category:\n\nCategory wise products chudataniki category click chey!", reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
         print(f"shopping_cb error {e}")
         await q.message.reply_text("🛒 Shopping - Error, try /menu", reply_markup=main_menu())
+
+async def shop_category_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        cat = q.data.replace("shop_cat_", "", 1)
+        prods = get_products_by_category(cat)
+        if not prods:
+            kb = [[InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")], [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]]
+            await q.message.reply_text(f"📦 {cat} - No products in this category yet!", reply_markup=InlineKeyboardMarkup(kb))
+            return
+        msg = f"📦 {cat} - {len(prods)} Products:\n\n"
+        kb = []
+        for p in prods[:10]:
+            msg += f"ID {p['id']}: {p['name']} - Rs{p['price']}\n{p['desc'][:50]}\n\n"
+            kb.append([InlineKeyboardButton(f"{p['name']} - Rs{p['price']}", callback_data=f"shop_prod_{p['id']}")])
+        kb.append([InlineKeyboardButton("⬅️ Back to Categories", callback_data="shopping")])
+        kb.append([InlineKeyboardButton("🏠 Menu", callback_data="back_menu")])
+        await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        print(f"shop_category_cb error {e}")
+        await q.message.reply_text("Error loading category", reply_markup=main_menu())
+
+async def shop_product_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    try:
+        await q.answer()
+    except:
+        pass
+    try:
+        pid = int(q.data.replace("shop_prod_", "", 1))
+        prod = next((p for p in shopping_products_db if int(p.get("id",0))==pid), None)
+        if not prod:
+            await q.message.reply_text("Product not found!", reply_markup=main_menu())
+            return
+        msg = (
+            f"🛒 {prod['name']}\n\n"
+            f"📦 Category: {prod['category']}\n"
+            f"💰 Price: Rs{prod['price']}\n"
+            f"📝 Desc: {prod['desc']}\n"
+            f"📦 Stock: {prod['stock']}\n\n"
+            f"Buy cheyalanukunte Contact Us click chey!"
+        )
+        kb = [
+            [InlineKeyboardButton("💬 Buy Now - Contact Admin", url=get_contact_url())],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"shop_cat_{prod['category']}")],
+            [InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]
+        ]
+        if prod.get("image"):
+            try:
+                await q.message.reply_photo(photo=prod["image"], caption=msg[:1000], reply_markup=InlineKeyboardMarkup(kb))
+                return
+            except:
+                pass
+        await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        print(f"shop_product_cb error {e}")
+        await q.message.reply_text("Error", reply_markup=main_menu())
+
 
 async def docs_plans_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -3171,6 +3281,65 @@ async def admin_view_docs_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Users see these in Documents & Plans menu."
     )
     await q.message.reply_text(msg[:4000], reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Admin", callback_data="back_admin")]]))
+
+
+async def add_category_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        cats = get_shopping_categories()
+        await update.message.reply_text(f"Current Categories: {', '.join(cats)}\n\nUsage: /add_category <name>\nExample: /add_category Electronics")
+        return
+    name = " ".join(context.args).strip()
+    cat = add_shopping_category(name)
+    await update.message.reply_text(f"✅ Category Added: {cat['name']} (ID {cat['id']})\nAll categories: {', '.join(get_shopping_categories())}")
+
+async def add_shop_product_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    raw = update.message.text.replace("/add_shop_product","",1).strip()
+    if not raw or "|" not in raw:
+        await update.message.reply_text(
+            "🛒 ADD SHOP PRODUCT - Category Wise\n\n"
+            "Usage:\n"
+            "/add_shop_product category|name|price|desc|image_link|stock\n\n"
+            "Example:\n"
+            "/add_shop_product Electronics|Redmi Mobile|10000|6GB RAM 128GB|https://image.link|10\n\n"
+            "Example 2:\n"
+            "/add_shop_product Clothing|T-Shirt|500|Cotton T-Shirt L size||50\n\n"
+            "First create category with /add_category if not exists"
+        )
+        return
+    try:
+        parts = raw.split("|")
+        if len(parts) < 4:
+            await update.message.reply_text("Need at least category|name|price|desc")
+            return
+        category = parts[0].strip()
+        name = parts[1].strip()
+        price = parts[2].strip()
+        desc = parts[3].strip() if len(parts)>3 else ""
+        image = parts[4].strip() if len(parts)>4 else ""
+        stock = parts[5].strip() if len(parts)>5 else "100"
+        # auto add category if not exists
+        add_shopping_category(category)
+        prod = add_shopping_product(category, name, price, desc, image, stock)
+        await update.message.reply_text(f"✅ Product Added!\nID {prod['id']}: {prod['name']} - Rs{prod['price']}\nCategory: {prod['category']}\nStock: {prod['stock']}\n\nUsers can see in 🛒 Shopping -> {category}")
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+async def list_shop_products_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not shopping_products_db:
+        await update.message.reply_text("No shop products yet!")
+        return
+    msg = f"🛒 SHOP PRODUCTS - {len(shopping_products_db)} items\n\n"
+    for p in shopping_products_db[-20:]:
+        msg += f"ID {p['id']}: {p['category']} - {p['name']} Rs{p['price']} Stock {p['stock']}\n"
+    await update.message.reply_text(msg[:4000])
+
+
 
 async def restore_deleted_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -8968,6 +9137,10 @@ def main():
             app.add_handler(CommandHandler("myteam", my_team_cmd))
             app.add_handler(CommandHandler("userlist", userlist_cmd))
             app.add_handler(CommandHandler("deletelist", deletelist_cmd))
+            app.add_handler(CommandHandler("add_category", add_category_cmd))
+            app.add_handler(CommandHandler("add_shop_product", add_shop_product_cmd))
+            app.add_handler(CommandHandler("list_shop_products", list_shop_products_cmd))
+            app.add_handler(CommandHandler("shop_products", list_shop_products_cmd))
             app.add_handler(CommandHandler("restore", restore_deleted_user_cmd))
             app.add_handler(CommandHandler("undelete", restore_deleted_user_cmd))
             app.add_handler(CommandHandler("unremove", restore_deleted_user_cmd))
