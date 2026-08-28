@@ -5795,7 +5795,12 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             return ConversationHandler.END
         if file_unique_id:
             screenshot_hashes.add(file_unique_id)
-        pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id}
+        pending_daily[uid] = {
+            'date': today,
+            'task': task_to_use,
+            'screenshot_file_id': file_id,
+            'reward': float(get_task_reward_for_user(task_to_use, uid)),
+        }
         context.user_data.pop('awaiting_daily_screenshot', None)
         context.user_data.pop('daily_screenshot_task_id', None)
         if uid not in user_task_status:
@@ -5820,7 +5825,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
                             f"👤 Name: {user_name}\n"
                             f"🆔 User ID: {uid}\n"
                             f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
-                            f"💰 Reward: ₹{task_to_use.get('reward',0)}\n"
+                            f"💰 Reward: ₹{float(pending_daily.get(uid, {}).get('reward', get_task_reward_for_user(task_to_use, uid))):g}\n"
                             f"📅 {get_ist_today()}"
                         ),
                         reply_markup=kb_chan
@@ -6158,7 +6163,7 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_first=tasks_db.get(target_id,0)==0
         task=pending_daily[target_id].get('task',{})
         base_reward=int(task.get('reward',0) or 0)
-        reward=get_task_reward_for_user(task, target_id)
+        reward=float(pending_daily[target_id].get('reward', get_task_reward_for_user(task, target_id)))
         today=pending_daily[target_id].get('date')
         tasks_db[target_id]=tasks_db.get(target_id,0)+1
         if target_id not in daily_task_count: daily_task_count[target_id]={}
@@ -7044,7 +7049,7 @@ async def admin_approve_daily_cb(update: Update, context: ContextTypes.DEFAULT_T
         is_first=tasks_db.get(uid,0)==0
         task_obj=pending_daily[uid].get('task',{})
         task_id=task_obj.get('id')
-        reward=task_obj.get('reward',0)
+        reward=float(pending_daily[uid].get('reward', get_task_reward_for_user(task_obj, uid)))
         today=pending_daily[uid].get('date')
         tasks_db[uid]=tasks_db.get(uid,0)+1
         if uid not in daily_task_count: daily_task_count[uid]={}
@@ -8545,7 +8550,7 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             uid = int(sub.get('uid', key) or key)
             task = sub.get('task', {}) or {}
             task_id = task.get('id')
-            reward = float(get_task_reward_for_user(task, uid))
+            reward = float(sub.get('reward', get_task_reward_for_user(task, uid)))
             task_number = task.get('task_number', task_id or '?')
             task_day = str(sub.get('date') or today)
             admin_channel_id = sub.get('admin_channel_id')
@@ -10034,11 +10039,28 @@ async def approve_all_pending_cmd(update, context):
         approved=0
         for tid in list(pending_daily.keys())[:50]:
             try:
+                pending = pending_daily.get(tid, {})
+                task = pending.get('task', {}) if isinstance(pending, dict) else {}
+                reward = float(
+                    pending.get('reward', get_task_reward_for_user(task, tid))
+                    if isinstance(pending, dict)
+                    else get_task_reward_for_user(task, tid)
+                )
                 tasks_db[tid]=tasks_db.get(tid,0)+1
                 today=str(get_ist_today())
                 if tid not in daily_task_count:
                     daily_task_count[tid]={}
                 daily_task_count[tid][today]=daily_task_count[tid].get(today,0)+1
+                add_today_task_earning(tid, reward, today)
+                task_id = task.get('id') if isinstance(task, dict) else None
+                if task_id is not None:
+                    user_task_status.setdefault(tid, {})[task_id] = {
+                        'status': 'completed',
+                        'completed_at': get_ist_now(),
+                        'reward': reward,
+                        'approved_at': get_ist_now(),
+                    }
+                record_task_referral_commissions(tid, reward)
                 del pending_daily[tid]
                 approved+=1
             except:
@@ -10585,7 +10607,13 @@ def main():
                     if file_unique_id:
                         screenshot_hashes.add(file_unique_id)
                     today = str(get_ist_today())
-                    pending_daily[uid] = {'date': today, 'task': task_to_use, 'screenshot_file_id': file_id, 'is_missed_reopen': bool(context.user_data.get('missed_reopened_task_id'))}
+                    pending_daily[uid] = {
+                        'date': today,
+                        'task': task_to_use,
+                        'screenshot_file_id': file_id,
+                        'is_missed_reopen': bool(context.user_data.get('missed_reopened_task_id')),
+                        'reward': float(get_task_reward_for_user(task_to_use, uid)),
+                    }
                     if uid not in user_task_status:
                         user_task_status[uid] = {}
                     task_id_for_status = task_to_use.get('id', 0)
@@ -10608,7 +10636,7 @@ def main():
                                 f"👤 Name: {user_name}\n"
                                 f"🆔 User ID: {uid}\n"
                                 f"📋 Task {task_to_use.get('task_number',1)}: {task_to_use.get('title','Daily')}\n"
-                                f"💰 Reward: ₹{task_to_use.get('reward',0)}\n"
+                                f"💰 Reward: ₹{float(pending_daily.get(uid, {}).get('reward', get_task_reward_for_user(task_to_use, uid))):g}\n"
                                 f"📅 {get_ist_today()}"
                             ),
                             reply_markup=kb_chan
