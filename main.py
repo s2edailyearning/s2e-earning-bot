@@ -6096,11 +6096,8 @@ async def handle_task_image_upload(update: Update, context: ContextTypes.DEFAULT
             if m:
                 task_id = int(m.group(1))
         if not task_id:
-            if scheduled_tasks_db:
-                task_id = scheduled_tasks_db[-1]['id']
-            else:
-                await update.message.reply_text("No task found! Use /list_tasks first! ")
-                return ConversationHandler.END
+            await update.message.reply_text("No task selected! Use /set_task_image <task_id> first.")
+            return ConversationHandler.END
         file_id = None
         if update.message.photo:
             file_id = update.message.photo[-1].file_id
@@ -9934,11 +9931,59 @@ async def remove_task_cmd(update, context):
     try:
         if update.effective_user.id not in ADMIN_ID_LIST:
             return
+        if not context.args:
+            await update.message.reply_text("Usage: /remove_task <task_id>")
+            return
         tid = int(context.args[0])
-        global scheduled_tasks_db
-        scheduled_tasks_db=[t for t in scheduled_tasks_db if t['id']!=tid]
+
+        # Remove from Scheduled/Daily Tasks.
+        before = len(scheduled_tasks_db)
+        scheduled_tasks_db[:] = [t for t in scheduled_tasks_db if int(t.get('id', -1)) != tid]
+        removed_scheduled = before - len(scheduled_tasks_db)
+
+        # Remove the same task from every user's Missed Tasks.
+        removed_missed = 0
+        for uid in list(missed_tasks_db.keys()):
+            old_list = missed_tasks_db.get(uid, [])
+            new_list = [
+                t for t in old_list
+                if not (isinstance(t, dict) and int(t.get('id', -1)) == tid)
+            ]
+            removed_missed += len(old_list) - len(new_list)
+            if new_list:
+                missed_tasks_db[uid] = new_list
+            else:
+                missed_tasks_db.pop(uid, None)
+                missed_tasks_db.pop(str(uid), None)
+
+        # Remove stale status and pending verification for this task.
+        for uid in list(user_task_status.keys()):
+            status_map = user_task_status.get(uid)
+            if isinstance(status_map, dict):
+                status_map.pop(tid, None)
+                status_map.pop(str(tid), None)
+
+        removed_pending = 0
+        for key, pending in list(pending_daily.items()):
+            task = pending.get('task', {}) if isinstance(pending, dict) else {}
+            try:
+                if int(task.get('id', -1)) == tid:
+                    pending_daily.pop(key, None)
+                    removed_pending += 1
+            except Exception:
+                pass
+
+        # Remove image mapping too, so a future task cannot reuse the deleted task image.
+        task_images_db.pop(tid, None)
+        task_images_db.pop(str(tid), None)
+
         save_data()
-        await update.message.reply_text(f"Removed {tid}")
+        await update.message.reply_text(
+            f"✅ Task {tid} removed completely.\n"
+            f"Scheduled: {removed_scheduled}\n"
+            f"Missed: {removed_missed}\n"
+            f"Pending: {removed_pending}"
+        )
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
 
@@ -10411,6 +10456,11 @@ def main():
             async def v56_task_image_simple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     uid = update.effective_user.id
+                    # Product Promotion/Broadcast media must never fall through as a Daily Task image.
+                    if uid in BROADCAST_PENDING_ADMINS:
+                        return
+                    if context.user_data.get('awaiting_product_video') or context.user_data.get('awaiting_product_promo_video') or context.user_data.get('awaiting_product_promo_media') or context.user_data.get('product_promo_upload_mode'):
+                        return
                     # V67 FIX: A broadcast message is also allowed to be a photo.
                     # The broadcast router runs first (group -90), then this task-photo
                     # handler would otherwise see the same photo and attach it to the
@@ -10452,10 +10502,9 @@ def main():
                                 except:
                                     pass
                     if not task_id:
-                        if scheduled_tasks_db:
-                            task_id = scheduled_tasks_db[-1]['id']
-                        else:
-                            return
+                        # Do not guess the latest task. This prevents Product Promotion
+                        # and Broadcast media from being incorrectly saved as a task image.
+                        return
                     file_id = None
                     if update.message.photo:
                         file_id = update.message.photo[-1].file_id
