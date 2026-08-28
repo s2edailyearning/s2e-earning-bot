@@ -1,4 +1,4 @@
-print("S2E BOT V73 FINAL - 5PLANS FIX + REFERRAL FIX + ENGLISH MSG + PER-PLAN REWARD - 2026-08-28")
+print("S2E BOT V74 FINAL - 5PLANS FIX + REFERRAL FIX + ENGLISH MSG + PER-PLAN REWARD - 2026-08-28")
 # Previous build version marker removed; V65 is the active build.
 
 # S2E V15 FINAL - 2026-08-25 - NEW SUPABASE KEYS + PYTHON 3.11 + RENDER FIX
@@ -10888,6 +10888,8 @@ def main():
             app.add_handler(CommandHandler("test_referral", test_referral_cmd))
             app.add_handler(CommandHandler("test_plan", test_plan_cmd))
             app.add_handler(CommandHandler("chain", referral_chain_cmd))
+            app.add_handler(CommandHandler("debug_referral", debug_referral_cmd))
+            app.add_handler(CommandHandler("check_referral", check_referral_cmd))
             app.add_handler(CommandHandler("check_wallet", check_wallet_cmd))
             app.add_handler(CommandHandler("wallet_info", get_balance_cmd))
             app.add_handler(CommandHandler("remove_balance", remove_balance_cmd))
@@ -11255,6 +11257,48 @@ async def referral_chain_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             l1, l2 = get_referral_chain(uid)
             msg += f"\nDownlines L1({len(l1)}): {l1[:3]} L2({len(l2)}): {l2[:3]}"
         await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def debug_referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /debug_referral <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+        parent = referral_map.get(uid) or referral_map.get(str(uid))
+        code = referral_codes_db.get(uid) or referral_codes_db.get(str(uid))
+        l1 = []
+        for child, par in list(referral_map.items()):
+            try:
+                if int(par) == uid:
+                    l1.append(int(child))
+            except:
+                continue
+        msg = f"DEBUG REFERRAL {uid}\nParent: {parent}\nCode: {code}\nL1: {len(l1)} {l1[:5]}\nMap size: {len(referral_map)}"
+        if parent:
+            puser = users_db.get(int(parent)) or {}
+            msg += f"\nParent name: {puser.get('name','Unknown')}"
+        else:
+            msg += "\nParent NONE - Direct"
+        await update.message.reply_text(msg[:4000])
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+
+
+async def check_referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /check_referral <user_id>")
+        return
+    try:
+        uid = int(context.args[0])
+        parent = referral_map.get(uid) or referral_map.get(str(uid)) or "None"
+        await update.message.reply_text(f"CHECK {uid} -> Parent: {parent}")
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
