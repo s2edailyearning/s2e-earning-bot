@@ -290,42 +290,54 @@ def setup_smart_auto(application):
 
 # === 5 PLANS TASK SYSTEM ===
 def get_user_plan_id(uid):
+    """Return the CURRENT 5-plan ID: 0=Free, 1=Starter, 2=Pro, 3=Elite, 4=VIP.
+    Saved activation plan_id is authoritative; name mapping is only a legacy fallback.
+    """
     try:
         record = _get_user_plan_record(uid) if '_get_user_plan_record' in globals() else None
         if not record:
             return 0
         if isinstance(record, dict):
-            if 'plan_id' in record:
+            if record.get('plan_id') is not None:
                 return int(record['plan_id'])
-            p = record.get('plan', 'free').lower()
+            p = str(record.get('plan_name') or record.get('name') or record.get('plan') or 'free').strip().lower()
         else:
-            p = str(record).lower()
-        if p in ['free', '0']:
+            p = str(record).strip().lower()
+        if p in ('free', '0', 'no plan'):
             return 0
-        elif p in ['basic', '199', '1']:
+        if p in ('starter', 'basic', '199', '499', '1'):
             return 1
-        elif p in ['premium', '499', '2']:
+        if p in ('pro', 'premium', '999', '1999', '2'):
             return 2
-        elif p in ['pro', '999', '3']:
+        if p in ('elite', '3', '4999'):
             return 3
-        elif p in ['vip', '1999', '4']:
+        if p in ('vip', '4', '9999'):
             return 4
-        else:
-            try:
-                return int(p)
-            except:
-                return 0
-    except:
+        try:
+            return int(p) if int(p) in (0, 1, 2, 3, 4) else 0
+        except Exception:
+            return 0
+    except Exception:
         return 0
 
 def get_task_reward_for_user(task, uid):
-    """V69 FIX: Return ONLY fixed amount set by admin - No VIP bonus!"""
+    """Return the task's plan-wise reward when supplied; otherwise use its fixed reward."""
     try:
-        # Only use task's fixed reward, no extra
-        reward = int(task.get('reward', 5) or 5)
-        return reward
-    except:
-        return 5
+        rewards = task.get('rewards', {}) if isinstance(task, dict) else {}
+        pid = get_user_plan_id(uid)
+        if isinstance(rewards, dict):
+            if pid in rewards:
+                return int(rewards[pid])
+            if str(pid) in rewards:
+                return int(rewards[str(pid)])
+            if 'all' in rewards:
+                return int(rewards['all'])
+        return int(task.get('reward', 5) or 5)
+    except Exception:
+        try:
+            return int(task.get('reward', 5) or 5)
+        except Exception:
+            return 5
 
 
 
@@ -351,16 +363,16 @@ def get_tasks_for_today_filtered(uid):
         elif isinstance(audience, int):
             if audience == 0 or audience == plan_id:
                 filtered.append(task)
-        elif str(audience).lower() in ['1', 'basic', '199']:
+        elif str(audience).lower() in ['1', 'starter', 'basic', '199', '499']:
             if plan_id in [1,2,3,4]:
                 filtered.append(task)
-        elif str(audience).lower() in ['2', 'premium', '499']:
+        elif str(audience).lower() in ['2', 'pro', 'premium', '999', '1999']:
             if plan_id in [2,3,4]:
                 filtered.append(task)
-        elif str(audience).lower() in ['3', 'pro', '999']:
+        elif str(audience).lower() in ['3', 'elite', '4999']:
             if plan_id in [3,4]:
                 filtered.append(task)
-        elif str(audience).lower() in ['4', 'vip', '1999']:
+        elif str(audience).lower() in ['4', 'vip', '9999']:
             if plan_id == 4:
                 filtered.append(task)
         else:
@@ -1091,6 +1103,8 @@ promo_pending = {}
 product_promo_db = []
 product_promo_counter = 1
 product_promo_pending = {}
+# Fixed Product Promotion rewards by CURRENT plan ID. Admin does not enter rewards.
+PRODUCT_PROMOTION_REWARDS = {0: 10, 1: 30, 2: 80, 3: 200, 4: 500}
 # {uid: {campaign_id: approved_at}} - prevents duplicate Product Promotion payouts.
 product_promo_approved = {}
 shopping_categories_db = []  # [{"id":1, "name":"Electronics"}]
@@ -1544,16 +1558,9 @@ def add_promo_campaign(shop_name, owner_name, phone, place, category, title, des
     return campaign
 
 def _product_reward_for_user(task, uid):
-    rewards = task.get('rewards', {}) if isinstance(task, dict) else {}
-    if isinstance(rewards, dict):
-        pid = get_user_plan_id(uid)
-        if pid in rewards:
-            return int(rewards[pid])
-        if str(pid) in rewards:
-            return int(rewards[str(pid)])
-        if 'all' in rewards:
-            return int(rewards['all'])
-    return int(task.get('reward', 0) if isinstance(task, dict) else 0)
+    """Product Promotion reward is ALWAYS fixed by the user's current plan."""
+    pid = get_user_plan_id(uid)
+    return int(PRODUCT_PROMOTION_REWARDS.get(pid, PRODUCT_PROMOTION_REWARDS[0]))
 
 
 def get_shopping_categories():
@@ -3251,8 +3258,9 @@ async def admin_product_promo_cb(update: Update, context: ContextTypes.DEFAULT_T
             f"Screenshot window: {t.get('screenshot_open','-')} → {t.get('screenshot_close','-')}\n"
             f"{reward_text}\n"
             f"Pending screenshots: {pending}\n\n"
+            "Fixed rewards: Free ₹10 | Starter ₹30 | Pro ₹80 | Elite ₹200 | VIP ₹500\n\n"
             "Create/replace today's campaign:\n"
-            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
+            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE | INSTRUCTIONS\n\n"
             "Then send the promotion VIDEO to this bot."
         )
     else:
@@ -3260,8 +3268,9 @@ async def admin_product_promo_cb(update: Update, context: ContextTypes.DEFAULT_T
             "📢 PRODUCT PROMOTION ADMIN\n\n"
             "No active Product Promotion for today.\n"
             f"Pending screenshots: {pending}\n\n"
+            "Fixed rewards: Free ₹10 | Starter ₹30 | Pro ₹80 | Elite ₹200 | VIP ₹500\n\n"
             "Create one with:\n"
-            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
+            "/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE | INSTRUCTIONS\n\n"
             "Then send the promotion VIDEO to this bot."
         )
     kb = InlineKeyboardMarkup([
@@ -5077,81 +5086,120 @@ async def product_screenshot_cb(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 async def add_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid=update.effective_user.id
+    """Create an OWN Product Promotion campaign using fixed plan-wise rewards.
+
+    Admin only enters: download deadline, screenshot window, title and instructions.
+    Rewards are always Free ₹10 / Starter ₹30 / Pro ₹80 / Elite ₹200 / VIP ₹500.
+    """
+    uid = update.effective_user.id
     if not is_admin(uid):
-        await update.message.reply_text("❌ Admin only!"); return
-    text=update.message.text.replace('/add_product_promo','',1).strip()
+        await update.message.reply_text("❌ Admin only!")
+        return
+
+    text = update.message.text.replace('/add_product_promo', '', 1).strip()
     if not text:
         await update.message.reply_text(
-            "Usage:\n/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE REWARD_SPEC | INSTRUCTIONS\n\n"
-            "Example:\n/add_product_promo 10:00AM 8:00PM 10:00PM My Product free:10,basic:15,premium:20,pro:25,vip:30 | Download the video, put it on WhatsApp Status, keep it for 6 hours, then send screenshot during 8PM-10PM.\n\nThen send the video to the bot."
-        ); return
+            "Usage:\n/add_product_promo DOWNLOAD_DEADLINE SCREENSHOT_OPEN SCREENSHOT_CLOSE TITLE | INSTRUCTIONS\n\n"
+            "Example:\n/add_product_promo 10:00AM 8:00PM 10:00PM My Product | Download the video, put it on WhatsApp Status and send screenshot during 8PM-10PM.\n\n"
+            "Fixed reward: Free ₹10 | Starter ₹30 | Pro ₹80 | Elite ₹200 | VIP ₹500\n\n"
+            "Then send the promotion VIDEO to this bot."
+        )
+        return
+
     if '|' in text:
-        left, desc=text.split('|',1); desc=desc.strip()
+        left, desc = text.split('|', 1)
+        desc = desc.strip() or "Download the video and put it on your WhatsApp Status. Send the screenshot only during the scheduled screenshot window."
     else:
-        left, desc=text, "Download the video and put it on your WhatsApp Status. Send the screenshot only during the scheduled screenshot window."
-    import re
-    urls=re.findall(r'https?://\S+', left)
-    parts=left.split()
-    if len(parts)<5:
-        await update.message.reply_text("Need: download_deadline screenshot_open screenshot_close title reward_spec | instructions"); return
-    download_deadline, shot_open, shot_close=parts[:3]
-    reward_spec=parts[-1]
-    title=' '.join(parts[3:-1]).strip()
-    rewards={}; base=0
+        left = text
+        desc = "Download the video and put it on your WhatsApp Status. Send the screenshot only during the scheduled screenshot window."
+
+    parts = left.split()
+    if len(parts) < 4:
+        await update.message.reply_text(
+            "❌ Invalid format.\n\n"
+            "Use: /add_product_promo 10:00AM 8:00PM 10:00PM My Product | Instructions\n\n"
+            "Fixed reward: Free ₹10 | Starter ₹30 | Pro ₹80 | Elite ₹200 | VIP ₹500"
+        )
+        return
+
+    download_deadline, shot_open, shot_close = parts[:3]
+    title = ' '.join(parts[3:]).strip() or 'Product Promotion'
     try:
-        if ':' in reward_spec:
-            for piece in reward_spec.split(','):
-                k,v=piece.split(':',1); v=int(v)
-                kl=k.strip().lower()
-                pid={'free':0,'basic':1,'premium':2,'pro':3,'vip':4}.get(kl, int(kl) if kl.isdigit() else 0)
-                rewards[pid]=v
-            base=rewards.get(0,next(iter(rewards.values())))
-        else:
-            base=int(reward_spec); rewards={'all':base}
+        d = parse_time_str(download_deadline)
+        so = parse_time_str(shot_open)
+        sc = parse_time_str(shot_close)
+        if not d or not so or not sc:
+            raise ValueError('Invalid time')
     except Exception:
-        await update.message.reply_text("❌ Invalid reward. Example: free:10,basic:15,premium:20,pro:25,vip:30"); return
-    try:
-        d=parse_time_str(download_deadline); so=parse_time_str(shot_open); sc=parse_time_str(shot_close)
-        if not d or not so or not sc: raise ValueError('Invalid time')
-    except Exception:
-        await update.message.reply_text("❌ Invalid time. Use examples 10:00AM 8:00PM 10:00PM"); return
+        await update.message.reply_text("❌ Invalid time. Use examples 10:00AM 8:00PM 10:00PM")
+        return
+
     global product_promo_counter
-    # Product Promotion uses one live campaign slot. Archive every older
-    # campaign first so an old promotion/video can never reappear.
     today = str(get_ist_today())
+    # Only one live OWN Product Promotion campaign is allowed for today.
     for old in product_promo_db:
         if isinstance(old, dict) and old.get('date') == today and old.get('status') in ('active', 'waiting_video'):
             old['status'] = 'archived'
             old['archived_at'] = get_ist_now()
 
-    task={'id':product_promo_counter,'date':today,'title':title or 'Product Promotion','description':desc,'download_deadline':d.strftime('%H:%M'),'screenshot_open':so.strftime('%H:%M'),'screenshot_close':sc.strftime('%H:%M'),'reward':base,'rewards':rewards,'video_file_id':None,'status':'waiting_video','created_at':get_ist_now(),'created_by':uid}
-    product_promo_db.append(task); product_promo_counter+=1
-    # Persist the pending upload target in the campaign itself. context.user_data
-    # is per-session and can be lost on a restart; DB state must remain sufficient
-    # to attach the next admin video to this exact campaign.
-    context.user_data['awaiting_product_video']=task['id']
+    rewards = dict(PRODUCT_PROMOTION_REWARDS)
+    task = {
+        'id': product_promo_counter,
+        'date': today,
+        'title': title,
+        'description': desc,
+        'download_deadline': d.strftime('%H:%M'),
+        'screenshot_open': so.strftime('%H:%M'),
+        'screenshot_close': sc.strftime('%H:%M'),
+        'reward': rewards[0],
+        'rewards': rewards,
+        'video_file_id': None,
+        'status': 'waiting_video',
+        'created_at': get_ist_now(),
+        'created_by': uid,
+    }
+    product_promo_db.append(task)
+    product_promo_counter += 1
+    context.user_data['awaiting_product_video'] = task['id']
+
     try:
         async def _auto_cancel_job(ctx):
             try:
                 tid = ctx.job.data['tid']
-                still = [x for x in product_promo_db if int(x.get('id',-1))==int(tid) and x.get('status')=='waiting_video']
+                still = [x for x in product_promo_db if int(x.get('id', -1)) == int(tid) and x.get('status') == 'waiting_video']
                 if still:
                     for x in still:
-                        try: product_promo_db.remove(x)
-                        except: pass
-                    try: save_data()
-                    except: pass
+                        try:
+                            product_promo_db.remove(x)
+                        except Exception:
+                            pass
+                    try:
+                        save_data()
+                    except Exception:
+                        pass
                     try:
                         await ctx.bot.send_message(chat_id=ctx.job.data['admin_id'], text=f"⏰ Promo {tid} auto-cancelled - video not sent in 5min")
-                    except: pass
+                    except Exception:
+                        pass
             except Exception as e:
                 print(f"auto cancel err {e}")
         context.job_queue.run_once(_auto_cancel_job, 300, data={'tid': task['id'], 'admin_id': uid}, name=f"cancel_promo_{task['id']}")
     except Exception as e:
         print(f"cancel job fail {e}")
+
     save_data()
-    await update.message.reply_text(f"✅ Product Promotion ID {task['id']} created.\n\n🎥 Now send the promotion VIDEO to this bot.\n\nDownload deadline: {task['download_deadline']}\nScreenshot: {task['screenshot_open']} → {task['screenshot_close']}\n{_product_reward_text(task,uid)}")
+    await update.message.reply_text(
+        f"✅ Product Promotion ID {task['id']} created.\n\n"
+        f"🎥 Now send the promotion VIDEO to this bot.\n\n"
+        f"Download deadline: {task['download_deadline']}\n"
+        f"Screenshot: {task['screenshot_open']} → {task['screenshot_close']}\n\n"
+        "💰 FIXED REWARDS\n"
+        "🆓 Free: ₹10\n"
+        "🥉 Starter: ₹30\n"
+        "💎 Pro: ₹80\n"
+        "👑 Elite: ₹200\n"
+        "💠 VIP: ₹500"
+    )
 
 async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -5250,7 +5298,8 @@ async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sub=product_promo_pending.get(uid)
     if not sub or int(sub.get('promo_id',-1))!=tid:
         await q.message.reply_text('❌ Product submission not found or already processed.'); return
-    reward=int(sub.get('reward',0) or 0)
+    campaign = next((x for x in product_promo_db if isinstance(x, dict) and int(x.get('id', -1)) == tid), None)
+    reward = _product_reward_for_user(campaign or {}, uid)
     approved_map = product_promo_approved.setdefault(uid, {})
     if str(tid) in approved_map or tid in approved_map:
         product_promo_pending.pop(uid, None)
@@ -9449,7 +9498,7 @@ async def add_task_5plans_cmd(update, context):
         args, description = _split_task_description_args(context.args)
         if len(args) < 5:
             await update.message.reply_text(
-                "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,1:10,2:15,3:20,4:30 all"
+                "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,starter:10,pro:15,elite:20,vip:30 all"
             )
             return
         open_time, close_time = args[0], args[1]
@@ -9482,13 +9531,13 @@ async def add_task_5plans_cmd(update, context):
                         v = int(v.strip())
                         if k in ['free', '0']:
                             rewards_dict[0] = v
-                        elif k in ['1', 'basic', '199']:
+                        elif k in ['1', 'starter', 'basic', '199', '499']:
                             rewards_dict[1] = v
-                        elif k in ['2', 'premium', '499']:
+                        elif k in ['2', 'pro', 'premium', '999', '1999']:
                             rewards_dict[2] = v
-                        elif k in ['3', 'pro', '999']:
+                        elif k in ['3', 'elite', '999', '4999']:
                             rewards_dict[3] = v
-                        elif k in ['4', 'vip', '1999']:
+                        elif k in ['4', 'vip', '9999']:
                             rewards_dict[4] = v
                         elif k == 'all':
                             rewards_dict['all'] = v
@@ -9670,10 +9719,10 @@ async def add_bulk_tasks_cmd(update, context):
             "/add_bulk\n"
             "14:00 15:00 WatchAd https://t.me/... 10\n"
             "15:00 16:00 WatchAd2 https://t.me/... 10 all\n"
-            "16:00 17:00 PremiumTask https://t.me/... 20 basic\n\n"
+            "16:00 17:00 ProTask https://t.me/... 20 starter\n\n"
             "Amount separation:\n"
             "• all/free = Free + All paid users can do\n"
-            "• basic/premium/pro/vip = Only that plan & higher\n"
+            "• starter/pro/elite/vip = Only that plan & higher\n"
             "• Reward 10 = Free, 15-20 = Paid plans\n\n"
             "Example:\n"
             "/add_task_all 14:00 15:00 WatchAd link 10 all\n"
@@ -9760,8 +9809,8 @@ async def add_task_manual_cmd(update, context):
         if len(args) < 5:
             await update.message.reply_text(
                 "Usage: /add_task_manual <open> <close> <title> <link> <reward> [audience]\n"
-                "Audience: all, free, 0,1,2,3,4, basic, premium\n"
-                "Ex: /add_task_manual 10:00 11:00 Title https://t.me/... 10 premium"
+                "Audience: all, free, 0,1,2,3,4, starter, pro, elite, vip\n"
+                "Ex: /add_task_manual 10:00 11:00 Title https://t.me/... 10 pro"
             )
             return
         open_time, close_time, title, link = args[0], args[1], args[2], args[3]
