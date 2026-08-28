@@ -2513,34 +2513,64 @@ def _get_or_create_referral_code(uid):
     return ""
 
 def _resolve_referral_arg(arg):
-    """Resolve new opaque referral codes and keep old numeric links working."""
+    """Resolve new opaque referral codes and keep old numeric links working - FIXED for parent none bug."""
     try:
         raw = str(arg or "").strip()
         if not raw:
             return None
+        # Telegram may pass code with extra params like ?start=S2E... or ref_S2E... - extract clean code
+        # Remove common prefixes
+        for prefix in ["ref_", "ref-", "start_", "start-"]:
+            if raw.lower().startswith(prefix):
+                raw = raw[len(prefix):]
+        # If arg contains = (like ref=S2E...), take after =
+        if "=" in raw:
+            raw = raw.split("=")[-1]
+        raw = raw.strip().strip("?&= ")
+        if not raw:
+            return None
         if raw.isdigit():
-            return int(raw)  # backward compatibility for old referral links
-        code = raw.upper()
-        # Permanent team referral codes TEAM01..TEAM05 resolve directly.
+            return int(raw)
+        code = raw.upper().strip()
+        # Team codes
         if code in TEAM_UIDS:
             ensure_team_accounts()
             return TEAM_UIDS[code]
+        # Try direct lookup in reverse map (case insensitive)
         owner = referral_code_to_uid.get(code)
         if owner is None:
-            # JSON/Supabase may have loaded reverse-map keys/values as strings.
-            for k, v in referral_codes_db.items():
+            # Try case-insensitive search in reverse map
+            for ck, ov in list(referral_code_to_uid.items()):
+                if str(ck).upper() == code:
+                    owner = ov
+                    referral_code_to_uid[code] = ov
+                    break
+        if owner is None:
+            # Search forward map
+            for k, v in list(referral_codes_db.items()):
                 if str(v).upper() == code:
                     try:
                         owner = int(k)
                     except Exception:
                         owner = k
                     referral_code_to_uid[code] = owner
+                    referral_codes_db[int(k)] = str(v).upper()
+                    break
+        if owner is None:
+            # Last chance: code might be stored with lower case
+            for k, v in list(referral_codes_db.items()):
+                if str(v).lower() == code.lower():
+                    try:
+                        owner = int(k)
+                    except Exception:
+                        owner = k
                     break
         try:
             return int(owner) if owner is not None else None
         except Exception:
             return owner
-    except Exception:
+    except Exception as e:
+        print(f"_resolve_referral_arg error {arg} -> {e}")
         return None
 
 def is_team_uid(uid):
@@ -2907,7 +2937,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         save_data()
-        print(f"Saved referral_map size {len(referral_map)} after start for {uid}")
+        print(f"Saved referral_map size {len(referral_map)} after start for {uid} ref {ref_id} -> map entry {referral_map.get(uid)}")
     except Exception as e:
         print(f"save_data fail in start: {e}")
     except Exception:
