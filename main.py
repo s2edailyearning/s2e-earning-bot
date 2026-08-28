@@ -9517,44 +9517,68 @@ async def add_task_5plans_cmd(update, context):
         args, description = _split_task_description_args(context.args)
         if len(args) < 5:
             await update.message.reply_text(
-                "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,starter:10,pro:15,elite:20,vip:30 all"
+                "📋 5 PLANS TASK ADD:\n\nSame amount:\n/add_task_5plans 10:00 11:00 Title Link 10 all\n\nDifferent amounts:\n/add_task_5plans 10:00 11:00 Title Link free:5,starter:10,pro:15,elite:20,vip:30 all\nSingle plan:\n/add_task_5plans 10:00 11:00 Title Link 3:20"
             )
             return
         open_time, close_time = args[0], args[1]
-        # Allow task titles with spaces: find the URL/link token, then use the
-        # tokens after it for reward and optional audience.
+        # FIXED parsing - find link first, then find reward token after link
         audience_tokens = {'all','free','basic','premium','starter','pro','elite','vip','0','1','2','3','4'}
-        audience_arg = 'all'
-        end_idx = len(args)
-        # FIX: Reward string like 'free:7,1:10,2:15' contains ',' and ':' - must NOT be treated as audience
-        # Only last token is audience if it is exactly in audience_tokens OR it is a comma list WITHOUT colon (e.g. '1,2,3')
-        last_lower = args[-1].lower() if args else ''
-        if last_lower in audience_tokens:
-            audience_arg = last_lower
-            end_idx -= 1
-        elif ',' in last_lower and ':' not in last_lower:
-            # Could be audience list like '1,2' or '0,1,2' - check if all parts are audience tokens
-            parts_check = [p.strip().lower() for p in last_lower.split(',')]
-            if all(p in audience_tokens or p.isdigit() for p in parts_check):
-                audience_arg = last_lower
-                end_idx -= 1
-        if end_idx < 4:
-            raise ValueError('Missing link/reward')
-        reward_arg = args[end_idx-1]
-        link_idx = next((i for i in range(2, end_idx-1) if str(args[i]).startswith(('http://','https://','t.me/','www.'))), None)
+        # Find link index
+        link_idx = None
+        for i in range(2, len(args)):
+            if str(args[i]).startswith(('http://','https://','t.me/','www.')):
+                link_idx = i
+                break
         if link_idx is None:
-            # Backward-compatible format: single-word title + link.
-            link_idx = 3
+            link_idx = 3  # fallback old format
+        
         title = ' '.join(args[2:link_idx])
-        link = args[link_idx]
+        # After link, remaining tokens
+        remaining = args[link_idx+1:]
+        if not remaining:
+            raise ValueError('Missing reward')
+        
+        reward_arg = None
+        audience_arg = 'all'
+        extra_desc_tokens = []
+        
+        # remaining[0] should be reward (like 3:20 or free:7,1:10... or 10)
+        # If remaining has 1 token: it's reward
+        # If 2 tokens: first is reward, second could be audience OR description
+        # If more than 2: first is reward, second could be audience, rest is description
+        reward_arg = remaining[0]
+        if len(remaining) >= 2:
+            second = remaining[1].lower()
+            # Check if second is audience
+            if second in audience_tokens or (',' in second and ':' not in second):
+                # Check if it's pure audience list
+                parts_check = [p.strip() for p in second.split(',')]
+                if all(p.lower() in audience_tokens or p.isdigit() for p in parts_check):
+                    audience_arg = second
+                    extra_desc_tokens = remaining[2:]
+                else:
+                    extra_desc_tokens = remaining[1:]
+            else:
+                # second is not audience, it's description
+                extra_desc_tokens = remaining[1:]
+        
+        # Merge extra description into description
+        if extra_desc_tokens:
+            extra_text = ' '.join(extra_desc_tokens)
+            if description:
+                description = extra_text + ' ' + description
+            else:
+                description = extra_text
+
+        # Parse rewards
         rewards_dict = {}
         base_reward = 5
-        if ':' in reward_arg:
+        if ':' in str(reward_arg):
             try:
-                parts = reward_arg.split(',')
+                parts = str(reward_arg).split(',')
                 for part in parts:
                     if ':' in part:
-                        k, v = part.split(':')
+                        k, v = part.split(':', 1)
                         k = k.strip().lower()
                         v = int(v.strip())
                         if k in ['free', '0']:
@@ -9563,31 +9587,18 @@ async def add_task_5plans_cmd(update, context):
                             rewards_dict[1] = v
                         elif k in ['2', 'pro', 'premium', '999', '1999']:
                             rewards_dict[2] = v
-                        elif k in ['3', 'elite', '999', '4999']:
+                        elif k in ['3', 'elite', '4999']:
                             rewards_dict[3] = v
                         elif k in ['4', 'vip', '9999']:
                             rewards_dict[4] = v
                         elif k == 'all':
                             rewards_dict['all'] = v
-                # FIX: base_reward from 'all' or first value, but keep full dict for per-plan display
                 if 'all' in rewards_dict:
-                    base_reward = rewards_dict.get('all', 5)
+                    base_reward = rewards_dict['all']
                 elif rewards_dict:
-                    # If single plan specific like {3:20}, base_reward = that value for display, but audience auto-fix below
                     base_reward = list(rewards_dict.values())[0]
-                    # FIX: If user gave single plan reward like 3:20 without audience, auto-set audience to that plan
-                    if len(rewards_dict) == 1 and audience == 'all':
-                        only_key = list(rewards_dict.keys())[0]
-                        if isinstance(only_key, int) and only_key in [0,1,2,3,4]:
-                            # If they said 3:20, it means only plan 3 should see it
-                            # Keep audience as that plan unless explicitly given
-                            # Comment out auto-set if you want it to go to all with different amounts
-                            # For now we keep audience=all but reward dict ensures only that plan gets special amount, others get base? 
-                            # To make task ONLY for that plan, set audience:
-                            pass  # If you want ONLY that plan, uncomment: audience = only_key
-                else:
-                    base_reward = 5
-            except:
+            except Exception as e:
+                print(f"reward parse error {e}")
                 base_reward = 5
         else:
             try:
@@ -9595,31 +9606,54 @@ async def add_task_5plans_cmd(update, context):
                 rewards_dict = {'all': base_reward}
             except:
                 base_reward = 5
-        # FIX: If reward_arg was single plan like 3:20 and user wants only that plan (your case), set audience
-        if ':' in str(reward_arg) and len(rewards_dict) == 1 and audience == 'all':
-            k = list(rewards_dict.keys())[0]
-            # If user explicitly said 3:20 meaning only plan 3, set audience to 3
-            # Enable this if you want strict single-plan task:
-            if str(reward_arg).strip().startswith(str(k)+':'):
-                # Uncomment next line to make it ONLY for that plan:
-                audience = k  # <-- This makes task go only to plan 3
-                pass
+                rewards_dict = {}
+
+        # Audience final parse
         if audience_arg == 'all':
             audience = 'all'
-        elif ',' in audience_arg:
+        elif ',' in audience_arg and ':' not in audience_arg:
             try:
-                audience = [int(x.strip()) if x.strip().isdigit() else x.strip() for x in audience_arg.split(',')]
+                # list like 1,2 or 0,1,2
+                aud_list = []
+                for x in audience_arg.split(','):
+                    x=x.strip().lower()
+                    if x.isdigit():
+                        aud_list.append(int(x))
+                    elif x in ['free','0']:
+                        aud_list.append(0)
+                    elif x in ['starter','basic','1']:
+                        aud_list.append(1)
+                    elif x in ['pro','premium','2']:
+                        aud_list.append(2)
+                    elif x in ['elite','3']:
+                        aud_list.append(3)
+                    elif x in ['vip','4']:
+                        aud_list.append(4)
+                    elif x == 'all':
+                        aud_list = 'all'
+                        break
+                audience = aud_list if aud_list != 'all' else 'all'
             except:
                 audience = 'all'
         elif audience_arg.isdigit():
             audience = int(audience_arg)
         else:
             audience = audience_arg
+
+        # FIX: If single plan reward like 3:20 and audience is still 'all', make it only for that plan
+        if len(rewards_dict) == 1 and audience == 'all':
+            only_key = list(rewards_dict.keys())[0]
+            if isinstance(only_key, int) and only_key in [0,1,2,3,4]:
+                # Check if reward_arg started with that key
+                if str(reward_arg).strip().lower().startswith(str(only_key)+':') or                    (only_key==0 and str(reward_arg).lower().startswith('free:')) or                    (only_key==1 and ('starter:' in str(reward_arg).lower() or 'basic:' in str(reward_arg).lower() or str(reward_arg).startswith('1:'))) or                    (only_key==3 and str(reward_arg).startswith('3:')):
+                    audience = only_key  # Only this plan
+
         from datetime import datetime as dt
         today = str(get_ist_today())
         global scheduled_task_counter
         ot = dt.strptime(open_time, "%H:%M").time()
         ct = dt.strptime(close_time, "%H:%M").time()
+        link = args[link_idx]
         task = {
             'id': scheduled_task_counter,
             'date': today,
@@ -9630,7 +9664,7 @@ async def add_task_5plans_cmd(update, context):
             'title': title,
             'link': link,
             'reward': base_reward,
-            'rewards': rewards_dict if len(rewards_dict) > 1 or 'all' not in rewards_dict else {},
+            'rewards': rewards_dict if (len(rewards_dict) > 1 or ('all' not in rewards_dict and rewards_dict)) else {},
             'audience': audience,
             'description': description,
             'next_time': close_time,
@@ -9642,11 +9676,17 @@ async def add_task_5plans_cmd(update, context):
         scheduled_task_counter+=1
         save_data()
         msg = f"✅ Task Added ID:{task['id']} {title} Reward:{base_reward} Audience:{audience}"
-        if rewards_dict and len(rewards_dict)>1:
+        if rewards_dict and len(rewards_dict)>=1 and 'all' not in rewards_dict:
+            msg += f"\nPer-plan: {rewards_dict}"
+        elif rewards_dict and len(rewards_dict)>1:
             msg += f"\nPer-plan: {rewards_dict}"
         await update.message.reply_text(msg)
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         await update.message.reply_text(f"Error: {e}")
+
+
 
 async def list_tasks_audience_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
