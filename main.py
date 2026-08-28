@@ -5372,7 +5372,6 @@ async def product_bulk_approve_cb(update: Update, context: ContextTypes.DEFAULT_
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     uid=q.from_user.id
-    # FIX: Show only tasks for this user's plan with correct per-plan amount
     today_tasks=get_tasks_for_today_filtered(uid)
     if not today_tasks:
         await q.message.reply_text(f"📋 SCHEDULED TASKS — {get_ist_today()}\n\nNo tasks scheduled for your plan today. Admin will add tasks when needed.", reply_markup=main_menu())
@@ -5390,19 +5389,15 @@ def get_current_task_for_user(uid):
     Completed/skipped tasks are skipped; pending verification blocks progression.
     FIX: Now uses plan-filtered tasks so task goes only to its audience.
     """
-    # FIXED: Use filtered tasks for this user
     filtered_today = get_tasks_for_today_filtered(uid)
     if not filtered_today:
         return None, "none"
-    # Find current task among filtered tasks only
     current, next_task = get_current_scheduled_task_with_interval()
-    # Validate current/next against user's audience
     candidates = []
     if current and _task_can_be_sent_to_user(current, uid):
         candidates.append(current)
     if next_task and next_task is not current and _task_can_be_sent_to_user(next_task, uid):
         candidates.append(next_task)
-    # Also inspect all filtered today's tasks so a completed current task never repeats.
     for t in filtered_today:
         if t not in candidates:
             candidates.append(t)
@@ -5460,7 +5455,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     _bal = get_balance(uid)
                     _reason = "3 Days Completed!" if _days_left <=0 else "10/10 Tasks Completed!"
                     await q.message.reply_text(
-                        f"⏰ FREE PLAN - {_reason}\n\n💰 Wallet Balance: ₹{_bal:.2f} (Safe!)\n❌ Free tasks stopped!\n\n💎 Paid Membership ki convert ayite tasks vastayi!\n• Wallet balance alane untundi\n• Plan teesukogane 0/20 tasks nundi start\n• 10/10 = ₹200 instant withdraw!",
+                        f"⏰ FREE PLAN - {_reason}\n\n💰 Wallet Balance: ₹{_bal:.2f} (Safe!)\n❌ Free tasks stopped!\n\n💎 Upgrade to a Paid Plan to continue earning!\n• Your wallet balance will remain safe\n• Income depends on the plan you select\n• Start fresh with your new plan's daily tasks\n• You can withdraw once our conditions are met!",
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💎 Upgrade Plan", callback_data="support_plans")],[InlineKeyboardButton("🏠 Menu", callback_data="back_menu")]])
                     )
                     return
@@ -5540,14 +5535,12 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-                # FIX: per-plan reward
-                per_reward = get_task_reward_for_user(task, uid)
                 await q.message.reply_text(
                     f"📅 Today's Task:\n\n"
                     f"Task {task.get('task_number', '?')}\n"
                     f"Open: {task.get('open_time', '')}  Close: {task.get('close_time', '')}\n"
                     f"Title: {task.get('title', '')}\n"
-                    f"Reward: ₹{per_reward}\n"
+                    f"Reward: ₹{get_task_reward_for_user(task, uid)}\n"
                     f"Link: {task.get('link', '')}\n\n"
                     f"{'📝 Instructions:' + chr(10) + task.get('description', '') + chr(10) + chr(10) if task.get('description') else ''}"
                     f"Tasks today: {count}/{limit}\n\n"
@@ -5579,7 +5572,7 @@ async def daily_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text("Already Skipped Task " + str(current['task_number']) + "! Reason: " + str(skip_data.get('reason')), reply_markup=main_menu())
             return
         task_open_time[uid] = get_ist_now()
-        # FIX: Show per-plan reward, not base reward
+        # FIX: Show per-plan reward
         user_reward = get_task_reward_for_user(current, uid)
         msg = f"🔴 LIVE TASK {current['task_number']}\nOpen: {current['open_time']} Close: {current['close_time']} ({current['window_minutes']} mins) Next: {current['next_time']}\n\nTitle: {current['title']}\nReward: Rs{user_reward}\nLink: {current['link']}\n\n⏰ Complete within {current['window_minutes']} mins! By {current['close_time']}!"
         if 'angel' in current['title'].lower() or 'upstox' in current['title'].lower() or 'demat' in current['title'].lower():
@@ -7344,7 +7337,6 @@ def track_missed_tasks_for_user(uid):
     existing={int(t.get('id')):t for t in missed_tasks_db[uid] if isinstance(t,dict) and str(t.get('id','')).lstrip('-').isdigit()}
     now = _safe_time(now) or now
     for task in today_tasks:
-        # FIX: Only track missed if task was for this user's plan
         if not _task_can_be_sent_to_user(task, uid):
             continue
         close_obj=task.get('close_time_obj')
@@ -9521,37 +9513,24 @@ async def add_task_5plans_cmd(update, context):
             )
             return
         open_time, close_time = args[0], args[1]
-        # FIXED parsing - find link first, then find reward token after link
         audience_tokens = {'all','free','basic','premium','starter','pro','elite','vip','0','1','2','3','4'}
-        # Find link index
         link_idx = None
         for i in range(2, len(args)):
             if str(args[i]).startswith(('http://','https://','t.me/','www.')):
                 link_idx = i
                 break
         if link_idx is None:
-            link_idx = 3  # fallback old format
-        
+            link_idx = 3
         title = ' '.join(args[2:link_idx])
-        # After link, remaining tokens
         remaining = args[link_idx+1:]
         if not remaining:
             raise ValueError('Missing reward')
-        
-        reward_arg = None
+        reward_arg = remaining[0]
         audience_arg = 'all'
         extra_desc_tokens = []
-        
-        # remaining[0] should be reward (like 3:20 or free:7,1:10... or 10)
-        # If remaining has 1 token: it's reward
-        # If 2 tokens: first is reward, second could be audience OR description
-        # If more than 2: first is reward, second could be audience, rest is description
-        reward_arg = remaining[0]
         if len(remaining) >= 2:
             second = remaining[1].lower()
-            # Check if second is audience
             if second in audience_tokens or (',' in second and ':' not in second):
-                # Check if it's pure audience list
                 parts_check = [p.strip() for p in second.split(',')]
                 if all(p.lower() in audience_tokens or p.isdigit() for p in parts_check):
                     audience_arg = second
@@ -9559,18 +9538,13 @@ async def add_task_5plans_cmd(update, context):
                 else:
                     extra_desc_tokens = remaining[1:]
             else:
-                # second is not audience, it's description
                 extra_desc_tokens = remaining[1:]
-        
-        # Merge extra description into description
         if extra_desc_tokens:
             extra_text = ' '.join(extra_desc_tokens)
             if description:
                 description = extra_text + ' ' + description
             else:
                 description = extra_text
-
-        # Parse rewards
         rewards_dict = {}
         base_reward = 5
         if ':' in str(reward_arg):
@@ -9607,13 +9581,10 @@ async def add_task_5plans_cmd(update, context):
             except:
                 base_reward = 5
                 rewards_dict = {}
-
-        # Audience final parse
         if audience_arg == 'all':
             audience = 'all'
         elif ',' in audience_arg and ':' not in audience_arg:
             try:
-                # list like 1,2 or 0,1,2
                 aud_list = []
                 for x in audience_arg.split(','):
                     x=x.strip().lower()
@@ -9639,15 +9610,13 @@ async def add_task_5plans_cmd(update, context):
             audience = int(audience_arg)
         else:
             audience = audience_arg
-
-        # FIX: If single plan reward like 3:20 and audience is still 'all', make it only for that plan
-        if len(rewards_dict) == 1 and audience == 'all':
-            only_key = list(rewards_dict.keys())[0]
-            if isinstance(only_key, int) and only_key in [0,1,2,3,4]:
-                # Check if reward_arg started with that key
-                if str(reward_arg).strip().lower().startswith(str(only_key)+':') or                    (only_key==0 and str(reward_arg).lower().startswith('free:')) or                    (only_key==1 and ('starter:' in str(reward_arg).lower() or 'basic:' in str(reward_arg).lower() or str(reward_arg).startswith('1:'))) or                    (only_key==3 and str(reward_arg).startswith('3:')):
-                    audience = only_key  # Only this plan
-
+        if audience == 'all' and rewards_dict:
+            plan_keys = [k for k in rewards_dict.keys() if isinstance(k, int) and k in [0,1,2,3,4]]
+            if plan_keys:
+                if len(plan_keys) == 1:
+                    audience = plan_keys[0]
+                else:
+                    audience = plan_keys
         from datetime import datetime as dt
         today = str(get_ist_today())
         global scheduled_task_counter
@@ -9685,8 +9654,6 @@ async def add_task_5plans_cmd(update, context):
         import traceback
         traceback.print_exc()
         await update.message.reply_text(f"Error: {e}")
-
-
 
 async def list_tasks_audience_cmd(update, context):
     if update.effective_user.id not in ADMIN_ID_LIST:
