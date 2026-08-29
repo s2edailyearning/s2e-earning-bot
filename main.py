@@ -2573,6 +2573,62 @@ def _resolve_referral_arg(arg):
         print(f"_resolve_referral_arg error {arg} -> {e}")
         return None
 
+def _save_referral_attribution(child_uid, referrer_uid):
+    """Atomically keep referral attribution in both pending and permanent maps."""
+    try:
+        child_uid = int(child_uid)
+        referrer_uid = int(referrer_uid)
+    except Exception:
+        return False
+    if child_uid <= 0 or referrer_uid <= 0 or child_uid == referrer_uid:
+        return False
+
+    existing = (referral_map.get(child_uid) or referral_map.get(str(child_uid))
+                or pending_referrals.get(child_uid) or pending_referrals.get(str(child_uid)))
+    if existing not in (None, "", 0, "0"):
+        try:
+            existing = int(existing)
+        except Exception:
+            pass
+        if existing != referrer_uid:
+            print(f"Referral already locked: {child_uid} -> {existing}; keeping original attribution")
+        # Always repair both maps, including old numeric/string-key data.
+        referral_map[child_uid] = existing
+        referral_map[str(child_uid)] = existing
+        pending_referrals[child_uid] = existing
+        pending_referrals[str(child_uid)] = existing
+        return True
+
+    referral_map[child_uid] = referrer_uid
+    referral_map[str(child_uid)] = referrer_uid
+    pending_referrals[child_uid] = referrer_uid
+    pending_referrals[str(child_uid)] = referrer_uid
+    print(f"Referral saved and pending-confirmed: {child_uid} -> {referrer_uid}")
+    return True
+
+def _confirm_pending_referral(child_uid):
+    """Re-assert a referral at registration completion so it cannot become Direct/None."""
+    try:
+        child_uid = int(child_uid)
+    except Exception:
+        return None
+    parent = (referral_map.get(child_uid) or referral_map.get(str(child_uid))
+              or pending_referrals.get(child_uid) or pending_referrals.get(str(child_uid)))
+    if parent in (None, "", 0, "0"):
+        return None
+    try:
+        parent = int(parent)
+    except Exception:
+        return None
+    if parent == child_uid:
+        return None
+    referral_map[child_uid] = parent
+    referral_map[str(child_uid)] = parent
+    pending_referrals[child_uid] = parent
+    pending_referrals[str(child_uid)] = parent
+    print(f"Referral confirmed at registration: {child_uid} -> {parent}")
+    return parent
+
 def is_team_uid(uid):
     try:
         return int(uid) in set(TEAM_UIDS.values())
@@ -2923,17 +2979,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Referral attribution is locked to the first valid referral link.
                 # Opening another referral link later must never overwrite L1/L2 history.
-                existing_ref = referral_map.get(uid) or referral_map.get(str(uid))
-                if existing_ref:
-                    print(f"Referral already locked: {uid} -> {existing_ref}; ignoring new ref {ref_id}")
-                else:
-                    referral_map[uid] = ref_id
-                    referral_map[str(uid)] = ref_id
-                    print(f"Referral locked: {uid} -> {ref_id}, map size now {len(referral_map)}")
+                _save_referral_attribution(uid, ref_id)
         else:
             print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
     else:
-        print(f"No referral args for user {uid} - direct join")
+        # A pending referral can survive an interrupted registration/restart.
+        restored_ref = _confirm_pending_referral(uid)
+        if restored_ref:
+            print(f"Restored pending referral for {uid} -> {restored_ref}")
+        else:
+            print(f"No referral args for user {uid} - direct join")
 
     try:
         save_data()
@@ -3146,6 +3201,7 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
+    _confirm_pending_referral(uid)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
@@ -3171,6 +3227,7 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
+    _confirm_pending_referral(uid)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
