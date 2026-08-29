@@ -1289,7 +1289,7 @@ def save_data():
         state_names = [
             "users_db", "deleted_users_db", "referrals_db", "tasks_db", "daily_done", "bonus_balance",
             "banned_users", "warnings_db", "pending_daily", "user_plans",
-            "pending_plans", "referral_map", "referral_level_overrides", "pending_referrals", "referral_earnings",
+            "pending_plans", "referral_map", "referral_level_overrides", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
             "withdraw_history", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
@@ -1444,6 +1444,13 @@ def load_data():
                         for _uid, _code in referral_codes_db.items():
                             if _code:
                                 referral_code_to_uid[str(_code).upper()] = int(_uid)
+                        # Secondary rebuild from each user's durable referral_code backup.
+                        for _uid, _rec in users_db.items():
+                            if isinstance(_rec, dict):
+                                _code = str(_rec.get("referral_code") or "").strip().upper()
+                                if _code:
+                                    referral_codes_db[int(_uid)] = _code
+                                    referral_code_to_uid[_code] = int(_uid)
                     except Exception as _rc_e:
                         print(f"Referral code index rebuild warning: {_rc_e}")
                     # Recover users referenced by other persisted structures so
@@ -2494,6 +2501,15 @@ def _get_or_create_referral_code(uid):
             code = str(existing).upper()
             referral_codes_db[uid] = code
             referral_code_to_uid[code] = uid
+            try:
+                users_db.setdefault(uid, {})["referral_code"] = code
+                users_db.setdefault(str(uid), users_db.get(uid, {}))["referral_code"] = code
+            except Exception:
+                pass
+            try:
+                save_data()
+            except Exception:
+                pass
             return code
 
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -2503,6 +2519,11 @@ def _get_or_create_referral_code(uid):
             if owner is None or int(owner) == uid:
                 referral_codes_db[uid] = code
                 referral_code_to_uid[code] = uid
+                try:
+                    users_db.setdefault(uid, {})["referral_code"] = code
+                    users_db.setdefault(str(uid), users_db.get(uid, {}))["referral_code"] = code
+                except Exception:
+                    pass
                 try:
                     save_data()
                 except Exception:
@@ -2564,6 +2585,16 @@ def _resolve_referral_arg(arg):
                         owner = int(k)
                     except Exception:
                         owner = k
+                    break
+        if owner is None:
+            # Durable fallback: resolve from the referrer's user profile backup.
+            for k, rec in list(users_db.items()):
+                if isinstance(rec, dict) and str(rec.get("referral_code") or "").upper() == code:
+                    try:
+                        owner = int(k)
+                    except Exception:
+                        owner = k
+                    referral_code_to_uid[code] = owner
                     break
         try:
             return int(owner) if owner is not None else None
