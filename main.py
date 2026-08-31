@@ -2638,13 +2638,23 @@ def _save_referral_attribution(child_uid, referrer_uid):
     return True
 
 def _confirm_pending_referral(child_uid):
-    """Re-assert a referral at registration completion so it cannot become Direct/None."""
+    """Re-assert referral from all durable/temporary sources at registration completion."""
     try:
         child_uid = int(child_uid)
     except Exception:
         return None
+
+    # 1) Permanent/pending referral maps first.
     parent = (referral_map.get(child_uid) or referral_map.get(str(child_uid))
               or pending_referrals.get(child_uid) or pending_referrals.get(str(child_uid)))
+
+    # 2) If maps are empty, recover the token saved in the member record.
+    if parent in (None, "", 0, "0"):
+        rec = users_db.get(child_uid) or users_db.get(str(child_uid)) or {}
+        token = str(rec.get("pending_referral_token") or "").strip() if isinstance(rec, dict) else ""
+        if token:
+            parent = _resolve_referral_arg(token)
+
     if parent in (None, "", 0, "0"):
         return None
     try:
@@ -2653,10 +2663,17 @@ def _confirm_pending_referral(child_uid):
         return None
     if parent == child_uid:
         return None
+
     referral_map[child_uid] = parent
     referral_map[str(child_uid)] = parent
     pending_referrals[child_uid] = parent
     pending_referrals[str(child_uid)] = parent
+    try:
+        rec = users_db.setdefault(child_uid, {})
+        rec["referred_by"] = parent
+        rec["referral_parent_id"] = parent
+    except Exception:
+        pass
     print(f"Referral confirmed at registration: {child_uid} -> {parent}")
     return parent
 
@@ -2741,6 +2758,8 @@ async def send_member_details_to_channel(context, uid, event="REGISTERED"):
         if username != "Not set" and not str(username).startswith("@"):
             username = "@" + str(username)
         parent = referral_map.get(uid) or referral_map.get(str(uid))
+        if parent in (None, "", 0, "0"):
+            parent = _confirm_pending_referral(uid)
         parent_label = team_code_for_uid(parent) if parent is not None else None
         if parent_label:
             ref_display = parent_label
@@ -2997,37 +3016,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You are BANNED! Contact admin!")
         return ConversationHandler.END
 
-    # Capture referral before any registration screen.
-    args = context.args
+    # ================================================================
+    # REFERRAL CAPTURE — HARDENED
+    # Telegram normally puts the deep-link token in context.args, but we
+    # also read the raw /start message as a fallback.  The token is stored
+    # in the user's registration record BEFORE registration starts, so it
+    # cannot disappear while the user goes through the conversation.
+    # ================================================================
+    args = list(context.args or [])
+    raw_start = str(getattr(update.message, "text", "") or "").strip()
+    token = args[0].strip() if args else ""
+    if not token and raw_start:
+        m = re.match(r"^/start(?:@[^\s]+)?(?:\s+(.+))?$", raw_start, flags=re.IGNORECASE)
+        if m and m.group(1):
+            token = m.group(1).strip().split()[0]
+
     ref_id = None
-    if args:
-        print(f"Referral arg received: {args[0]} for user {uid}")
-        ref_id = _resolve_referral_arg(args[0])
+    if token:
+        # Persist the original token even if resolution fails temporarily.
+        rec["pending_referral_token"] = token
+        context.user_data["pending_referral_token"] = token
+        print(f"Referral token captured: {token} for user {uid}")
+
+        ref_id = _resolve_referral_arg(token)
         print(f"Resolved ref_id: {ref_id} for user {uid}")
         if ref_id is not None and ref_id != uid and ref_id not in banned_users:
             if is_team_uid(ref_id) and team_direct_referral_count(ref_id) >= MAX_DIRECT_REFERRALS:
+                print(f"Team referral limit reached for {ref_id}; token retained but attribution not assigned")
                 await update.message.reply_text("⚠️ This Team referral has reached its 30 direct-member limit. You can still register, but this referral link will not be assigned.")
             else:
                 # Referral attribution is locked to the first valid referral link.
                 # Opening another referral link later must never overwrite L1/L2 history.
                 _save_referral_attribution(uid, ref_id)
+                rec["referred_by"] = int(ref_id)
+                context.user_data["pending_referrer_uid"] = int(ref_id)
         else:
-            print(f"Referral not assigned: ref_id={ref_id}, uid={uid}, banned={ref_id in banned_users if ref_id else False}")
+            print(f"Referral not assigned yet: token={token}, ref_id={ref_id}, uid={uid}")
     else:
-        # A pending referral can survive an interrupted registration/restart.
+        # Recover a referral already captured during an interrupted registration.
         restored_ref = _confirm_pending_referral(uid)
-        if restored_ref:
-            print(f"Restored pending referral for {uid} -> {restored_ref}")
-        else:
-            print(f"No referral args for user {uid} - direct join")
+        if not restored_ref:
+            saved_token = str(rec.get("pending_referral_token") or context.user_data.get("pending_referral_token") or "").strip()
+            if saved_token:
+                restored_ref = _resolve_referral_arg(saved_token)
+                if restored_ref is not None and int(restored_ref) != int(uid) and int(restored_ref) not in banned_users:
+                    _save_referral_attribution(uid, int(restored_ref))
+                    rec["referred_by"] = int(restored_ref)
+            if restored_ref:
+                print(f"Restored referral token for {uid} -> {restored_ref}")
+            else:
+                print(f"No referral token/parent for user {uid} - direct join")
 
     try:
         save_data()
         print(f"Saved referral_map size {len(referral_map)} after start for {uid} ref {ref_id} -> map entry {referral_map.get(uid)}")
     except Exception as e:
         print(f"save_data fail in start: {e}")
-    except Exception:
-        pass
 
     if not is_admin(uid):
         is_joined = await check_user_in_channel(uid, context)
@@ -3232,7 +3276,10 @@ async def get_profession(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
-    _confirm_pending_referral(uid)
+    confirmed_ref = _confirm_pending_referral(uid)
+    if confirmed_ref:
+        users_db[uid]["referred_by"] = int(confirmed_ref)
+        users_db[uid]["referral_parent_id"] = int(confirmed_ref)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
@@ -3258,7 +3305,10 @@ async def reg_profession_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users_db[uid]['telegram_id'] = uid
     deleted_users_db.pop(uid, None)
     deleted_users_db.pop(str(uid), None)
-    _confirm_pending_referral(uid)
+    confirmed_ref = _confirm_pending_referral(uid)
+    if confirmed_ref:
+        users_db[uid]["referred_by"] = int(confirmed_ref)
+        users_db[uid]["referral_parent_id"] = int(confirmed_ref)
     save_data()
     try:
         await send_member_details_to_channel(context, uid, "REGISTERED / REJOINED")
