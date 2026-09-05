@@ -2648,10 +2648,16 @@ def _confirm_pending_referral(child_uid):
     parent = (referral_map.get(child_uid) or referral_map.get(str(child_uid))
               or pending_referrals.get(child_uid) or pending_referrals.get(str(child_uid)))
 
-    # 2) If maps are empty, recover the token saved in the member record.
-    if parent in (None, "", 0, "0"):
-        rec = users_db.get(child_uid) or users_db.get(str(child_uid)) or {}
-        token = str(rec.get("pending_referral_token") or "").strip() if isinstance(rec, dict) else ""
+    # 2) Recover from the member record itself. This is a durable second source
+    # of truth, so a missing referral_map after a restart cannot turn a referral
+    # into Direct / None.
+    rec = users_db.get(child_uid) or users_db.get(str(child_uid)) or {}
+    if parent in (None, "", 0, "0") and isinstance(rec, dict):
+        parent = rec.get("referred_by") or rec.get("referral_parent_id")
+
+    # 3) If still empty, recover the original referral token saved on /start.
+    if parent in (None, "", 0, "0") and isinstance(rec, dict):
+        token = str(rec.get("pending_referral_token") or "").strip()
         if token:
             parent = _resolve_referral_arg(token)
 
@@ -2758,6 +2764,11 @@ async def send_member_details_to_channel(context, uid, event="REGISTERED"):
         if username != "Not set" and not str(username).startswith("@"):
             username = "@" + str(username)
         parent = referral_map.get(uid) or referral_map.get(str(uid))
+        # Use the member record as a second durable source before falling back
+        # to token resolution. This prevents an already-captured referrer from
+        # being displayed as Direct / None if one referral index is incomplete.
+        if parent in (None, "", 0, "0"):
+            parent = user.get("referred_by") or user.get("referral_parent_id")
         if parent in (None, "", 0, "0"):
             parent = _confirm_pending_referral(uid)
         parent_label = team_code_for_uid(parent) if parent is not None else None
@@ -3047,9 +3058,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Referral attribution is locked to the first valid referral link.
                 # Opening another referral link later must never overwrite L1/L2 history.
-                _save_referral_attribution(uid, ref_id)
-                rec["referred_by"] = int(ref_id)
-                context.user_data["pending_referrer_uid"] = int(ref_id)
+                saved_ok = _save_referral_attribution(uid, ref_id)
+                if saved_ok:
+                    rec["referred_by"] = int(ref_id)
+                    rec["referral_parent_id"] = int(ref_id)
+                    context.user_data["pending_referrer_uid"] = int(ref_id)
+                    # Save immediately: referral attribution must survive even
+                    # if the user abandons registration or Render restarts.
+                    try:
+                        save_data()
+                    except Exception as _ref_save_e:
+                        print(f"Immediate referral save failed: {_ref_save_e}")
         else:
             print(f"Referral not assigned yet: token={token}, ref_id={ref_id}, uid={uid}")
     else:
@@ -3060,8 +3079,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if saved_token:
                 restored_ref = _resolve_referral_arg(saved_token)
                 if restored_ref is not None and int(restored_ref) != int(uid) and int(restored_ref) not in banned_users:
-                    _save_referral_attribution(uid, int(restored_ref))
-                    rec["referred_by"] = int(restored_ref)
+                    if _save_referral_attribution(uid, int(restored_ref)):
+                        rec["referred_by"] = int(restored_ref)
+                        rec["referral_parent_id"] = int(restored_ref)
             if restored_ref:
                 print(f"Restored referral token for {uid} -> {restored_ref}")
             else:
