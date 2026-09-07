@@ -3604,6 +3604,24 @@ def _shopping_cycle(uid, on_date=None):
     return start, end, month_diff
 
 
+def _shopping_requirement_start_date(uid):
+    """Return the date on which shopping enforcement becomes eligible.
+
+    A member gets a full first month after Support Plan activation before the
+    20% shopping requirement can be enforced. Legacy users fall back to join date.
+    """
+    try:
+        plan = _get_user_plan_record(uid) or {}
+        raw = plan.get("activated_at") or plan.get("date")
+        activation_date = _parse_state_date(raw)
+        if activation_date:
+            return _add_months_safe(activation_date, 1)
+    except Exception:
+        pass
+    join_date = _user_join_date(uid)
+    return _add_months_safe(join_date, 1) if join_date else None
+
+
 def _withdraw_entry_date(item):
     """Use actual approval date for monthly withdrawal accounting."""
     if not isinstance(item, dict):
@@ -3686,6 +3704,26 @@ def _shopping_stats(uid, on_date=None):
     The cycle resets at the user's next joining-date anniversary.
     """
     cycle_start, cycle_end, cycle_no = _shopping_cycle(uid, on_date)
+    today = on_date or get_ist_today()
+
+    # IMPORTANT: A member's first month after plan activation is a grace period.
+    # No 20% purchase requirement is enforced during this period.
+    requirement_start = _shopping_requirement_start_date(uid)
+    first_month_waiting = bool(requirement_start and today < requirement_start)
+    if first_month_waiting:
+        return {
+            "cycle_start": cycle_start, "cycle_end": cycle_end, "cycle_no": cycle_no,
+            "withdrawn": 0.0, "required": 0.0, "purchased": 0.0, "pending": 0.0,
+            "extra": 0.0, "complete": False, "no_withdrawal": True,
+            "first_month_waiting": True, "requirement_start": requirement_start,
+            "withdrawal_rows": [], "purchase_rows": [],
+            "orders": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid)],
+            "delivered": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "delivered"],
+            "active": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")],
+            "rejected": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "rejected"],
+            "delivered_total": 0.0, "credit": 0.0, "pending_value": 0.0,
+        }
+
     withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
     purchased, purchase_rows = _delivered_purchases_in_cycle(uid, cycle_start, cycle_end)
     required = round(withdrawn * SHOPPING_CREDIT_PERCENT / 100.0, 2)
@@ -3720,7 +3758,11 @@ def _shopping_progress_text(uid):
     st = _shopping_stats(uid)
     start = st["cycle_start"].strftime("%d/%m/%Y")
     end = st["cycle_end"].strftime("%d/%m/%Y")
-    if st["no_withdrawal"]:
+    if st.get("first_month_waiting"):
+        rs = st.get("requirement_start")
+        rs_text = rs.strftime("%d/%m/%Y") if hasattr(rs, "strftime") else str(rs or "")
+        status_line = f"ℹ️ First-month waiting period. Purchase requirement starts after {rs_text}."
+    elif st["no_withdrawal"]:
         status_line = "ℹ️ No approved withdrawal in this cycle yet."
     elif st["complete"]:
         status_line = "✅ COMPLETE — required purchase target reached."
@@ -3739,7 +3781,9 @@ def _shopping_progress_text(uid):
     )
     if st["extra"] > 0:
         text += f"\n➕ Above target this cycle: ₹{st['extra']:g}"
-    if st["no_withdrawal"]:
+    if st.get("first_month_waiting"):
+        text += "\n\n💡 Your 20% shopping requirement is not enforced during the first month after plan activation."
+    elif st["no_withdrawal"]:
         text += "\n\n💡 Your required purchase target is 20% of the approved withdrawals you make in this cycle."
     text += "\n\n🔄 On the next cycle start, progress resets to ₹0 and a new target is calculated from that cycle's withdrawals."
     return text[:4000]
