@@ -3711,17 +3711,28 @@ def _shopping_stats(uid, on_date=None):
     requirement_start = _shopping_requirement_start_date(uid)
     first_month_waiting = bool(requirement_start and today < requirement_start)
     if first_month_waiting:
+        # Grace period: still SHOW the real withdrawal/purchase figures and the
+        # 20% target, but do NOT enforce/block earning features until the
+        # requirement_start date. This preserves the original shopping progress
+        # calculation while keeping the first-month waiting rule.
+        withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
+        purchased, purchase_rows = _delivered_purchases_in_cycle(uid, cycle_start, cycle_end)
+        required = round(withdrawn * SHOPPING_CREDIT_PERCENT / 100.0, 2)
+        pending = round(max(0.0, required - purchased), 2)
+        extra = round(max(0.0, purchased - required), 2) if required > 0 else 0.0
+        complete = required > 0 and purchased >= required
         return {
             "cycle_start": cycle_start, "cycle_end": cycle_end, "cycle_no": cycle_no,
-            "withdrawn": 0.0, "required": 0.0, "purchased": 0.0, "pending": 0.0,
-            "extra": 0.0, "complete": False, "no_withdrawal": True,
+            "withdrawn": withdrawn, "required": required, "purchased": purchased, "pending": pending,
+            "extra": extra, "complete": complete, "no_withdrawal": required <= 0,
             "first_month_waiting": True, "requirement_start": requirement_start,
-            "withdrawal_rows": [], "purchase_rows": [],
+            "withdrawal_rows": withdrawal_rows, "purchase_rows": purchase_rows,
             "orders": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid)],
             "delivered": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "delivered"],
             "active": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")],
             "rejected": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "rejected"],
-            "delivered_total": 0.0, "credit": 0.0, "pending_value": 0.0,
+            "delivered_total": purchased, "credit": required,
+            "pending_value": round(sum(float(o.get("total", 0) or 0) for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")), 2),
         }
 
     withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
@@ -7399,26 +7410,6 @@ async def promo_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text="❌ Promo Rejected! Screenshot not valid! Try again with clear views count!", reply_markup=main_menu())
     except: pass
 
-async def _update_withdraw_admin_message(q, status_text):
-    """Replace the original withdrawal request message status and remove action buttons."""
-    msg = q.message
-    original = msg.text or msg.caption or "💰 WITHDRAWAL REQUEST"
-    # Remove any old status line so repeated/legacy formatting cannot leave Pending visible.
-    import re
-    updated = re.sub(r"(?im)^Status:\s*.*$", f"Status: {status_text}", original, count=1)
-    if updated == original and f"Status: {status_text}" not in original:
-        updated = original.rstrip() + f"\n\nStatus: {status_text}"
-    try:
-        if msg.text is not None:
-            await msg.edit_text(updated, reply_markup=None)
-        else:
-            await msg.edit_caption(caption=updated, reply_markup=None)
-        return True
-    except Exception as e:
-        print(f"Withdraw admin message update failed: {e}")
-        return False
-
-
 async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -7432,7 +7423,6 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.message.reply_text("❌ Withdrawal request not found.")
         return
     if req.get('status') != 'processing':
-        # Buttons should already be removed; this is only a safe fallback for old messages.
         await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
         return
 
@@ -7440,9 +7430,8 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_bal = get_balance(uid)
     if current_bal < amount:
         req['status'] = 'rejected'
-        req['rejected_at'] = str(get_ist_now())
         save_data()
-        await _update_withdraw_admin_message(q, "❌ Rejected — insufficient balance")
+        await q.message.reply_text("❌ Cannot approve: user's current balance is insufficient.")
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Withdrawal rejected because your balance is insufficient at processing time.", reply_markup=main_menu())
         except Exception:
@@ -7459,14 +7448,9 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     last_withdraw_date_db[uid] = str(get_ist_today())
     save_data()
 
-    # Update the ORIGINAL channel request in-place and remove Approve/Reject buttons.
-    await _update_withdraw_admin_message(q, "✅ Approved")
-    try:
-        await q.message.reply_text(
-            f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
-        )
-    except Exception:
-        pass
+    await q.message.reply_text(
+        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
+    )
     try:
         await context.bot.send_message(
             chat_id=uid,
@@ -7502,13 +7486,7 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     req['status'] = 'rejected'
     req['rejected_at'] = str(get_ist_now())
     save_data()
-
-    # Update the ORIGINAL channel request in-place and remove Approve/Reject buttons.
-    await _update_withdraw_admin_message(q, "❌ Rejected")
-    try:
-        await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
-    except Exception:
-        pass
+    await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
     try:
         await context.bot.send_message(
             chat_id=uid,
@@ -11102,7 +11080,9 @@ def main():
                 if is_admin(uid) or is_removed_user(uid):
                     return
                 st = _shopping_stats(uid)
-                if st.get("required", 0) <= 0 or st.get("complete"):
+                # First month is a grace period: show shopping progress but do not
+                # block Daily/Scheduled/Promo/Product Promotion/Shop Promotion.
+                if st.get("first_month_waiting") or st.get("required", 0) <= 0 or st.get("complete"):
                     return
                 try:
                     await q.answer("Need to complete purchase first", show_alert=True)
