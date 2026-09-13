@@ -1078,6 +1078,9 @@ referral_commission_ledger = {}
 daily_task_earnings = {}  # {uid: {YYYY-MM-DD: amount}}
 withdraw_requests = {}
 withdraw_history = {}  # {uid: [{amount, fee, net, upi, date, status, ...}]}
+# Wallet transaction audit ledger. Records NEW transactions from this version onward.
+# {uid: [{date, time, type, amount, direction, old_balance, new_balance, details}]}
+transaction_ledger_db = {}
 withdraw_done_date = {}
 daily_task_count = {}
 missed_tasks_db = {}  # {uid: [missed task dicts]}
@@ -1255,7 +1258,7 @@ def _restore_all_int_keys_after_load():
         "warnings_db", "pending_daily", "user_plans", "pending_plans",
         "referral_map", "referral_level_overrides", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
         "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings",
-        "withdraw_requests", "withdraw_history", "withdraw_done_date",
+        "withdraw_requests", "withdraw_history", "transaction_ledger_db", "withdraw_done_date",
         "daily_task_count", "missed_tasks_db", "last_withdraw_date_db",
         "task_open_time", "user_task_status", "task_notification_settings_db", "skip_db",
         "promo_earnings_db", "product_promo_earnings_db", "promo_views_db", "promo_pending",
@@ -1291,7 +1294,7 @@ def save_data():
             "banned_users", "warnings_db", "pending_daily", "user_plans",
             "pending_plans", "referral_map", "referral_level_overrides", "referral_codes_db", "referral_code_to_uid", "pending_referrals", "referral_earnings",
             "referral_commission_ledger", "referral_pending_earnings", "daily_task_earnings", "withdraw_requests",
-            "withdraw_history", "withdraw_done_date", "daily_task_count",
+            "withdraw_history", "transaction_ledger_db", "withdraw_done_date", "daily_task_count",
             "missed_tasks_db", "last_withdraw_date_db", "screenshot_hashes",
             "task_open_time", "scheduled_tasks_db", "scheduled_task_counter",
             "user_task_status", "task_notifications_sent", "task_notification_settings_db", "skip_db",
@@ -2040,6 +2043,36 @@ def get_balance(uid):
     adjustment = float(wallet_cap_adjustments_db.get(uid, 0) or wallet_cap_adjustments_db.get(str(uid), 0) or 0)
     return round(task_total + float(bonus_balance.get(uid,0) or 0) + float(referral_earnings.get(uid,0) or 0) + shop_promo_total + product_promo_total + adjustment, 2)
 
+def record_wallet_transaction(uid, tx_type, amount, direction="credit", old_balance=None, new_balance=None, details=""):
+    """Record a wallet credit/debit for the transaction-history report.
+
+    This is an audit-only layer; it does NOT change wallet calculations.
+    Records are intentionally created only when a real balance-changing event occurs.
+    """
+    try:
+        uid = int(uid)
+        amount = round(float(amount or 0), 2)
+        if amount <= 0:
+            return
+        if old_balance is None:
+            old_balance = get_balance(uid)
+        if new_balance is None:
+            new_balance = get_balance(uid)
+        entry = {
+            "date": str(get_ist_today()),
+            "time": get_ist_now().strftime("%H:%M:%S"),
+            "type": str(tx_type),
+            "amount": amount,
+            "direction": "debit" if str(direction).lower() == "debit" else "credit",
+            "old_balance": round(float(old_balance or 0), 2),
+            "new_balance": round(float(new_balance or 0), 2),
+            "details": str(details or ""),
+        }
+        transaction_ledger_db.setdefault(uid, []).append(entry)
+    except Exception as e:
+        print(f"transaction ledger record failed {uid}/{tx_type}: {e}")
+
+
 def add_referral_commission(referrer_uid, amount, commission_type, level=None, source_uid=None, description="", source_amount=None):
     """Record referral commission. Work commissions settle next day; plan commission is immediate."""
     try:
@@ -2065,7 +2098,15 @@ def add_referral_commission(referrer_uid, amount, commission_type, level=None, s
     if is_work_commission:
         referral_pending_earnings[referrer_uid] = round(float(referral_pending_earnings.get(referrer_uid, 0) or 0) + amount, 2)
     else:
+        try:
+            old_balance = get_balance(referrer_uid)
+        except Exception:
+            old_balance = 0.0
         referral_earnings[referrer_uid] = round(float(referral_earnings.get(referrer_uid, 0) or 0) + amount, 2)
+        try:
+            record_wallet_transaction(referrer_uid, "Referral Commission", amount, "credit", old_balance, get_balance(referrer_uid), description or f"L{level or '?'} referral commission")
+        except Exception as e:
+            print(f"referral transaction ledger failed {referrer_uid}: {e}")
     return amount
 
 async def settle_previous_day_referrals(context):
@@ -2096,8 +2137,16 @@ async def settle_previous_day_referrals(context):
                 e["status"] = "settled"
 
         for uid, amount in totals.items():
+            try:
+                old_balance = get_balance(uid)
+            except Exception:
+                old_balance = 0.0
             referral_earnings[uid] = round(float(referral_earnings.get(uid, 0) or 0) + amount, 2)
             referral_pending_earnings[uid] = round(max(0.0, float(referral_pending_earnings.get(uid, 0) or 0) - amount), 2)
+            try:
+                record_wallet_transaction(uid, "Referral Commission", amount, "credit", old_balance, get_balance(uid), f"Settled referral commission for {yesterday}")
+            except Exception as e:
+                print(f"referral settlement transaction ledger failed {uid}: {e}")
             l1 = round(level_totals.get(uid, {}).get(1, 0.0), 2)
             l2 = round(level_totals.get(uid, {}).get(2, 0.0), 2)
             try:
@@ -2264,7 +2313,16 @@ def get_today_task_earnings(uid):
 
 def add_today_task_earning(uid, amount, day=None):
     day=str(day or get_ist_today())
+    try:
+        old_balance = get_balance(uid)
+    except Exception:
+        old_balance = 0.0
     daily_task_earnings.setdefault(uid, {})[day]=round(float(daily_task_earnings.setdefault(uid, {}).get(day,0) or 0)+float(amount or 0),2)
+    try:
+        new_balance = get_balance(uid)
+        record_wallet_transaction(uid, "Daily Task", amount, "credit", old_balance, new_balance, f"Task earning for {day}")
+    except Exception as e:
+        print(f"task transaction ledger failed {uid}: {e}")
 
 def get_total_tasks(uid):
     return tasks_db.get(uid,0)
@@ -3711,28 +3769,17 @@ def _shopping_stats(uid, on_date=None):
     requirement_start = _shopping_requirement_start_date(uid)
     first_month_waiting = bool(requirement_start and today < requirement_start)
     if first_month_waiting:
-        # Grace period: still SHOW the real withdrawal/purchase figures and the
-        # 20% target, but do NOT enforce/block earning features until the
-        # requirement_start date. This preserves the original shopping progress
-        # calculation while keeping the first-month waiting rule.
-        withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
-        purchased, purchase_rows = _delivered_purchases_in_cycle(uid, cycle_start, cycle_end)
-        required = round(withdrawn * SHOPPING_CREDIT_PERCENT / 100.0, 2)
-        pending = round(max(0.0, required - purchased), 2)
-        extra = round(max(0.0, purchased - required), 2) if required > 0 else 0.0
-        complete = required > 0 and purchased >= required
         return {
             "cycle_start": cycle_start, "cycle_end": cycle_end, "cycle_no": cycle_no,
-            "withdrawn": withdrawn, "required": required, "purchased": purchased, "pending": pending,
-            "extra": extra, "complete": complete, "no_withdrawal": required <= 0,
+            "withdrawn": 0.0, "required": 0.0, "purchased": 0.0, "pending": 0.0,
+            "extra": 0.0, "complete": False, "no_withdrawal": True,
             "first_month_waiting": True, "requirement_start": requirement_start,
-            "withdrawal_rows": withdrawal_rows, "purchase_rows": purchase_rows,
+            "withdrawal_rows": [], "purchase_rows": [],
             "orders": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid)],
             "delivered": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "delivered"],
             "active": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")],
             "rejected": [o for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() == "rejected"],
-            "delivered_total": purchased, "credit": required,
-            "pending_value": round(sum(float(o.get("total", 0) or 0) for o in shop_orders_db if int(o.get("uid", -1)) == int(uid) and str(o.get("status", "")).lower() in ("pending_admin_confirmation", "confirmed", "dispatched")), 2),
+            "delivered_total": 0.0, "credit": 0.0, "pending_value": 0.0,
         }
 
     withdrawn, withdrawal_rows = _approved_withdrawals_in_cycle(uid, cycle_start, cycle_end)
@@ -5549,7 +5596,15 @@ async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         save_data()
         await q.message.reply_text("⚠️ This Product Promotion was already approved. No duplicate amount was added.")
         return
+    try:
+        old_balance = get_balance(uid)
+    except Exception:
+        old_balance = 0.0
     product_promo_earnings_db[uid]=round(float(product_promo_earnings_db.get(uid,0) or 0)+reward, 2)
+    try:
+        record_wallet_transaction(uid, "Product Promotion", reward, "credit", old_balance, get_balance(uid), f"Product promotion {tid}")
+    except Exception as e:
+        print(f"product promotion transaction ledger failed {uid}: {e}")
     record_product_promo_referral_commissions(uid, reward)
     approved_map[str(tid)] = str(get_ist_now())
     product_promo_pending.pop(uid, None)
@@ -5591,7 +5646,15 @@ async def product_bulk_approve_cb(update: Update, context: ContextTypes.DEFAULT_
                 product_promo_pending.pop(key,None)
                 continue
             reward=int(sub.get('reward',0) or 0)
+            try:
+                old_balance = get_balance(uid)
+            except Exception:
+                old_balance = 0.0
             product_promo_earnings_db[uid]=round(float(product_promo_earnings_db.get(uid,0) or 0)+reward,2)
+            try:
+                record_wallet_transaction(uid, "Product Promotion", reward, "credit", old_balance, get_balance(uid), f"Product promotion {tid}")
+            except Exception as e:
+                print(f"product bulk transaction ledger failed {uid}: {e}")
             record_product_promo_referral_commissions(uid, reward)
             approved_map[str(tid)]=str(get_ist_now())
             await _mark_admin_submission_status(
@@ -6798,7 +6861,7 @@ async def remove_user_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove all user-owned data. Historical commission records are removed
     # with the user as requested; other members' ledgers are untouched.
     removed = []
-    for db_name in ['users_db','tasks_db','daily_done','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','promo_views_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','pending_daily','user_profiles','referrals_db','referral_commission_ledger','referral_pending_earnings','user_plans','pending_plans','pending_referrals','referral_codes_db']:
+    for db_name in ['users_db','tasks_db','daily_done','bonus_balance','referral_earnings','skip_db','missed_tasks_db','user_task_status','promo_earnings_db','promo_views_db','task_images_db','daily_task_count','daily_task_earnings','withdraw_requests','withdraw_history','withdraw_done_date','last_withdraw_date_db','pending_daily','user_profiles','referrals_db','referral_commission_ledger','referral_pending_earnings','user_plans','pending_plans','pending_referrals','referral_codes_db','transaction_ledger_db']:
         db = globals().get(db_name)
         if isinstance(db, dict) and (target in db or str(target) in db):
             db.pop(target, None)
@@ -7381,7 +7444,15 @@ async def promo_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     campaign = get_promo_campaign(campaign_id)
     if not campaign: return
     earning = int(views * campaign['per_view_member_earning'] / 100)
+    try:
+        old_balance = get_balance(uid)
+    except Exception:
+        old_balance = 0.0
     promo_earnings_db[uid]=round(float(promo_earnings_db.get(uid,0) or 0)+earning, 2)
+    try:
+        record_wallet_transaction(uid, "Shop Promotion", earning, "credit", old_balance, get_balance(uid), f"Shop promotion campaign {campaign_id}")
+    except Exception as e:
+        print(f"shop promo transaction ledger failed {uid}: {e}")
     campaign['total_earnings_distributed']+=earning
     record_product_promo_referral_commissions(uid, earning, "shop_promo")
     cards = list((promo_pending.get(uid) or {}).get('admin_messages', []) or [])
@@ -7410,6 +7481,26 @@ async def promo_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text="❌ Promo Rejected! Screenshot not valid! Try again with clear views count!", reply_markup=main_menu())
     except: pass
 
+async def _update_withdraw_admin_message(q, status_text):
+    """Replace the original withdrawal request message status and remove action buttons."""
+    msg = q.message
+    original = msg.text or msg.caption or "💰 WITHDRAWAL REQUEST"
+    # Remove any old status line so repeated/legacy formatting cannot leave Pending visible.
+    import re
+    updated = re.sub(r"(?im)^Status:\s*.*$", f"Status: {status_text}", original, count=1)
+    if updated == original and f"Status: {status_text}" not in original:
+        updated = original.rstrip() + f"\n\nStatus: {status_text}"
+    try:
+        if msg.text is not None:
+            await msg.edit_text(updated, reply_markup=None)
+        else:
+            await msg.edit_caption(caption=updated, reply_markup=None)
+        return True
+    except Exception as e:
+        print(f"Withdraw admin message update failed: {e}")
+        return False
+
+
 async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -7423,6 +7514,7 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         await q.message.reply_text("❌ Withdrawal request not found.")
         return
     if req.get('status') != 'processing':
+        # Buttons should already be removed; this is only a safe fallback for old messages.
         await q.message.reply_text(f"⚠️ Request already {req.get('status')}.")
         return
 
@@ -7430,8 +7522,9 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_bal = get_balance(uid)
     if current_bal < amount:
         req['status'] = 'rejected'
+        req['rejected_at'] = str(get_ist_now())
         save_data()
-        await q.message.reply_text("❌ Cannot approve: user's current balance is insufficient.")
+        await _update_withdraw_admin_message(q, "❌ Rejected — insufficient balance")
         try:
             await context.bot.send_message(chat_id=uid, text="❌ Withdrawal rejected because your balance is insufficient at processing time.", reply_markup=main_menu())
         except Exception:
@@ -7439,8 +7532,10 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Deduct the withdrawal amount without changing the completed-task count.
+    old_balance = current_bal
     bonus_balance[uid] = bonus_balance.get(uid, 0) - amount
     new_bal = get_balance(uid)
+    record_wallet_transaction(uid, "Withdrawal", amount, "debit", old_balance, new_bal, f"Withdrawal approved; net paid ₹{req.get('net', 0)}")
     req['status'] = 'approved'
     req['approved_at'] = str(get_ist_now())
     req['remaining_balance'] = new_bal
@@ -7448,9 +7543,14 @@ async def wd_admin_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE
     last_withdraw_date_db[uid] = str(get_ist_today())
     save_data()
 
-    await q.message.reply_text(
-        f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
-    )
+    # Update the ORIGINAL channel request in-place and remove Approve/Reject buttons.
+    await _update_withdraw_admin_message(q, "✅ Approved")
+    try:
+        await q.message.reply_text(
+            f"✅ WITHDRAWAL APPROVED\nUser: {uid}\nAmount: Rs{amount}\nNet Paid: Rs{req['net']}\nRemaining Balance: Rs{new_bal}"
+        )
+    except Exception:
+        pass
     try:
         await context.bot.send_message(
             chat_id=uid,
@@ -7486,7 +7586,13 @@ async def wd_admin_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     req['status'] = 'rejected'
     req['rejected_at'] = str(get_ist_now())
     save_data()
-    await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
+
+    # Update the ORIGINAL channel request in-place and remove Approve/Reject buttons.
+    await _update_withdraw_admin_message(q, "❌ Rejected")
+    try:
+        await q.message.reply_text(f"❌ WITHDRAWAL REJECTED\nUser: {uid}\nAmount: Rs{req['amount']}")
+    except Exception:
+        pass
     try:
         await context.bot.send_message(
             chat_id=uid,
@@ -7539,7 +7645,15 @@ async def set_balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             target=int(args[0]); amount=int(args[1])
         tasks_db_cur=tasks_db.get(target,0)
+        old_balance = get_balance(target)
         bonus_balance[target]=amount - tasks_db_cur*5
+        new_balance = get_balance(target)
+        diff = round(new_balance - old_balance, 2)
+        if diff > 0:
+            record_wallet_transaction(target, "Admin Balance Set", diff, "credit", old_balance, new_balance, f"Admin set balance to ₹{amount}")
+        elif diff < 0:
+            record_wallet_transaction(target, "Admin Balance Set", abs(diff), "debit", old_balance, new_balance, f"Admin set balance to ₹{amount}")
+        save_data()
         await update.message.reply_text(f"Balance set Rs{get_balance(target)}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
@@ -8522,120 +8636,6 @@ async def add_missing_commission_cmd(update: Update, context: ContextTypes.DEFAU
 
 
 
-
-async def user_transactions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin-only withdrawal transaction history for one user.
-    Usage:
-      /user_transactions <user_id> yesterday
-      /user_transactions <user_id> today
-      /user_transactions <user_id> all
-    """
-    if not is_admin(update.effective_user.id):
-        return
-
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: /user_transactions <user_id> [yesterday|today|all]\n"
-            "Example: /user_transactions 1101323233 yesterday"
-        )
-        return
-
-    try:
-        uid = int(context.args[0])
-        period = str(context.args[1]).lower().strip() if len(context.args) > 1 else "all"
-
-        if period not in ("yesterday", "today", "all"):
-            await update.message.reply_text(
-                "❌ Period must be: yesterday, today, or all.\n"
-                "Example: /user_transactions 1101323233 yesterday"
-            )
-            return
-
-        rec = users_db.get(uid) or users_db.get(str(uid)) or {}
-        name = rec.get("name", "Unknown")
-        history = withdraw_history.get(uid) or withdraw_history.get(str(uid)) or []
-
-        today = get_ist_today()
-        if period == "yesterday":
-            wanted_date = str(today - timedelta(days=1))
-            title = "YESTERDAY"
-        elif period == "today":
-            wanted_date = str(today)
-            title = "TODAY"
-        else:
-            wanted_date = None
-            title = "ALL"
-
-        rows = []
-        for h in history:
-            d = str(h.get("date", "") or "")
-            if wanted_date is not None and not d.startswith(wanted_date):
-                continue
-            rows.append(h)
-
-        # Also include a currently pending request if it has not yet been copied
-        # into withdraw_history and its date matches the requested period.
-        req = withdraw_requests.get(uid) or withdraw_requests.get(str(uid)) or {}
-        if req:
-            req_date = str(req.get("date", "") or req.get("created_at", "") or "")
-            req_status = str(req.get("status", "")).lower()
-            already_present = any(
-                str(h.get("date", "")) == req_date
-                and float(h.get("amount", 0) or 0) == float(req.get("amount", 0) or 0)
-                for h in rows
-            )
-            if not already_present and (
-                wanted_date is None
-                or req_date.startswith(wanted_date)
-            ):
-                rows.append(req)
-
-        rows = rows[-30:][::-1]
-
-        if not rows:
-            await update.message.reply_text(
-                f"📜 USER TRANSACTION HISTORY\n\n"
-                f"👤 {name}\n"
-                f"🆔 {uid}\n"
-                f"📅 {title}\n\n"
-                "No withdrawal transactions found."
-            )
-            return
-
-        msg = (
-            f"📜 USER TRANSACTION HISTORY\n\n"
-            f"👤 {name}\n"
-            f"🆔 {uid}\n"
-            f"📅 {title}\n\n"
-        )
-
-        for i, h in enumerate(rows, 1):
-            amount = float(h.get("amount", 0) or 0)
-            fee = float(h.get("fee", 0) or 0)
-            net = float(h.get("net", h.get("net_payable", 0)) or 0)
-            status = str(h.get("status", "N/A"))
-            upi = h.get("upi", "N/A")
-            date = h.get("date", "N/A")
-            msg += (
-                f"#{i}\n"
-                f"📅 Date: {date}\n"
-                f"💸 Amount: ₹{amount:g}\n"
-                f"💳 Fee: ₹{fee:g}\n"
-                f"💰 Net Payable: ₹{net:g}\n"
-                f"🏦 UPI: {upi}\n"
-                f"📌 Status: {status}\n\n"
-            )
-
-        await update.message.reply_text(msg[:4000])
-
-    except (ValueError, TypeError):
-        await update.message.reply_text(
-            "❌ Invalid User ID.\n"
-            "Example: /user_transactions 1101323233 yesterday"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-
 async def ledger_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -8984,7 +8984,15 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 await mark_card(sub.get('admin_channel_id'), sub.get('admin_message_id'), "Product Promotion", uid, sub.get('reward',0), f"Product {tid}")
                 continue
             reward = float(sub.get('reward', 0) or 0)
+            try:
+                old_balance = get_balance(uid)
+            except Exception:
+                old_balance = 0.0
             product_promo_earnings_db[uid] = round(float(product_promo_earnings_db.get(uid, 0) or 0) + reward, 2)
+            try:
+                record_wallet_transaction(uid, "Product Promotion", reward, "credit", old_balance, get_balance(uid), f"Product promotion {tid}")
+            except Exception as e:
+                print(f"unified product transaction ledger failed {uid}: {e}")
             record_product_promo_referral_commissions(uid, reward, "product_promo")
             approved_map[str(tid)] = str(get_ist_now())
             product_promo_pending.pop(key, None)
@@ -9008,7 +9016,15 @@ async def bulk_approve_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if not campaign:
                 continue
             earning = int(sub.get('earning', int(views * campaign['per_view_member_earning'] / 100)))
+            try:
+                old_balance = get_balance(uid)
+            except Exception:
+                old_balance = 0.0
             promo_earnings_db[uid] = round(float(promo_earnings_db.get(uid, 0) or 0) + earning, 2)
+            try:
+                record_wallet_transaction(uid, "Shop Promotion", earning, "credit", old_balance, get_balance(uid), f"Shop promotion campaign {campaign_id}")
+            except Exception as e:
+                print(f"unified shop promo transaction ledger failed {uid}: {e}")
             campaign['total_earnings_distributed'] = campaign.get('total_earnings_distributed', 0) + earning
             record_product_promo_referral_commissions(uid, earning, "shop_promo")
             promo_pending.pop(key, None)
@@ -9644,6 +9660,95 @@ async def userdetails_cmd(update, context):
                 chunk += add
         if chunk:
             await update.message.reply_text(chunk)
+
+
+async def user_transactions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only date-wise wallet transaction statement.
+
+    Usage:
+      /user_transactions <user_id> today
+      /user_transactions <user_id> 2026-09-13
+    """
+    if not is_admin(update.effective_user.id):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: /user_transactions <user_id> <date>\n"
+            "Example: /user_transactions 7013994890 today\n"
+            "Or: /user_transactions 7013994890 2026-09-13"
+        )
+        return
+    try:
+        target = int(context.args[0])
+    except Exception:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+
+    raw_date = str(context.args[1]).strip().lower()
+    if raw_date == "today":
+        target_date = str(get_ist_today())
+    elif raw_date == "yesterday":
+        target_date = str(get_ist_today() - timedelta(days=1))
+    else:
+        try:
+            target_date = datetime.strptime(raw_date, "%Y-%m-%d").date().isoformat()
+        except Exception:
+            await update.message.reply_text("❌ Date format: YYYY-MM-DD (or today/yesterday)")
+            return
+
+    user = users_db.get(target) or users_db.get(str(target)) or {}
+    name = user.get("name") or "Unknown"
+    all_tx = transaction_ledger_db.get(target) or transaction_ledger_db.get(str(target)) or []
+    txs = [x for x in all_tx if isinstance(x, dict) and str(x.get("date")) == target_date]
+    txs.sort(key=lambda x: (str(x.get("time", "")), str(x.get("type", ""))))
+
+    if not txs:
+        await update.message.reply_text(
+            f"📜 USER TRANSACTION HISTORY\n\n"
+            f"👤 {name}\n🆔 {target}\n📅 {target_date}\n\n"
+            "No transactions were recorded for this date.\n"
+            "ℹ️ Transaction tracking starts from this version's deployment."
+        )
+        return
+
+    opening = float(txs[0].get("old_balance", 0) or 0)
+    closing = float(txs[-1].get("new_balance", 0) or 0)
+    credits = sum(float(x.get("amount", 0) or 0) for x in txs if str(x.get("direction")) == "credit")
+    debits = sum(float(x.get("amount", 0) or 0) for x in txs if str(x.get("direction")) == "debit")
+
+    lines = [
+        "📜 USER TRANSACTION HISTORY",
+        "",
+        f"👤 {name}",
+        f"🆔 {target}",
+        f"📅 {target_date}",
+        "",
+        f"💰 OPENING BALANCE: ₹{opening:.2f}",
+        "",
+    ]
+    for i, x in enumerate(txs, 1):
+        direction = str(x.get("direction", "credit")).lower()
+        sign = "+" if direction == "credit" else "-"
+        emoji = "➕" if direction == "credit" else "➖"
+        lines.append(f"{emoji} {x.get('time', '--:--:--')} | {x.get('type', 'Transaction')}")
+        lines.append(f"   {sign}₹{float(x.get('amount', 0) or 0):.2f}")
+        lines.append(f"   Old Balance: ₹{float(x.get('old_balance', 0) or 0):.2f}")
+        lines.append(f"   New Balance: ₹{float(x.get('new_balance', 0) or 0):.2f}")
+        if x.get("details"):
+            lines.append(f"   ℹ️ {x.get('details')}")
+        if i != len(txs):
+            lines.append("")
+
+    lines += [
+        "",
+        f"📊 TOTAL CREDITS: ₹{credits:.2f}",
+        f"📉 TOTAL DEBITS: ₹{debits:.2f}",
+        f"💳 CLOSING BALANCE: ₹{closing:.2f}",
+    ]
+    msg = "\n".join(lines)
+    # Telegram message limit protection.
+    for start in range(0, len(msg), 3900):
+        await update.message.reply_text(msg[start:start + 3900])
 
 
 async def referral_stats_cmd(update, context):
@@ -10385,7 +10490,10 @@ async def add_balance_cmd(update, context):
         if update.effective_user.id not in ADMIN_ID_LIST:
             return
         target=int(context.args[0]); amount=int(context.args[1])
+        old_balance = get_balance(target)
         bonus_balance[target]=bonus_balance.get(target,0)+amount
+        new_balance = get_balance(target)
+        record_wallet_transaction(target, "Admin Balance Added", amount, "credit", old_balance, new_balance, "Admin manual balance addition")
         save_data()
         await update.message.reply_text(f"Added Rs{amount} to {target}")
     except Exception as e:
@@ -10396,7 +10504,12 @@ async def remove_balance_cmd(update, context):
         if update.effective_user.id not in ADMIN_ID_LIST:
             return
         target=int(context.args[0]); amount=int(context.args[1])
+        old_balance = get_balance(target)
+        actual_removed = min(float(amount), max(0.0, float(bonus_balance.get(target,0) or 0)))
         bonus_balance[target]=max(0, bonus_balance.get(target,0)-amount)
+        new_balance = get_balance(target)
+        if actual_removed > 0:
+            record_wallet_transaction(target, "Admin Balance Removed", actual_removed, "debit", old_balance, new_balance, "Admin manual balance removal")
         save_data()
         await update.message.reply_text(f"Removed Rs{amount}")
     except Exception as e:
@@ -11194,9 +11307,7 @@ def main():
                 if is_admin(uid) or is_removed_user(uid):
                     return
                 st = _shopping_stats(uid)
-                # First month is a grace period: show shopping progress but do not
-                # block Daily/Scheduled/Promo/Product Promotion/Shop Promotion.
-                if st.get("first_month_waiting") or st.get("required", 0) <= 0 or st.get("complete"):
+                if st.get("required", 0) <= 0 or st.get("complete"):
                     return
                 try:
                     await q.answer("Need to complete purchase first", show_alert=True)
@@ -11349,8 +11460,8 @@ def main():
             app.add_handler(CommandHandler("remove_task", remove_task_cmd))
             app.add_handler(CommandHandler("del_task", remove_task_cmd))
             app.add_handler(CommandHandler("add_balance", add_balance_cmd))
-            app.add_handler(CommandHandler("get_balance", get_balance_cmd))
             app.add_handler(CommandHandler("user_transactions", user_transactions_cmd))
+            app.add_handler(CommandHandler("get_balance", get_balance_cmd))
             app.add_handler(CommandHandler("ledger", ledger_cmd))
             app.add_handler(CommandHandler("add_plan_commission", add_missing_commission_cmd))
             app.add_handler(CommandHandler("test_referral", test_referral_cmd))
