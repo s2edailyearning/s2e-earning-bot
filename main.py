@@ -8522,6 +8522,120 @@ async def add_missing_commission_cmd(update: Update, context: ContextTypes.DEFAU
 
 
 
+
+async def user_transactions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only withdrawal transaction history for one user.
+    Usage:
+      /user_transactions <user_id> yesterday
+      /user_transactions <user_id> today
+      /user_transactions <user_id> all
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /user_transactions <user_id> [yesterday|today|all]\n"
+            "Example: /user_transactions 1101323233 yesterday"
+        )
+        return
+
+    try:
+        uid = int(context.args[0])
+        period = str(context.args[1]).lower().strip() if len(context.args) > 1 else "all"
+
+        if period not in ("yesterday", "today", "all"):
+            await update.message.reply_text(
+                "❌ Period must be: yesterday, today, or all.\n"
+                "Example: /user_transactions 1101323233 yesterday"
+            )
+            return
+
+        rec = users_db.get(uid) or users_db.get(str(uid)) or {}
+        name = rec.get("name", "Unknown")
+        history = withdraw_history.get(uid) or withdraw_history.get(str(uid)) or []
+
+        today = get_ist_today()
+        if period == "yesterday":
+            wanted_date = str(today - timedelta(days=1))
+            title = "YESTERDAY"
+        elif period == "today":
+            wanted_date = str(today)
+            title = "TODAY"
+        else:
+            wanted_date = None
+            title = "ALL"
+
+        rows = []
+        for h in history:
+            d = str(h.get("date", "") or "")
+            if wanted_date is not None and not d.startswith(wanted_date):
+                continue
+            rows.append(h)
+
+        # Also include a currently pending request if it has not yet been copied
+        # into withdraw_history and its date matches the requested period.
+        req = withdraw_requests.get(uid) or withdraw_requests.get(str(uid)) or {}
+        if req:
+            req_date = str(req.get("date", "") or req.get("created_at", "") or "")
+            req_status = str(req.get("status", "")).lower()
+            already_present = any(
+                str(h.get("date", "")) == req_date
+                and float(h.get("amount", 0) or 0) == float(req.get("amount", 0) or 0)
+                for h in rows
+            )
+            if not already_present and (
+                wanted_date is None
+                or req_date.startswith(wanted_date)
+            ):
+                rows.append(req)
+
+        rows = rows[-30:][::-1]
+
+        if not rows:
+            await update.message.reply_text(
+                f"📜 USER TRANSACTION HISTORY\n\n"
+                f"👤 {name}\n"
+                f"🆔 {uid}\n"
+                f"📅 {title}\n\n"
+                "No withdrawal transactions found."
+            )
+            return
+
+        msg = (
+            f"📜 USER TRANSACTION HISTORY\n\n"
+            f"👤 {name}\n"
+            f"🆔 {uid}\n"
+            f"📅 {title}\n\n"
+        )
+
+        for i, h in enumerate(rows, 1):
+            amount = float(h.get("amount", 0) or 0)
+            fee = float(h.get("fee", 0) or 0)
+            net = float(h.get("net", h.get("net_payable", 0)) or 0)
+            status = str(h.get("status", "N/A"))
+            upi = h.get("upi", "N/A")
+            date = h.get("date", "N/A")
+            msg += (
+                f"#{i}\n"
+                f"📅 Date: {date}\n"
+                f"💸 Amount: ₹{amount:g}\n"
+                f"💳 Fee: ₹{fee:g}\n"
+                f"💰 Net Payable: ₹{net:g}\n"
+                f"🏦 UPI: {upi}\n"
+                f"📌 Status: {status}\n\n"
+            )
+
+        await update.message.reply_text(msg[:4000])
+
+    except (ValueError, TypeError):
+        await update.message.reply_text(
+            "❌ Invalid User ID.\n"
+            "Example: /user_transactions 1101323233 yesterday"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
 async def ledger_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -11236,6 +11350,7 @@ def main():
             app.add_handler(CommandHandler("del_task", remove_task_cmd))
             app.add_handler(CommandHandler("add_balance", add_balance_cmd))
             app.add_handler(CommandHandler("get_balance", get_balance_cmd))
+            app.add_handler(CommandHandler("user_transactions", user_transactions_cmd))
             app.add_handler(CommandHandler("ledger", ledger_cmd))
             app.add_handler(CommandHandler("add_plan_commission", add_missing_commission_cmd))
             app.add_handler(CommandHandler("test_referral", test_referral_cmd))
