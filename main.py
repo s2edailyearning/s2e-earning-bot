@@ -8203,6 +8203,7 @@ async def support_plans_cb_fixed(update: Update, context: ContextTypes.DEFAULT_T
 
 async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
+        await update.message.reply_text(f"❌ You are not admin! Your ID: {update.effective_user.id} | Admins: {ADMIN_ID_LIST}")
         return
     if len(context.args) < 2:
         await update.message.reply_text(
@@ -11456,6 +11457,7 @@ def main():
             app.add_handler(CommandHandler("teamlist", teamlist_cmd))
             app.add_handler(CommandHandler("teamdetails", teamdetails_cmd))
             app.add_handler(CommandHandler("assign_team", assign_team_cmd))
+    app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
             app.add_handler(CommandHandler("reset_team", reset_team_cmd))
             app.add_handler(CommandHandler("teamplan", teamplan_cmd))
             app.add_handler(CommandHandler("teamlink", teamlink_cmd))
