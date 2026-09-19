@@ -11457,7 +11457,7 @@ def main():
             app.add_handler(CommandHandler("teamlist", teamlist_cmd))
             app.add_handler(CommandHandler("teamdetails", teamdetails_cmd))
             app.add_handler(CommandHandler("assign_team", assign_team_cmd))
-    app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
+            app.add_handler(CommandHandler("assign_plan", assign_plan_cmd))
             app.add_handler(CommandHandler("reset_team", reset_team_cmd))
             app.add_handler(CommandHandler("teamplan", teamplan_cmd))
             app.add_handler(CommandHandler("teamlink", teamlink_cmd))
