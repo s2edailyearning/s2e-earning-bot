@@ -8217,38 +8217,33 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(context.args[0])
         arg2 = str(context.args[1]).strip()
 
-        # plan_id or price rendu support
         plan = None
         if arg2.isdigit():
             pid = int(arg2)
-            # first try as plan_id
             plan = next((p for p in support_plans_db if int(p.get('id', -1)) == pid), None)
-            # try as price (9999 case)
             if not plan:
                 plan = next((p for p in support_plans_db if int(p.get('price',0)) == pid), None)
 
         if not plan:
-            await update.message.reply_text(f"Plan ID / Price {arg2} not found! /list_support_plans chudu")
+            await update.message.reply_text(f"❌ Plan ID / Price {arg2} not found! /list_support_plans chudu")
             return
 
-        # *** UPGRADE LOGIC - TODAY NUNDI START ***
-        duration = int(plan.get('duration', 30) or 30)
-        daily = int(plan.get('daily_limit', 10) or 10)
+        duration = int(plan.get('duration', plan.get('validity_days', 30)) or 30)
+        daily = int(plan.get('daily_limit', plan.get('daily_task_limit', 10)) or 10)
         price = int(plan.get('price', 0) or 0)
         name = str(plan.get('name', 'Plan'))
         expiry = get_ist_today() + timedelta(days=duration)
 
         old_plan = user_plans.get(str(uid)) or user_plans.get(uid)
-        old_name = old_plan.get('plan_name','No Plan') if old_plan else 'No Plan'
+        old_name = old_plan.get('plan_name','No Plan') if isinstance(old_plan, dict) else 'No Plan'
 
-        # Old plan ni overwrite chestundi - today nundi new plan
         user_plans[str(uid)] = {
             'plan_id': int(plan.get('id')),
             'plan': str(name).lower(),
             'plan_name': str(name),
             'price': price,
             'daily_limit': daily,
-            'earnings_limit': int(plan.get('earnings_limit',0) or 0),
+            'earnings_limit': int(plan.get('earnings_limit', plan.get('total_earning_cap', 0)) or 0),
             'date': str(get_ist_today()),
             'expiry': str(expiry),
             'status': 'active',
@@ -8257,36 +8252,36 @@ async def assign_plan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         save_data()
 
-        # Tasks reset for new plan
         try:
             reset_tasks_on_plan_upgrade(uid, daily_limit=daily)
-        except:
-            pass
+        except Exception as e:
+            print(f"reset_tasks error {e}")
 
-        reward = get_reward_for_user(uid, 5)
         await update.message.reply_text(
-            f"UPGRADED!\n\n"
+            f"✅ UPGRADED!\n\n"
             f"User: {uid}\n"
             f"Old: {old_name}\n"
             f"New: {name} Rs{price}\n"
             f"Start: {get_ist_today()} (Today)\n"
             f"Expiry: {expiry}\n"
-            f"Daily: {daily} | Reward: Rs{reward}/task"
+            f"Daily Tasks: {daily}"
         )
         try:
             await context.bot.send_message(
                 chat_id=uid,
-                text=f"Your plan has been UPGRADED by Admin!\n\n"
+                text=f"🎉 Your plan has been UPGRADED by Admin!\n\n"
                      f"From: {old_name}\nTo: {name} Rs{price}\n"
                      f"Valid from Today: {get_ist_today()} till {expiry}\n"
                      f"Daily Tasks: {daily}\n\n"
                      f"You cannot change this plan yourself."
             )
-        except:
-            pass
+        except Exception as e:
+            print(f"notify user fail {e}")
     except Exception as e:
         await update.message.reply_text(f"Error {e}")
         import traceback; traceback.print_exc()
+
+
 async def userlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: active/registered users with optional join-date filtering.
     Also shows who referred each user (name + Telegram ID)."""
