@@ -5547,38 +5547,123 @@ async def product_video_handler(update: Update, context: ContextTypes.DEFAULT_TY
         print(f'product_video_handler error: {e}')
 
 async def product_screenshot_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive Product Promotion screenshots reliably.
+
+    The upload prompt stores its state in context.user_data. In a few cases
+    (notably after an admin/manual plan update or a context refresh) that
+    transient flag can be missing even though the user is still inside the
+    valid Product Promotion screenshot window.  When that happens, recover
+    the current campaign from the user's live Product Promotion instead of
+    silently ignoring the photo.
+    """
     try:
-        uid=update.effective_user.id
-        if is_admin(uid) or not context.user_data.get('awaiting_product_screenshot'): return
-        if not update.message.photo and not update.message.document: return
-        tid=int(context.user_data.get('product_screenshot_id'))
-        t=next((x for x in product_promo_db if int(x.get('id',-1))==tid),None)
-        promos=get_active_product_promo_for_user(uid)
-        t2=next((x for x in promos if int(x.get('id',-1))==tid),None)
+        uid = update.effective_user.id
+        if is_admin(uid):
+            return
+        if not update.message or (not update.message.photo and not update.message.document):
+            return
+
+        # Prefer the explicit campaign id saved by the Submit Screenshot button.
+        raw_tid = context.user_data.get('product_screenshot_id')
+        try:
+            tid = int(raw_tid) if raw_tid is not None else -1
+        except Exception:
+            tid = -1
+
+        # Recovery path: if the transient awaiting flag was lost, but there is
+        # exactly one live Product Promotion open for screenshots, use it.
+        awaiting = bool(context.user_data.get('awaiting_product_screenshot'))
+        if tid < 0 or not awaiting:
+            try:
+                live_promos = get_active_product_promo_for_user(uid) or []
+                open_promos = [x for x in live_promos if x.get('_screenshot_open')]
+                if len(open_promos) == 1:
+                    tid = int(open_promos[0].get('id', -1))
+                    context.user_data['product_screenshot_id'] = tid
+                    context.user_data['awaiting_product_screenshot'] = True
+            except Exception as recovery_error:
+                print(f"product screenshot state recovery error {uid}: {recovery_error}")
+
+        if tid < 0:
+            # Not a Product Promotion upload; leave it for the other photo handlers.
+            return
+
+        t = next((x for x in product_promo_db if int(x.get('id', -1)) == tid), None)
+        promos = get_active_product_promo_for_user(uid)
+        t2 = next((x for x in promos if int(x.get('id', -1)) == tid), None)
         if not t or not t2 or not t2.get('_screenshot_open'):
-            await update.message.reply_text("⏰ Screenshot submission window is closed.", reply_markup=main_menu()); return
-        file_id=update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
-        unique_id=update.message.photo[-1].file_unique_id if update.message.photo else update.message.document.file_unique_id
+            await update.message.reply_text(
+                "⏰ Screenshot submission window is closed.",
+                reply_markup=main_menu()
+            )
+            context.user_data.pop('awaiting_product_screenshot', None)
+            context.user_data.pop('product_screenshot_id', None)
+            return
+
+        file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+        unique_id = update.message.photo[-1].file_unique_id if update.message.photo else update.message.document.file_unique_id
+
         if unique_id in screenshot_hashes:
-            await update.message.reply_text("⚠️ Same screenshot detected.", reply_markup=main_menu()); return
+            await update.message.reply_text("⚠️ Same screenshot detected.", reply_markup=main_menu())
+            return
+
         screenshot_hashes.add(unique_id)
-        reward=_product_reward_for_user(t,uid)
-        product_promo_pending[uid]={'uid':uid,'promo_id':tid,'file_id':file_id,'reward':reward,'submitted_at':get_ist_now(),'status':'pending'}
+        reward = _product_reward_for_user(t, uid)
+        product_promo_pending[uid] = {
+            'uid': uid,
+            'promo_id': tid,
+            'file_id': file_id,
+            'reward': reward,
+            'submitted_at': get_ist_now(),
+            'status': 'pending'
+        }
         save_data()
-        context.user_data.pop('awaiting_product_screenshot',None); context.user_data.pop('product_screenshot_id',None)
-        await update.message.reply_text("✅ Product promotion screenshot received! Waiting for admin approval.", reply_markup=main_menu())
-        chan=get_screenshot_channel()
+        context.user_data.pop('awaiting_product_screenshot', None)
+        context.user_data.pop('product_screenshot_id', None)
+
+        await update.message.reply_text(
+            "✅ Product promotion screenshot received! Waiting for admin approval.",
+            reply_markup=main_menu()
+        )
+
+        chan = get_screenshot_channel()
         if chan:
-            kb=InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ Approve ₹{reward}", callback_data=f"product_approve_{uid}_{tid}"), InlineKeyboardButton("❌ Reject", callback_data=f"product_reject_{uid}_{tid}")],
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(f"✅ Approve ₹{reward}", callback_data=f"product_approve_{uid}_{tid}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"product_reject_{uid}_{tid}")
+                ],
                 [InlineKeyboardButton("🚀 Approve ALL Product Pending", callback_data="product_bulk_approve_all")]
             ])
-            sent_product_msg = await context.bot.send_photo(chat_id=chan,photo=file_id,caption=(f"📢 PRODUCT PROMOTION SCREENSHOT\n👤 {users_db.get(uid,{}).get('name','Unknown')}\n🆔 {uid}\n📋 {t.get('title','Product Promotion')}\n💰 Reward: ₹{reward}\n📅 {get_ist_today()}"),reply_markup=kb)
+            sent_product_msg = await context.bot.send_photo(
+                chat_id=chan,
+                photo=file_id,
+                caption=(
+                    f"📢 PRODUCT PROMOTION SCREENSHOT\n"
+                    f"👤 {users_db.get(uid, {}).get('name', 'Unknown')}\n"
+                    f"🆔 {uid}\n"
+                    f"📋 {t.get('title', 'Product Promotion')}\n"
+                    f"💰 Reward: ₹{reward}\n"
+                    f"📅 {get_ist_today()}"
+                ),
+                reply_markup=kb
+            )
             product_promo_pending[uid]['admin_channel_id'] = chan
             product_promo_pending[uid]['admin_message_id'] = sent_product_msg.message_id
             save_data()
     except Exception as e:
-        print(f'product_screenshot_photo_handler error: {e}')
+        # Never fail silently. If processing reaches this point, tell the user
+        # and leave a useful Render log entry for diagnosis.
+        print(f"product_screenshot_photo_handler error for {update.effective_user.id if update.effective_user else 'unknown'}: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            await update.message.reply_text(
+                "❌ Screenshot upload could not be processed. Please send the screenshot again during the allowed time.",
+                reply_markup=main_menu()
+            )
+        except Exception:
+            pass
 
 async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
