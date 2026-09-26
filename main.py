@@ -5702,6 +5702,208 @@ async def product_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try: await context.bot.send_message(chat_id=uid,text=f"✅ Product Promotion Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}",reply_markup=main_menu())
     except: pass
 
+async def repair_product_promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only one-time repair for yesterday's Product Promotion payouts.
+
+    IMPORTANT:
+    - This repair is for the bot-side payout failure from yesterday.
+    - It does NOT require the member to be currently pending only; it checks
+      both approved records and yesterday's submitted/pending records.
+    - If a matching Product Promotion wallet transaction already exists, the
+      member is skipped, so running the command again will not double-pay.
+    - Reward is calculated from the member's current plan using the same
+      _product_reward_for_user() function used by the normal approval flow.
+    - Every newly repaired member receives a direct Telegram confirmation.
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    try:
+        yesterday = str(get_ist_today() - timedelta(days=1))
+
+        # Optional campaign-id mode is retained for admin testing.
+        requested_ids = []
+        if context.args:
+            for raw in context.args:
+                try:
+                    requested_ids.append(int(raw))
+                except Exception:
+                    pass
+
+        campaigns = {}
+        for c in product_promo_db:
+            if not isinstance(c, dict):
+                continue
+            try:
+                tid = int(c.get('id', -1))
+            except Exception:
+                continue
+            if tid < 0:
+                continue
+            if requested_ids:
+                if tid in requested_ids:
+                    campaigns[tid] = c
+            elif str(c.get('date', '')) == yesterday:
+                campaigns[tid] = c
+
+        if not campaigns:
+            await update.message.reply_text(
+                f"❌ Yesterday ({yesterday}) Product Promotion campaign not found.\n\n"
+                "Use /repair_product_promo or /repair_product_promo <campaign_id>."
+            )
+            return
+
+        # Build the set of members who actually interacted with the campaign:
+        # 1) approved records, and 2) screenshot submissions still sitting in
+        # pending because the bot/admin flow failed before the payout.
+        targets = {}
+
+        for raw_uid, approved_map in list(product_promo_approved.items()):
+            try:
+                uid = int(raw_uid)
+            except Exception:
+                continue
+            if not isinstance(approved_map, dict):
+                continue
+            for raw_tid in approved_map.keys():
+                try:
+                    tid = int(raw_tid)
+                except Exception:
+                    continue
+                if tid in campaigns:
+                    targets[(uid, tid)] = 'approved'
+
+        for raw_uid, pending in list(product_promo_pending.items()):
+            if not isinstance(pending, dict):
+                continue
+            try:
+                uid = int(raw_uid)
+                tid = int(pending.get('promo_id', -1))
+            except Exception:
+                continue
+            if tid not in campaigns:
+                continue
+
+            submitted_at = str(pending.get('submitted_at', ''))
+            # A pending record is repaired only when it belongs to yesterday's
+            # campaign. The campaign date is the primary date guard.
+            targets.setdefault((uid, tid), 'pending')
+
+        repaired = 0
+        skipped = 0
+        errors = 0
+        repaired_rows = []
+        skipped_rows = []
+
+        for (uid, tid), source in sorted(targets.items(), key=lambda x: (x[0][1], x[0][0])):
+            campaign = campaigns.get(tid)
+            if not campaign:
+                continue
+
+            try:
+                reward = int(_product_reward_for_user(campaign, uid))
+                if reward <= 0:
+                    skipped += 1
+                    skipped_rows.append(f"{uid}/{tid} — invalid reward")
+                    continue
+
+                # Strong duplicate guard: the same campaign transaction means
+                # the payout has already reached the wallet.
+                ledger = transaction_ledger_db.get(uid) or transaction_ledger_db.get(str(uid)) or []
+                already_paid = False
+                for entry in ledger if isinstance(ledger, list) else []:
+                    if not isinstance(entry, dict):
+                        continue
+                    details = str(entry.get('details', ''))
+                    if (
+                        str(entry.get('type', '')) == 'Product Promotion'
+                        and str(entry.get('direction', 'credit')).lower() == 'credit'
+                        and details == f"Product promotion {tid}"
+                    ):
+                        already_paid = True
+                        break
+
+                if already_paid:
+                    # Ensure the approval marker exists as well, so the UI does
+                    # not ask the member to submit the same campaign again.
+                    approved_map = product_promo_approved.setdefault(uid, {})
+                    approved_map[str(tid)] = approved_map.get(str(tid), str(get_ist_now()))
+                    product_promo_pending.pop(uid, None)
+                    product_promo_pending.pop(str(uid), None)
+                    skipped += 1
+                    skipped_rows.append(f"{uid}/{tid} — already credited")
+                    continue
+
+                old_balance = get_balance(uid)
+                product_promo_earnings_db[uid] = round(
+                    float(product_promo_earnings_db.get(uid, 0) or 0) + reward, 2
+                )
+
+                record_wallet_transaction(
+                    uid,
+                    "Product Promotion",
+                    reward,
+                    "credit",
+                    old_balance,
+                    get_balance(uid),
+                    f"Product promotion {tid}"
+                )
+
+                # Keep the same referral commission behaviour as a normal
+                # Product Promotion approval.
+                record_product_promo_referral_commissions(uid, reward)
+
+                approved_map = product_promo_approved.setdefault(uid, {})
+                approved_map[str(tid)] = str(get_ist_now())
+                product_promo_pending.pop(uid, None)
+                product_promo_pending.pop(str(uid), None)
+
+                repaired += 1
+                repaired_rows.append(f"{uid}/{tid} — +₹{reward} ({source})")
+
+                # User-facing message: clearly explain that the missing amount
+                # was restored according to the member's plan.
+                try:
+                    await context.bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            "✅ Product Promotion Amount Added\n\n"
+                            f"💰 Amount: +₹{reward}\n"
+                            "📋 Your plan-based Product Promotion reward has been added.\n"
+                            "🛠️ This amount was added because of the earlier bot-side issue.\n\n"
+                            f"💳 Current Wallet Balance: ₹{get_balance(uid)}"
+                        ),
+                        reply_markup=main_menu()
+                    )
+                except Exception as notify_error:
+                    print(f"repair product promo notification failed uid={uid}: {notify_error}")
+
+            except Exception as e:
+                errors += 1
+                print(f"repair product promo error uid={uid} tid={tid}: {e}")
+
+        save_data()
+
+        detail = "\n".join(repaired_rows[:50]) or "No missing payouts found."
+        if len(repaired_rows) > 50:
+            detail += f"\n...and {len(repaired_rows) - 50} more"
+
+        await update.message.reply_text(
+            "🛠 PRODUCT PROMOTION REPAIR COMPLETED\n\n"
+            f"📅 Target: {yesterday}\n"
+            f"📋 Campaigns checked: {', '.join(str(x) for x in sorted(campaigns))}\n"
+            f"👥 Members found: {len(targets)}\n"
+            f"✅ Amount added: {repaired}\n"
+            f"⏭️ Already credited/skipped: {skipped}\n"
+            f"❌ Errors: {errors}\n\n"
+            f"Repaired members:\n{detail}"
+        )
+
+    except Exception as e:
+        print(f"repair_product_promo_cmd fatal error: {e}")
+        await update.message.reply_text(f"❌ Product Promotion repair error: {e}")
+
+
 async def product_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q=update.callback_query; await q.answer()
     if not is_admin(q.from_user.id): return
@@ -11358,6 +11560,7 @@ def main():
             app.add_handler(CommandHandler("approve", approve_cmd))
             app.add_handler(CommandHandler("add_task", add_scheduled_task_with_interval_cmd))
             app.add_handler(CommandHandler("add_product_promo", add_product_promo_cmd))
+            app.add_handler(CommandHandler("repair_product_promo", repair_product_promo_cmd))
             app.add_handler(CommandHandler("list_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("scheduled_tasks", list_scheduled_tasks_cmd))
             app.add_handler(CommandHandler("list_scheduled_tasks", list_scheduled_tasks_cmd))
