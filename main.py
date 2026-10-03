@@ -5917,49 +5917,196 @@ async def product_reject_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
 
 async def product_bulk_approve_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query
-    try: await q.answer("Processing product bulk approval…")
-    except Exception: pass
+    """Approve every currently pending Product Promotion submission safely.
+
+    This is intentionally isolated to Product Promotion bulk approval.
+    It uses the same payout/ledger/referral path as individual approval,
+    recalculates the reward from the user's CURRENT plan, and has a strong
+    campaign transaction duplicate guard so repeated bulk clicks cannot pay twice.
+    """
+    q = update.callback_query
+    try:
+        await q.answer("Processing product bulk approval…")
+    except Exception:
+        pass
+
     if not is_admin(q.from_user.id):
         return
-    approved_count=0
-    approved_users=[]
-    for key, sub in list(product_promo_pending.items()):
+
+    approved_count = 0
+    already_count = 0
+    invalid_count = 0
+    error_count = 0
+    approved_users = []
+    skipped_users = []
+    error_users = []
+
+    # Snapshot + normalize pending records.  Older saved data can contain
+    # integer keys while JSON-restored data can contain string keys.
+    pending_targets = {}
+    for raw_key, raw_sub in list(product_promo_pending.items()):
+        if not isinstance(raw_sub, dict):
+            continue
         try:
-            uid=int(sub.get('uid', key)); tid=int(sub.get('promo_id', -1))
-            if tid < 0: continue
-            approved_map=product_promo_approved.setdefault(uid,{})
-            if str(tid) in approved_map or tid in approved_map:
-                product_promo_pending.pop(key,None)
-                continue
-            reward=int(sub.get('reward',0) or 0)
-            try:
-                old_balance = get_balance(uid)
-            except Exception:
-                old_balance = 0.0
-            product_promo_earnings_db[uid]=round(float(product_promo_earnings_db.get(uid,0) or 0)+reward,2)
-            try:
-                record_wallet_transaction(uid, "Product Promotion", reward, "credit", old_balance, get_balance(uid), f"Product promotion {tid}")
-            except Exception as e:
-                print(f"product bulk transaction ledger failed {uid}: {e}")
-            record_product_promo_referral_commissions(uid, reward)
-            approved_map[str(tid)]=str(get_ist_now())
-            await _mark_admin_submission_status(
-                context, sub.get('admin_channel_id'), sub.get('admin_message_id'),
-                "✅ APPROVED", uid, "Product Promotion", reward, f"📋 Product {tid}"
+            uid = int(raw_sub.get('uid', raw_key))
+            tid = int(raw_sub.get('promo_id', -1))
+        except Exception:
+            continue
+        if uid <= 0 or tid < 0:
+            continue
+        pending_targets[(uid, tid)] = (raw_key, raw_sub)
+
+    for (uid, tid), (raw_key, sub) in sorted(pending_targets.items(), key=lambda x: (x[0][1], x[0][0])):
+        try:
+            # Find the campaign first.  Never approve against a missing campaign.
+            campaign = next(
+                (x for x in product_promo_db
+                 if isinstance(x, dict) and int(x.get('id', -1)) == tid),
+                None
             )
-            product_promo_pending.pop(key,None)
+            if not campaign:
+                invalid_count += 1
+                error_users.append(f"{uid}/{tid} — campaign not found")
+                continue
+
+            # Duplicate guard #1: permanent approval marker.
+            approved_map = product_promo_approved.setdefault(uid, {})
+            if str(tid) in approved_map or tid in approved_map:
+                product_promo_pending.pop(raw_key, None)
+                product_promo_pending.pop(uid, None)
+                product_promo_pending.pop(str(uid), None)
+                already_count += 1
+                skipped_users.append(f"{uid}/{tid} — already approved")
+                continue
+
+            # IMPORTANT: calculate from CURRENT plan, not the reward stored in
+            # the pending object. This keeps bulk approval correct after Admin
+            # manually changes a member's plan.
+            reward = int(_product_reward_for_user(campaign, uid) or 0)
+            if reward <= 0:
+                invalid_count += 1
+                error_users.append(f"{uid}/{tid} — invalid reward")
+                continue
+
+            # Duplicate guard #2: transaction ledger. This also repairs the
+            # approval marker if an earlier approval already reached the wallet.
+            ledger = transaction_ledger_db.get(uid) or transaction_ledger_db.get(str(uid)) or []
+            already_paid = False
+            for entry in ledger if isinstance(ledger, list) else []:
+                if not isinstance(entry, dict):
+                    continue
+                if (
+                    str(entry.get('type', '')) == 'Product Promotion'
+                    and str(entry.get('direction', 'credit')).lower() == 'credit'
+                    and str(entry.get('details', '')) == f"Product promotion {tid}"
+                ):
+                    already_paid = True
+                    break
+
+            if already_paid:
+                approved_map[str(tid)] = approved_map.get(str(tid), str(get_ist_now()))
+                product_promo_pending.pop(raw_key, None)
+                product_promo_pending.pop(uid, None)
+                product_promo_pending.pop(str(uid), None)
+                already_count += 1
+                skipped_users.append(f"{uid}/{tid} — ledger already credited")
+                continue
+
+            old_balance = get_balance(uid)
+
+            # Wallet credit: same path as individual Product Promotion approval.
+            product_promo_earnings_db[uid] = round(
+                float(product_promo_earnings_db.get(uid, 0) or 0) + reward, 2
+            )
+
+            new_balance = get_balance(uid)
+            record_wallet_transaction(
+                uid,
+                "Product Promotion",
+                reward,
+                "credit",
+                old_balance,
+                new_balance,
+                f"Product promotion {tid}"
+            )
+
+            # Keep referral commission behaviour identical to individual approval.
+            record_product_promo_referral_commissions(uid, reward)
+
+            approved_map[str(tid)] = str(get_ist_now())
+            product_promo_pending.pop(raw_key, None)
+            product_promo_pending.pop(uid, None)
+            product_promo_pending.pop(str(uid), None)
+
+            # Update the original admin-channel card when its IDs are available.
+            try:
+                await _mark_admin_submission_status(
+                    context,
+                    sub.get('admin_channel_id'),
+                    sub.get('admin_message_id'),
+                    "✅ APPROVED",
+                    uid,
+                    "Product Promotion",
+                    reward,
+                    f"📋 Product {tid}"
+                )
+            except Exception as status_error:
+                print(f"product bulk admin card update failed {uid}/{tid}: {status_error}")
+
             approved_count += 1
             approved_users.append(f"{uid} (₹{reward})")
+
             try:
-                await context.bot.send_message(chat_id=uid, text=f"✅ Product Promotion Approved! +₹{reward}\nBalance: ₹{get_balance(uid)}\n\n🚫 No more Product Promotion for today.", reply_markup=main_menu())
-            except Exception: pass
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=(
+                        f"✅ Product Promotion Approved! +₹{reward}\n"
+                        f"Old Balance: ₹{old_balance:.2f}\n"
+                        f"New Balance: ₹{new_balance:.2f}\n\n"
+                        "🚫 No more Product Promotion for today."
+                    ),
+                    reply_markup=main_menu()
+                )
+            except Exception as notify_error:
+                print(f"product bulk user notification failed {uid}: {notify_error}")
+
         except Exception as e:
-            print(f"product bulk approval error {key}: {e}")
+            error_count += 1
+            error_users.append(f"{uid}/{tid} — {e}")
+            print(f"product bulk approval error {uid}/{tid}: {e}")
+            import traceback
+            traceback.print_exc()
+
     save_data()
-    details="\n".join(approved_users[:15])
-    if len(approved_users)>15: details += f"\n...and {len(approved_users)-15} more"
-    await q.message.reply_text(f"✅ PRODUCT BULK APPROVAL DONE\n\nApproved: {approved_count}\n{details or 'No pending product submissions.'}\n\nRemaining pending: {len(product_promo_pending)}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Admin",callback_data="back_admin")]]))
+
+    details = "\n".join(approved_users[:20]) or "None"
+    if len(approved_users) > 20:
+        details += f"\n...and {len(approved_users) - 20} more"
+
+    skipped_details = "\n".join(skipped_users[:10])
+    error_details = "\n".join(error_users[:10])
+
+    report = (
+        "✅ PRODUCT BULK APPROVAL COMPLETED\n\n"
+        f"📋 Pending records checked: {len(pending_targets)}\n"
+        f"✅ Approved + credited: {approved_count}\n"
+        f"⏭️ Already approved/credited: {already_count}\n"
+        f"⚠️ Invalid/skipped: {invalid_count}\n"
+        f"❌ Errors: {error_count}\n\n"
+        f"Approved users:\n{details}"
+    )
+    if skipped_details:
+        report += f"\n\nAlready processed:\n{skipped_details}"
+    if error_details:
+        report += f"\n\nErrors:\n{error_details}"
+    report += f"\n\n📌 Remaining pending: {len(product_promo_pending)}"
+
+    await q.message.reply_text(
+        report[:4000],
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Admin", callback_data="back_admin")]
+        ])
+    )
 
 
 async def scheduled_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
