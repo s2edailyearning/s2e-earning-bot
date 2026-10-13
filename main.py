@@ -6499,6 +6499,7 @@ async def handle_screenshot_upload(update: Update, context: ContextTypes.DEFAULT
             warnings_db[uid]['count'] += 1
             if warnings_db[uid]['count'] >= 3:
                 banned_users.add(uid)
+                save_data()
                 await update.message.reply_text("BANNED! 3 Warnings! ")
                 return ConversationHandler.END
             await update.message.reply_text("WARNING Same Screenshot! ")
@@ -7142,16 +7143,55 @@ async def banned_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"👤 {uid} {name} /unban {uid}\n"
     await update.message.reply_text(msg[:4000])
 
-async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not context.args:
-        await update.message.reply_text("Usage: /unban <id>")
+async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command: ban a Telegram user so broadcasts skip them."""
+    if not update.effective_user or not is_admin(update.effective_user.id):
         return
-    try: target_id=int(context.args[0])
-    except: return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Usage: /ban <telegram_user_id>\nExample: /ban 123456789"
+        )
+        return
+    try:
+        target_id = int(context.args[0])
+    except (TypeError, ValueError):
+        await update.effective_message.reply_text("❌ Please enter a valid numeric Telegram user ID.")
+        return
+    if target_id <= 0 or is_admin(target_id):
+        await update.effective_message.reply_text("❌ Invalid user ID or admin cannot be banned.")
+        return
+    banned_users.add(target_id)
+    pending_daily.pop(target_id, None)
+    save_data()
+    await update.effective_message.reply_text(
+        f"🚫 User {target_id} banned successfully.\n"
+        "They will be skipped by the broadcast system and existing notifications that check the ban list."
+    )
+    print(f"ADMIN BAN: user {target_id}")
+
+
+async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.effective_message.reply_text(
+            "Usage: /unban <telegram_user_id>\nExample: /unban 123456789"
+        )
+        return
+    try:
+        target_id = int(context.args[0])
+    except (TypeError, ValueError):
+        await update.effective_message.reply_text("❌ Please enter a valid numeric Telegram user ID.")
+        return
+    if target_id not in banned_users:
+        await update.effective_message.reply_text(f"ℹ️ User {target_id} is not currently banned.")
+        return
     banned_users.discard(target_id)
-    if target_id in warnings_db: warnings_db[target_id]['count']=0
-    await update.message.reply_text(f"✅ Unbanned {target_id}")
+    if target_id in warnings_db:
+        warnings_db[target_id]['count'] = 0
+    save_data()
+    await update.effective_message.reply_text(f"✅ User {target_id} unbanned successfully. They can receive messages again.")
+    print(f"ADMIN UNBAN: user {target_id}")
 
 
 async def verify_plan_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -7827,6 +7867,7 @@ async def admin_ban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=int(q.data.split("_")[-1])
     banned_users.add(uid)
     if uid in pending_daily: del pending_daily[uid]
+    save_data()
     await q.message.reply_text(f"🚫 Banned {uid}")
     try:
         await context.bot.send_message(chat_id=uid, text="🚫 You are banned! Contact admin!")
@@ -7838,6 +7879,7 @@ async def admin_unban_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid=int(q.data.split("_")[-1])
     banned_users.discard(uid)
     if uid in warnings_db: warnings_db[uid]['count']=0
+    save_data()
     await q.message.reply_text(f"✅ Unbanned {uid}")
 
 async def _mark_admin_submission_status(context, channel_id, message_id, status, uid, kind, reward=None, extra=""):
@@ -11723,6 +11765,7 @@ def main():
             app.add_handler(CommandHandler("promo_pending", promo_pending_cmd))
             app.add_handler(CommandHandler("skipped", skipped_tasks_cmd))
             app.add_handler(CommandHandler("warnings", warnings_cmd))
+            app.add_handler(CommandHandler("ban", ban_cmd))
             app.add_handler(CommandHandler("banned", banned_cmd))
             app.add_handler(CommandHandler("unban", unban_cmd))
             # Removed-user safety guard: deleted accounts must not be able to
